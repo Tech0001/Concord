@@ -1,0 +1,492 @@
+import { useState, useEffect, useRef } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
+import { useToast } from "@/hooks/use-toast";
+import UrlInput from "@/components/UrlInput";
+import VideoPreview from "@/components/VideoPreview";
+import DownloadSettings from "@/components/DownloadSettings";
+import ErrorMessage from "@/components/ErrorMessage";
+import LoadingIndicator from "@/components/LoadingIndicator";
+import { VideoInfo, DownloadSettings as Settings } from "@/types/video";
+import {
+  Play, Square, RefreshCw, Plus, Trash2, Activity,
+  CheckCircle, XCircle, Clock, AlertCircle, Radio,
+  FileText, Download, Mic, FileDown, Loader2, Archive, List,
+  HardDrive, RotateCcw, ChevronDown, FileAudio
+} from "lucide-react";
+import { apiRequest } from "@/lib/queryClient";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+interface Channel {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+}
+
+interface Job {
+  id: string;
+  channelId: string;
+  channelName: string;
+  videoId: string;
+  videoTitle: string;
+  videoUrl: string;
+  status: string;
+  progress: number;
+  error?: string;
+  startedAt: string;
+  completedAt?: string;
+  videoPath?: string;
+  audioPath?: string;
+  mdPath?: string;
+  transcriptionResult?: any;
+  retries: number;
+}
+
+interface PipelineState {
+  status: string;
+  lastCheck: string | null;
+  nextCheck: string | null;
+  totalCompleted: number;
+  pendingCount: number;
+  jobs: Job[];
+  monitoredChannels: Channel[];
+}
+
+interface Config {
+  channels: Channel[];
+  workingDir: string;
+  videoSaveDir: string;
+  transcriptDir: string;
+  qmdVaultDir: string | null;
+  checkIntervalMinutes: number;
+  skipShorts: boolean;
+  videoQuality: string;
+  transcription: { model: string; language: string; device: string };
+  processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean };
+}
+
+interface QueueData {
+  counts: Record<string, number>;
+  recent: any[];
+}
+
+export default function PipelineStatus() {
+  const [state, setState] = useState<PipelineState | null>(null);
+  const [config, setConfig] = useState<Config | null>(null);
+  const [newChannelName, setNewChannelName] = useState("");
+  const [newChannelUrl, setNewChannelUrl] = useState("");
+  const [archiving, setArchiving] = useState<Record<string, boolean>>({});
+  const [retransModel, setRetransModel] = useState("large-v3");
+  const [retranscribing, setRetranscribing] = useState<Record<string, boolean>>({});
+  const [archiveMsg, setArchiveMsg] = useState<Record<string, string>>({});
+  const [editDir, setEditDir] = useState(false);
+  const [videoSaveDir, setVideoSaveDir] = useState("");
+  const [transcriptDir, setTranscriptDir] = useState("");
+  const [videoQuality, setVideoQuality] = useState("1080");
+
+  // Download state (same pattern as main page)
+  const [videoData, setVideoData] = useState<VideoInfo | null>(null);
+  const [isVideoLoading, setIsVideoLoading] = useState(false);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<number>(0);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadSettings, setDownloadSettings] = useState<Settings>({ downloadLocation: "" });
+  const { toast } = useToast();
+
+  // When config loads, sync download location to pipeline's videoSaveDir
+  useEffect(() => {
+    if (config?.videoSaveDir) {
+      setDownloadSettings({ downloadLocation: config.videoSaveDir });
+    }
+  }, [config?.videoSaveDir]);
+
+  useEffect(() => {
+    fetchState();
+    fetchConfig();
+
+    const es = new EventSource("/api/pipeline/events");
+    es.addEventListener("state", (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d && Array.isArray(d.jobs)) {
+          setState(d);
+        } else {
+          fetchState();
+          fetchConfig();
+        }
+      } catch {}
+    });
+    es.addEventListener("job", (e) => {
+      try {
+        const job = JSON.parse(e.data);
+        setState(prev => {
+          if (!prev) return { jobs: [job] } as any;
+          const jobs = [...(prev.jobs || [])];
+          const idx = jobs.findIndex(j => j.id === job.id);
+          if (idx >= 0) jobs[idx] = job; else jobs.unshift(job);
+          return { ...prev, jobs };
+        });
+      } catch {}
+    });
+    return () => es.close();
+  }, []);
+
+  const fetchState = async () => {
+    try { const r = await apiRequest("GET", "/api/pipeline/status"); setState(await r.json()); } catch {}
+  };
+
+  const fetchConfig = async () => {
+    try {
+      const r = await apiRequest("GET", "/api/pipeline/config");
+      const c = await r.json();
+      setConfig(c);
+      setVideoSaveDir(c.videoSaveDir || "");
+      setTranscriptDir(c.transcriptDir || "");
+      setVideoQuality(c.videoQuality || "1080");
+    } catch {}
+  };
+
+  const start = async () => { await apiRequest("POST", "/api/pipeline/start"); fetchState(); toast({ title: "Started" }); };
+  const stop = async () => { await apiRequest("POST", "/api/pipeline/stop"); fetchState(); toast({ title: "Stopped" }); };
+  const checkNow = async () => {
+    const r = await apiRequest("POST", "/api/pipeline/check-now");
+    const data = await r.json();
+    fetchState();
+    toast({ title: "Check complete", description: `${data.newVideos ?? 0} new videos queued` });
+  };
+
+  const addChannel = async () => {
+    if (!newChannelName || !newChannelUrl) return;
+    try {
+      await apiRequest("POST", "/api/pipeline/channels", { name: newChannelName, url: newChannelUrl });
+      setNewChannelName(""); setNewChannelUrl("");
+      fetchConfig(); fetchState();
+      toast({ title: "Channel added" });
+    } catch (e: any) { toast({ variant: "destructive", title: "Error", description: e.message }); }
+  };
+
+  const removeChannel = async (id: string) => {
+    await apiRequest("DELETE", `/api/pipeline/channels/${id}`);
+    fetchConfig(); fetchState();
+    toast({ title: "Removed" });
+  };
+
+  const toggleChannel = async (id: string, enabled: boolean) => {
+    await apiRequest("PATCH", `/api/pipeline/channels/${id}`, { enabled });
+    fetchConfig(); fetchState();
+  };
+
+  const archiveChannel = async (id: string) => {
+    setArchiving(prev => ({ ...prev, [id]: true }));
+    setArchiveMsg(prev => ({ ...prev, [id]: "Full scan running..." }));
+    try {
+      const r = await apiRequest("POST", `/api/pipeline/archive/${id}`);
+      const data = await r.json();
+      setArchiveMsg(prev => ({ ...prev, [id]: `Scanned ${data.scanned} videos, ${data.newVideos} new` }));
+      toast({ title: "Full scan complete", description: `${data.scanned} videos scanned, ${data.newVideos} added to queue` });
+      fetchState();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Full scan failed", description: e.message });
+      setArchiveMsg(prev => ({ ...prev, [id]: "" }));
+    } finally {
+      setArchiving(prev => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const retranscribe = async (videoId: string, channelId: string) => {
+    const key = `${channelId}:${videoId}`;
+    setRetranscribing(p => ({ ...p, [key]: true }));
+    try {
+      const r = await apiRequest("POST", "/api/pipeline/retranscribe", { videoId, channelId, model: retransModel });
+      const job = await r.json();
+      toast({ title: "Re-transcribing", description: `Model: ${retransModel}` });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Re-transcribe failed", description: e.message });
+    } finally {
+      setRetranscribing(p => ({ ...p, [key]: false }));
+    }
+  };
+
+  const handleVideoFetched = (video: VideoInfo) => {
+    setVideoData(video);
+    setVideoError(null);
+  };
+
+  const handleVideoError = (errorMessage: string) => {
+    setVideoError(errorMessage);
+    setVideoData(null);
+  };
+
+  const handleSettingsChange = (settings: Settings) => {
+    setDownloadSettings(settings);
+  };
+
+  const handleTranscribe = async (filePath: string, videoTitle: string, uploadDate?: string | null, videoId?: string, channelId?: string | null, channelName?: string | null) => {
+    try {
+      const r = await apiRequest("POST", "/api/pipeline/transcribe-file", { filePath, title: videoTitle, uploadDate, videoId, channelId, channelName });
+      toast({ title: "Transcription started", description: videoTitle });
+      fetchState();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Transcribe failed", description: e.message });
+    }
+  };
+
+  const saveDirs = async () => {
+    if (!config) return;
+    await apiRequest("POST", "/api/pipeline/config", {
+      ...config,
+      videoSaveDir,
+      transcriptDir,
+      videoQuality,
+    });
+    setEditDir(false);
+    fetchConfig();
+    toast({ title: "Directories updated" });
+  };
+
+  const statusBadge = (status: string) => {
+    const m: Record<string, { v: "default"|"secondary"|"destructive"|"outline"; icon: any; label: string }> = {
+      pending:     { v: "secondary", icon: Clock, label: "Pending" },
+      waiting_live:{ v: "secondary", icon: Radio, label: "Live" },
+      downloading: { v: "secondary", icon: Download, label: "Downloading" },
+      extracting_audio:{ v: "secondary", icon: Mic, label: "Audio" },
+      transcribing:{ v: "secondary", icon: FileText, label: "Transcribing" },
+      saving_md:   { v: "secondary", icon: FileDown, label: "Saving" },
+      complete:    { v: "default", icon: CheckCircle, label: "Done" },
+      failed:      { v: "destructive", icon: XCircle, label: "Failed" },
+    };
+    const s = m[status] || { v: "outline" as const, icon: AlertCircle, label: status };
+    return <Badge variant={s.v} className="gap-1"><s.icon className="h-3 w-3"/>{s.label}</Badge>;
+  };
+
+  const running = state?.status === "running";
+
+  return (
+    <div className="space-y-4">
+      {/* Controls */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Activity className="h-5 w-5" />
+              Pipeline
+              <Badge variant={running ? "default" : "secondary"}>{running ? "Running" : state?.status || "?"}</Badge>
+            </CardTitle>
+            <div className="flex gap-2">
+              {running ? (
+                <Button size="sm" variant="outline" onClick={stop}><Square className="h-4 w-4 mr-1"/>Stop</Button>
+              ) : (
+                <Button size="sm" onClick={start}><Play className="h-4 w-4 mr-1"/>Start</Button>
+              )}
+              <Button size="sm" variant="outline" onClick={checkNow}><RefreshCw className="h-4 w-4 mr-1"/>Check</Button>
+            </div>
+          </div>
+          <div className="flex gap-4 text-xs text-muted-foreground mt-1">
+            <span>✅ {state?.totalCompleted || 0} done</span>
+            <span>⏳ {state?.pendingCount || 0} pending</span>
+            {state?.lastCheck && <span>Last check: {new Date(state.lastCheck).toLocaleTimeString()}</span>}
+          </div>
+        </CardHeader>
+      </Card>
+
+      {/* Manual download + transcribe (same UI as main page) */}
+      <DownloadSettings onSettingsChange={handleSettingsChange} />
+      <UrlInput
+        onVideoFetched={handleVideoFetched}
+        onLoading={setIsVideoLoading}
+        onError={handleVideoError}
+      />
+
+      {isVideoLoading && <LoadingIndicator />}
+      {videoError && <ErrorMessage error={videoError} />}
+
+      {videoData && (
+        <VideoPreview
+          videoData={videoData}
+          downloadProgress={downloadProgress}
+          isDownloading={isDownloading}
+          setIsDownloading={setIsDownloading}
+          updateDownloadProgress={setDownloadProgress}
+          downloadSettings={downloadSettings}
+          showTranscribe
+          onTranscribe={handleTranscribe}
+        />
+      )}
+
+      {/* Directories */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm flex items-center gap-1"><HardDrive className="h-4 w-4"/>Settings</CardTitle>
+            <Button size="sm" variant="ghost" onClick={() => setEditDir(!editDir)}>{editDir ? "Cancel" : "Edit"}</Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-2 text-xs">
+          {editDir ? (
+            <>
+              <div>
+                <label className="text-muted-foreground">Working (local temp):</label>
+                <span className="ml-2 font-mono">{config?.workingDir}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-muted-foreground whitespace-nowrap">Video save:</label>
+                <Input value={videoSaveDir} onChange={e => setVideoSaveDir(e.target.value)} className="h-7 text-xs font-mono"/>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-muted-foreground whitespace-nowrap">Transcripts:</label>
+                <Input value={transcriptDir} onChange={e => setTranscriptDir(e.target.value)} className="h-7 text-xs font-mono"/>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-muted-foreground whitespace-nowrap">Download quality:</label>
+                <Select value={videoQuality} onValueChange={setVideoQuality}>
+                  <SelectTrigger className="h-7 text-xs">
+                    <SelectValue placeholder="Quality" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="480">480p</SelectItem>
+                    <SelectItem value="720">720p</SelectItem>
+                    <SelectItem value="1080">1080p</SelectItem>
+                    <SelectItem value="best">Best available</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button size="sm" onClick={saveDirs}>Save</Button>
+            </>
+          ) : (
+            <>
+              <div><span className="text-muted-foreground">Working: </span><code className="text-xs">{config?.workingDir}</code></div>
+              <div><span className="text-muted-foreground">Videos saved to: </span><code className="text-xs">{config?.videoSaveDir}</code></div>
+              <div><span className="text-muted-foreground">Transcripts: </span><code className="text-xs">{config?.transcriptDir}</code></div>
+              <div><span className="text-muted-foreground">Download quality: </span><code className="text-xs">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code></div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Channels */}
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Channels</CardTitle></CardHeader>
+        <CardContent className="space-y-2">
+          {config?.channels.map(ch => (
+            <div key={ch.id} className="p-2 rounded bg-muted/50 space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Switch checked={ch.enabled} onCheckedChange={v => toggleChannel(ch.id, v)}/>
+                  <span className="font-medium text-sm">{ch.name}</span>
+                </div>
+                <div className="flex gap-1">
+                  <Button
+                    size="sm" variant="outline"
+                    onClick={() => archiveChannel(ch.id)}
+                    disabled={archiving[ch.id]}
+                  >
+                    {archiving[ch.id] ? <Loader2 className="h-3 w-3 animate-spin"/> : <Archive className="h-3 w-3"/>}
+                    <span className="ml-1 text-xs">Full Scan</span>
+                  </Button>
+                  <Button size="icon" variant="ghost" onClick={() => removeChannel(ch.id)}>
+                    <Trash2 className="h-4 w-4 text-red-500"/>
+                  </Button>
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground truncate">{ch.url}</div>
+              {archiveMsg[ch.id] && <div className="text-xs text-blue-600">{archiveMsg[ch.id]}</div>}
+            </div>
+          ))}
+          {(!config?.channels.length) && <p className="text-xs text-muted-foreground">No channels.</p>}
+
+          <div className="flex gap-2 pt-2">
+            <Input placeholder="Name" value={newChannelName} onChange={e => setNewChannelName(e.target.value)} className="flex-1"/>
+            <Input placeholder="Channel URL" value={newChannelUrl} onChange={e => setNewChannelUrl(e.target.value)} className="flex-[2]"/>
+            <Button size="sm" onClick={addChannel} disabled={!newChannelName || !newChannelUrl}><Plus className="h-4 w-4 mr-1"/>Add</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Live status display for active pipeline jobs */}
+      {state && state.jobs.some(j => j.status !== "complete" && j.status !== "failed") && (
+        <Card className="border-blue-300 bg-blue-50/30">
+          <CardHeader className="pb-1"><CardTitle className="text-sm flex items-center gap-2"><Activity className="h-4 w-4 text-blue-600 animate-pulse"/>Live Status</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            {state.jobs.filter(j => j.status !== "complete" && j.status !== "failed").slice(0, 3).map(job => (
+              <div key={job.id} className="text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium truncate">{job.videoTitle}</span>
+                  {statusBadge(job.status)}
+                </div>
+                {(job.status === "downloading" || job.status === "extracting_audio" || job.status === "transcribing") && (
+                  <Progress value={job.progress} className="h-2 mt-1" />
+                )}
+                {job.status === "downloading" && <p className="text-xs text-muted-foreground mt-1">Downloading video with yt-dlp…</p>}
+                {job.status === "extracting_audio" && <p className="text-xs text-muted-foreground mt-1">Extracting audio with ffmpeg (16kHz mono WAV)…</p>}
+                {job.status === "transcribing" && <p className="text-xs text-muted-foreground mt-1">Transcribing with faster-whisper on CUDA…</p>}
+                {job.status === "saving_md" && <p className="text-xs text-muted-foreground mt-1">Saving transcript as markdown…</p>}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Recent Jobs */}
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-1"><List className="h-4 w-4"/>Recent Jobs</CardTitle></CardHeader>
+        <CardContent>
+          <ScrollArea className="max-h-[400px]">
+            <div className="space-y-2">
+              {state?.jobs.map(job => (
+                <div key={job.id} className="p-3 rounded border text-sm">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-medium truncate flex-1 mr-2">{job.videoTitle}</span>
+                    {statusBadge(job.status)}
+                  </div>
+                  <div className="text-xs text-muted-foreground mb-1">
+                    {job.channelName} • {new Date(job.startedAt).toLocaleString()}
+                    {job.retries > 0 && ` • ${job.retries} retries`}
+                  </div>
+                  {job.error && <p className="text-xs text-red-500 mt-1">{job.error}</p>}
+                  {(job.status === "downloading" || job.status === "extracting_audio" || job.status === "transcribing") && (
+                    <Progress value={job.progress} className="h-1.5 mt-1"/>
+                  )}
+                  {job.status === "complete" && job.transcriptionResult && (
+                    <div className="flex gap-1 mt-1 flex-wrap items-center">
+                      <Badge variant="outline" className="text-xs">{job.transcriptionResult.word_count} words</Badge>
+                      <Badge variant="outline" className="text-xs">{job.transcriptionResult.realtime_factor}x realtime</Badge>
+                      <Select value={retransModel} onValueChange={setRetransModel}>
+                        <SelectTrigger className="h-6 text-xs w-[90px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="large-v3">large-v3</SelectItem>
+                          <SelectItem value="large-v3-turbo">turbo</SelectItem>
+                          <SelectItem value="medium">medium</SelectItem>
+                          <SelectItem value="small">small</SelectItem>
+                          <SelectItem value="tiny">tiny</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        size="sm" variant="ghost" className="h-6 text-xs"
+                        onClick={() => retranscribe(job.videoId, job.channelId)}
+                        disabled={retranscribing[`${job.channelId}:${job.videoId}`]}
+                      >
+                        {retranscribing[`${job.channelId}:${job.videoId}`]
+                          ? <Loader2 className="h-3 w-3 animate-spin"/>
+                          : <RotateCcw className="h-3 w-3"/>}
+                        <span className="ml-1">Re-transcribe</span>
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {(!state?.jobs.length) && <p className="text-xs text-muted-foreground">No jobs yet.</p>}
+            </div>
+          </ScrollArea>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

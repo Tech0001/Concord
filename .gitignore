@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+venv/
+
+# Build output
+dist/
+server/public/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Replit (workspace-specific)
+.replit
+replit.nix
+
+# Vite cache
+vite.config.ts.*
+
+# Working folders (transient content)
+temp/
+downloads/
+transcripts/
+saved_videos/
+youtube-dl-cache/
+
+# Media files anywhere in repo (belt-and-suspenders)
+*.mp4
+*.mp3
+*.m4a
+*.wav
+*.webm
+*.mkv
+*.tar.gz
+
+# SQLite transient files — pipeline.db itself IS tracked (backup)
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Logs
+*.log
+logs/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
