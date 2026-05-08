@@ -9,6 +9,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { TagChip, TagPicker } from "@/components/TagPicker";
 import { apiRequest } from "@/lib/queryClient";
 import { BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, FileText, Play, Radio, Search, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -45,6 +46,13 @@ interface RelatedClip {
   quote: string;
   note: string | null;
   created_at: string;
+  tags: string[];
+  overlap?: number;
+}
+
+interface TagOption {
+  tag: string;
+  count: number;
 }
 
 interface VideoDrawerProps {
@@ -98,9 +106,26 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
   const [selectionStartIndex, setSelectionStartIndex] = useState<number | null>(null);
   const [selectionEndIndex, setSelectionEndIndex] = useState<number | null>(null);
   const [rangeNote, setRangeNote] = useState("");
-  const [relatedClips, setRelatedClips] = useState<RelatedClip[]>([]);
+  const [segClipTags, setSegClipTags] = useState<string[]>([]);
+  const [rangeClipTags, setRangeClipTags] = useState<string[]>([]);
+  const [tagOptions, setTagOptions] = useState<TagOption[]>([]);
+  const [byTagClips, setByTagClips] = useState<RelatedClip[]>([]);
+  const [sameVideoClips, setSameVideoClips] = useState<RelatedClip[]>([]);
   const [loadingRelated, setLoadingRelated] = useState(false);
+  const [notes, setNotes] = useState("");
+  const [notesStatus, setNotesStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const notesTimerRef = useRef<number | null>(null);
   const { toast } = useToast();
+
+  const loadTagOptions = async () => {
+    try {
+      const response = await apiRequest("GET", `/api/clips/tags?t=${Date.now()}`);
+      const data = await response.json() as { tags?: TagOption[] };
+      setTagOptions(data.tags || []);
+    } catch {
+      setTagOptions([]);
+    }
+  };
 
   const streamUrl = useMemo(() => {
     if (!video?.video_path) return "";
@@ -111,6 +136,8 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     setActiveSeconds(initialSeconds);
     setClipSegmentIndex(null);
     setClipNote("");
+    setSegClipTags([]);
+    setRangeClipTags([]);
     setTranscriptQuery("");
     setSearchCursor(0);
     setSelectionStartIndex(null);
@@ -129,8 +156,10 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
           "GET",
           `/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/transcript?t=${Date.now()}`,
         );
-        const data = await response.json() as { segments?: TranscriptSegment[] };
+        const data = await response.json() as { segments?: TranscriptSegment[]; notes?: string };
         setSegments(data.segments || []);
+        setNotes(data.notes || "");
+        setNotesStatus("idle");
       } catch (error: any) {
         setSegments([]);
         setSegmentError(error.message || "Could not load transcript timestamps");
@@ -142,6 +171,34 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     loadSegments();
   }, [open, videoKey(video)]);
 
+  // Debounced notes save: 600ms after last keystroke.
+  const handleNotesChange = (value: string) => {
+    setNotes(value);
+    setNotesStatus("saving");
+    if (notesTimerRef.current) window.clearTimeout(notesTimerRef.current);
+    if (!video) return;
+    const channelId = video.channel_id;
+    const videoId = video.video_id;
+    notesTimerRef.current = window.setTimeout(async () => {
+      try {
+        await apiRequest(
+          "PATCH",
+          `/api/videos/library/${encodeURIComponent(channelId)}/${encodeURIComponent(videoId)}/notes`,
+          { notes: value },
+        );
+        setNotesStatus("saved");
+      } catch {
+        setNotesStatus("idle");
+      }
+    }, 600);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (notesTimerRef.current) window.clearTimeout(notesTimerRef.current);
+    };
+  }, []);
+
   const loadRelatedClips = async () => {
     if (!open || !video) return;
     setLoadingRelated(true);
@@ -150,10 +207,12 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
         "GET",
         `/api/clips/related/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}?t=${Date.now()}`,
       );
-      const data = await response.json() as { rows?: RelatedClip[] };
-      setRelatedClips(data.rows || []);
+      const data = await response.json() as { byTags?: RelatedClip[]; sameVideo?: RelatedClip[] };
+      setByTagClips(data.byTags || []);
+      setSameVideoClips(data.sameVideo || []);
     } catch {
-      setRelatedClips([]);
+      setByTagClips([]);
+      setSameVideoClips([]);
     } finally {
       setLoadingRelated(false);
     }
@@ -161,6 +220,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
 
   useEffect(() => {
     loadRelatedClips();
+    if (open) loadTagOptions();
   }, [open, videoKey(video)]);
 
   const seekTo = (seconds: number, autoplay = true) => {
@@ -175,6 +235,23 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
 
   const onLoadedMetadata = () => {
     if (activeSeconds > 0) seekTo(activeSeconds, false);
+  };
+
+  // Build a sorted list of clipped time ranges for "already clipped" hints
+  // on the transcript. A segment is considered clipped if it overlaps any
+  // saved clip's [start, end] interval.
+  const clippedRanges = useMemo(() => {
+    return sameVideoClips
+      .map(clip => ({ start: clip.start_seconds, end: clip.end_seconds }))
+      .sort((a, b) => a.start - b.start);
+  }, [sameVideoClips]);
+
+  const isSegmentClipped = (segment: TranscriptSegment) => {
+    for (const range of clippedRanges) {
+      if (range.start >= segment.end) break;
+      if (range.end > segment.start) return true;
+    }
+    return false;
   };
 
   const closestSegmentIndex = useMemo(() => {
@@ -240,6 +317,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
         endSeconds: segment.end,
         quote: segment.text,
         note: clipSegmentIndex === index ? clipNote : "",
+        tags: clipSegmentIndex === index ? segClipTags : [],
       });
       toast({
         title: "Clip saved",
@@ -247,7 +325,8 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
       });
       setClipSegmentIndex(null);
       setClipNote("");
-      await loadRelatedClips();
+      setSegClipTags([]);
+      await Promise.all([loadRelatedClips(), loadTagOptions()]);
     } catch (error: any) {
       toast({ variant: "destructive", title: "Clip save failed", description: error.message });
     } finally {
@@ -274,6 +353,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
         endSeconds: last.end,
         quote: selected.map(segment => segment.text).join("\n\n"),
         note: rangeNote,
+        tags: rangeClipTags,
       });
       toast({
         title: "Clip saved",
@@ -282,7 +362,8 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
       setSelectionStartIndex(null);
       setSelectionEndIndex(null);
       setRangeNote("");
-      await loadRelatedClips();
+      setRangeClipTags([]);
+      await Promise.all([loadRelatedClips(), loadTagOptions()]);
     } catch (error: any) {
       toast({ variant: "destructive", title: "Clip save failed", description: error.message });
     } finally {
@@ -355,6 +436,25 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                 {video.md_path && <Badge variant="outline">transcript</Badge>}
               </div>
 
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="video-notes" className="text-sm font-medium">Notes</label>
+                  {notesStatus !== "idle" && (
+                    <span className="text-[11px] text-muted-foreground">
+                      {notesStatus === "saving" ? "Saving…" : "Saved"}
+                    </span>
+                  )}
+                </div>
+                <textarea
+                  id="video-notes"
+                  value={notes}
+                  onChange={event => handleNotesChange(event.target.value)}
+                  placeholder="Your notes about this video as a whole. Synthesis, themes, who is being interviewed, what to follow up on…"
+                  rows={3}
+                  className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              </div>
+
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-sm font-medium">
@@ -422,6 +522,14 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                           Save selected clip
                         </Button>
                       </div>
+                      <TagPicker
+                        value={rangeClipTags}
+                        onChange={setRangeClipTags}
+                        options={tagOptions}
+                        size="sm"
+                        placeholder="Add tags..."
+                        onOpen={loadTagOptions}
+                      />
                     </div>
                   )}
                 </div>
@@ -433,10 +541,13 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                     const searchMatch = transcriptMatches.includes(index);
                     const selected = !!rangeBounds && index >= rangeBounds.start && index <= rangeBounds.end;
                     const takingNote = clipSegmentIndex === index;
+                    const clipped = isSegmentClipped(segment);
                     return (
                       <div
                         key={`${segment.start}:${index}`}
                         className={`border-b px-3 py-2 text-sm last:border-b-0 ${
+                          clipped ? "border-l-2 border-l-primary/60" : ""
+                        } ${
                           selected ? "bg-primary/15" : highlighted ? "bg-primary/10" : active ? "bg-accent" : ""
                         }`}
                       >
@@ -451,6 +562,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                             {formatTimestamp(segment.start)} - {formatTimestamp(segment.end)}
                             {highlighted && <Badge variant="secondary" className="h-5">match</Badge>}
                             {searchMatch && <Badge variant="outline" className="h-5">search</Badge>}
+                            {clipped && <Badge variant="outline" className="h-5">clipped</Badge>}
                           </span>
                           <span className="leading-6">{segment.text}</span>
                         </button>
@@ -482,8 +594,10 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                             variant="outline"
                             className="h-7 text-xs"
                             onClick={() => {
-                              setClipSegmentIndex(takingNote ? null : index);
+                              const next = takingNote ? null : index;
+                              setClipSegmentIndex(next);
                               setClipNote("");
+                              setSegClipTags([]);
                             }}
                           >
                             <BookmarkPlus className="h-3 w-3" />
@@ -508,6 +622,17 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                             </>
                           )}
                         </div>
+                        {takingNote && (
+                          <TagPicker
+                            value={segClipTags}
+                            onChange={setSegClipTags}
+                            options={tagOptions}
+                            size="sm"
+                            placeholder="Add tags..."
+                            onOpen={loadTagOptions}
+                            className="mt-2"
+                          />
+                        )}
                       </div>
                     );
                   })}
@@ -523,33 +648,33 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-medium">Related Clips</div>
-                  <Badge variant="outline">{relatedClips.length}</Badge>
-                </div>
-                <div className="rounded-md border">
-                  {relatedClips.map(clip => (
-                    <button
-                      key={clip.id}
-                      type="button"
-                      onClick={() => seekRelatedClip(clip)}
-                      className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-accent"
-                    >
-                      <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-                        <Play className="h-3 w-3" />
-                        {formatTimestamp(clip.start_seconds)} - {formatTimestamp(clip.end_seconds)}
-                      </span>
-                      <span className="line-clamp-2 leading-6">{clip.quote}</span>
-                      {clip.note && <span className="mt-1 block text-xs text-muted-foreground">{clip.note}</span>}
-                    </button>
-                  ))}
-                  {loadingRelated && <p className="p-3 text-sm text-muted-foreground">Loading related clips...</p>}
-                  {!loadingRelated && !relatedClips.length && (
-                    <p className="p-3 text-sm text-muted-foreground">No saved clips for this video yet.</p>
-                  )}
-                </div>
-              </div>
+              <RelatedClipSection
+                heading="Related Clips · By tag"
+                description="From other videos that share at least one tag"
+                clips={byTagClips}
+                loading={loadingRelated}
+                emptyMessage="No tagged clips elsewhere match. Add tags when saving to surface cross-video links."
+                showOverlap
+                onSelect={clip => {
+                  if (clip.video_id === video.video_id && clip.channel_id === video.channel_id) {
+                    seekRelatedClip(clip);
+                  } else {
+                    toast({
+                      title: "From another video",
+                      description: clip.title,
+                    });
+                  }
+                }}
+              />
+
+              <RelatedClipSection
+                heading="Same video"
+                description={null}
+                clips={sameVideoClips}
+                loading={loadingRelated}
+                emptyMessage="No saved clips for this video yet."
+                onSelect={seekRelatedClip}
+              />
 
               <div className="space-y-1 text-xs text-muted-foreground">
                 {video.video_path && <div className="break-all font-mono">{video.video_path}</div>}
@@ -562,5 +687,76 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+interface RelatedClipSectionProps {
+  heading: string;
+  description: string | null;
+  clips: RelatedClip[];
+  loading: boolean;
+  emptyMessage: string;
+  showOverlap?: boolean;
+  onSelect: (clip: RelatedClip) => void;
+}
+
+function RelatedClipSection({
+  heading,
+  description,
+  clips,
+  loading,
+  emptyMessage,
+  showOverlap,
+  onSelect,
+}: RelatedClipSectionProps) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col">
+          <span className="text-sm font-medium">{heading}</span>
+          {description && (
+            <span className="text-xs text-muted-foreground">{description}</span>
+          )}
+        </div>
+        <Badge variant="outline">{clips.length}</Badge>
+      </div>
+      <div className="rounded-md border">
+        {clips.map(clip => (
+          <button
+            key={clip.id}
+            type="button"
+            onClick={() => onSelect(clip)}
+            className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-accent"
+          >
+            <span className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <Play className="h-3 w-3" />
+              {formatTimestamp(clip.start_seconds)} - {formatTimestamp(clip.end_seconds)}
+              {showOverlap && clip.overlap !== undefined && (
+                <Badge variant="secondary" className="h-5 text-[10px]">
+                  {clip.overlap} tag match{clip.overlap === 1 ? "" : "es"}
+                </Badge>
+              )}
+              <span className="ml-auto truncate">{clip.channel_name || clip.channel_id}</span>
+            </span>
+            {showOverlap && (
+              <span className="mb-1 block truncate text-xs text-muted-foreground">{clip.title}</span>
+            )}
+            <span className="line-clamp-2 leading-6">{clip.quote}</span>
+            {clip.note && <span className="mt-1 block text-xs text-muted-foreground">{clip.note}</span>}
+            {clip.tags?.length > 0 && (
+              <span className="mt-1.5 flex flex-wrap gap-1">
+                {clip.tags.map(tag => (
+                  <TagChip key={tag} tag={tag} variant="outline" />
+                ))}
+              </span>
+            )}
+          </button>
+        ))}
+        {loading && <p className="p-3 text-sm text-muted-foreground">Loading…</p>}
+        {!loading && !clips.length && (
+          <p className="p-3 text-sm text-muted-foreground">{emptyMessage}</p>
+        )}
+      </div>
+    </div>
   );
 }

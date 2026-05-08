@@ -4,20 +4,30 @@ import { storage } from "./storage";
 import { getYouTubeVideoInfo, downloadYouTubeVideo, formatDuration } from "./youtube-dl";
 import { getPipeline, Pipeline } from "./pipeline";
 import {
+  addClipLink,
   countByStatus,
   createTranscriptClip,
+  CLIP_LINK_KINDS,
+  type ClipLinkKind,
+  deleteClipTag,
   deleteTranscriptClip,
   enqueueVideo,
   getChannelQueue,
+  getClipLinks,
   getQueueEntry,
   getQueueEntryByVideoId,
   getQueueList,
+  listAllClipTags,
   listRelatedTranscriptClips,
   getTranscriptSegmentsForVideo,
   getTranscriptSearchIndexStats,
   listTranscriptClips,
   refreshTranscriptSearchIndex,
+  removeClipLink,
+  renameClipTag,
   searchTranscriptSegments,
+  setClipTags,
+  setVideoNotes,
   updateQueueStatus,
 } from "./db";
 import { copyAudioTrack } from "./audio";
@@ -859,12 +869,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.setHeader("Cache-Control", "no-store");
       const query = String(req.query.q || "");
       const liveFilter = String(req.query.type || "all");
+      const tagsParam = typeof req.query.tags === "string" ? req.query.tags : "";
+      const tags = tagsParam.split(",").map(t => t.trim()).filter(Boolean);
       const results = searchTranscriptSegments(query, {
         channelId: String(req.query.channelId || "all"),
         status: String(req.query.status || "complete"),
         isLive: liveFilter === "live" ? true : liveFilter === "video" ? false : undefined,
         dateFrom: req.query.dateFrom ? String(req.query.dateFrom) : undefined,
         dateTo: req.query.dateTo ? String(req.query.dateTo) : undefined,
+        tags,
         limit: req.query.limit ? Number(req.query.limit) : 100,
       });
       res.json({ results, index: getTranscriptSearchIndexStats() });
@@ -900,6 +913,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         videoId: entry.video_id,
         channelId: entry.channel_id,
         segments: getTranscriptSegmentsForVideo(entry.video_id, entry.channel_id),
+        notes: entry.notes ?? "",
       });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Transcript load failed" });
@@ -970,15 +984,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.setHeader("Cache-Control", "no-store");
       const requestedLimit = Number(req.query.limit);
       const requestedOffset = Number(req.query.offset);
+      const tagsParam = typeof req.query.tags === "string" ? req.query.tags : "";
+      const tags = tagsParam
+        .split(",")
+        .map(t => t.trim())
+        .filter(Boolean);
       const result = listTranscriptClips({
         q: req.query.q ? String(req.query.q) : "",
         channelId: String(req.query.channelId || "all"),
+        tags,
         limit: Number.isFinite(requestedLimit) ? requestedLimit : 100,
         offset: Number.isFinite(requestedOffset) ? requestedOffset : 0,
       });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed to list clips" });
+    }
+  });
+
+  app.get("/api/clips/tags", (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ tags: listAllClipTags() });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to list tags" });
+    }
+  });
+
+  app.post("/api/clips/tags/rename", (req, res) => {
+    try {
+      const { from, to, includeDescendants } = req.body || {};
+      if (!from || !to) {
+        return res.status(400).json({ error: "from and to are required" });
+      }
+      const result = renameClipTag(String(from), String(to), Boolean(includeDescendants));
+      res.json({ success: true, ...result });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to rename tag" });
+    }
+  });
+
+  app.delete("/api/clips/tags/:tag", (req: Request<{ tag: string }>, res: Response) => {
+    try {
+      const removed = deleteClipTag(
+        decodeURIComponent(req.params.tag),
+        req.query.includeDescendants === "true",
+      );
+      res.json({ success: true, removed });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to delete tag" });
     }
   });
 
@@ -994,6 +1048,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         title,
         channelName,
         uploadDate,
+        tags,
       } = req.body;
 
       if (!videoId || !channelId || !quote) {
@@ -1012,6 +1067,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         endSeconds: Number(endSeconds) || Number(startSeconds) || 0,
         quote: String(quote),
         note: note ? String(note) : null,
+        tags: Array.isArray(tags) ? tags.map(String) : undefined,
       });
 
       res.json({ success: true, clip });
@@ -1020,22 +1076,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/clips/related/:channelId/:videoId", (req, res) => {
+  app.patch("/api/clips/:clipId/tags", (req: Request<{ clipId: string }>, res: Response) => {
+    try {
+      const { tags } = req.body || {};
+      if (!Array.isArray(tags)) {
+        return res.status(400).json({ error: "tags array is required" });
+      }
+      const stored = setClipTags(req.params.clipId, tags.map(String));
+      res.json({ success: true, tags: stored });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to update tags" });
+    }
+  });
+
+  app.get("/api/clips/related/:channelId/:videoId", (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json({
-        rows: listRelatedTranscriptClips(
-          req.params.videoId,
-          req.params.channelId,
-          req.query.excludeId ? String(req.query.excludeId) : undefined,
-        ),
-      });
+      const result = listRelatedTranscriptClips(
+        req.params.videoId,
+        req.params.channelId,
+        req.query.excludeId ? String(req.query.excludeId) : undefined,
+      );
+      res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed to list related clips" });
     }
   });
 
-  app.delete("/api/clips/:clipId", (req, res) => {
+  app.delete("/api/clips/:clipId", (req: Request<{ clipId: string }>, res: Response) => {
     try {
       const deleted = deleteTranscriptClip(req.params.clipId);
       if (!deleted) return res.status(404).json({ error: "Clip not found" });
@@ -1044,6 +1112,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed to delete clip" });
     }
   });
+
+  app.get("/api/clips/:clipId/links", (req: Request<{ clipId: string }>, res: Response) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ links: getClipLinks(req.params.clipId), kinds: CLIP_LINK_KINDS });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to load links" });
+    }
+  });
+
+  app.post("/api/clips/:clipId/links", (req: Request<{ clipId: string }>, res: Response) => {
+    try {
+      const { toId, kind, note } = req.body || {};
+      if (!toId || !kind) return res.status(400).json({ error: "toId and kind are required" });
+      if (!CLIP_LINK_KINDS.includes(kind)) {
+        return res.status(400).json({ error: `kind must be one of ${CLIP_LINK_KINDS.join(", ")}` });
+      }
+      const result = addClipLink(req.params.clipId, String(toId), kind as ClipLinkKind, note ? String(note) : null);
+      res.json({ success: true, ...result });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to add link" });
+    }
+  });
+
+  app.delete(
+    "/api/clips/:clipId/links/:toId/:kind",
+    (req: Request<{ clipId: string; toId: string; kind: string }>, res: Response) => {
+      try {
+        if (!CLIP_LINK_KINDS.includes(req.params.kind as ClipLinkKind)) {
+          return res.status(400).json({ error: "Unknown link kind" });
+        }
+        const result = removeClipLink(req.params.clipId, req.params.toId, req.params.kind as ClipLinkKind);
+        res.json({ success: true, ...result });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : "Failed to remove link" });
+      }
+    },
+  );
+
+  app.patch(
+    "/api/videos/library/:channelId/:videoId/notes",
+    (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
+      try {
+        const { notes } = req.body || {};
+        const value = notes === null || notes === undefined ? null : String(notes);
+        setVideoNotes(req.params.videoId, req.params.channelId, value);
+        res.json({ success: true });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : "Failed to save notes" });
+      }
+    },
+  );
 
   // Get queue statistics for a channel
   app.get("/api/pipeline/queue/:channelId", (req, res) => {

@@ -1068,6 +1068,7 @@ export class Pipeline extends EventEmitter {
       word_count: 0,
       error: null,
       retries: 0,
+      notes: null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
