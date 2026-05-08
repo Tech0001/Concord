@@ -888,7 +888,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(getTranscriptSearchIndexStats());
   });
 
-  app.get("/api/videos/library/:channelId/:videoId/transcript", (req, res) => {
+  app.get("/api/videos/library/:channelId/:videoId/transcript", (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
     try {
       res.setHeader("Cache-Control", "no-store");
       const entry = getQueueEntry(req.params.videoId, req.params.channelId);
@@ -906,7 +906,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/videos/library/:channelId/:videoId/stream", (req: Request, res: Response) => {
+  app.get("/api/videos/library/:channelId/:videoId/stream", (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
     try {
       const entry = getQueueEntry(req.params.videoId, req.params.channelId);
       if (!entry?.video_path) {
