@@ -35,6 +35,7 @@ import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
 import path from "path";
 import fs from "fs";
 import { nanoid } from "nanoid";
+import { spawn } from "child_process";
 
 // Track active downloads and their progress
 const activeDownloads = new Map<string, {
@@ -47,6 +48,85 @@ const activeDownloads = new Map<string, {
   channelName?: string | null;
   isComplete: boolean;
 }>();
+
+type ExportMode = "fast" | "accurate";
+
+function formatSecondsForFile(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const secs = safe % 60;
+  return [hours, minutes, secs].map(part => String(part).padStart(2, "0")).join("-");
+}
+
+function uniquePath(filePath: string): string {
+  if (!fs.existsSync(filePath)) return filePath;
+  const parsed = path.parse(filePath);
+  for (let i = 2; i < 1000; i++) {
+    const candidate = path.join(parsed.dir, `${parsed.name}-${i}${parsed.ext}`);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(parsed.dir, `${parsed.name}-${Date.now()}${parsed.ext}`);
+}
+
+function exportVideoSegment(options: {
+  inputPath: string;
+  outputPath: string;
+  startSeconds: number;
+  duration: number;
+  mode: ExportMode;
+  quality: string;
+}): Promise<void> {
+  const start = String(Math.max(0, options.startSeconds));
+  const duration = String(Math.max(0.1, options.duration));
+  const args =
+    options.mode === "fast"
+      ? [
+          "-ss", start,
+          "-i", options.inputPath,
+          "-t", duration,
+          "-map", "0:v:0?",
+          "-map", "0:a:0?",
+          "-c", "copy",
+          "-avoid_negative_ts", "make_zero",
+          "-y",
+          options.outputPath,
+        ]
+      : [
+          "-ss", start,
+          "-i", options.inputPath,
+          "-t", duration,
+          "-map", "0:v:0?",
+          "-map", "0:a:0?",
+          ...(options.quality !== "same" ? ["-vf", `scale=-2:${options.quality}`] : []),
+          "-c:v", "libx264",
+          "-preset", "veryfast",
+          "-crf", "20",
+          "-c:a", "aac",
+          "-b:a", "160k",
+          "-movflags", "+faststart",
+          "-y",
+          options.outputPath,
+        ];
+
+  console.log(`[export] ffmpeg ${args.join(" ")}`);
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+
+    proc.stderr.on("data", data => {
+      stderr += data.toString();
+      if (stderr.length > 12000) stderr = stderr.slice(-12000);
+    });
+
+    proc.on("error", err => reject(new Error(`Failed to start ffmpeg: ${err.message}`)));
+    proc.on("close", code => {
+      if (code === 0) return resolve();
+      reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-1000)}`));
+    });
+  });
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
@@ -978,6 +1058,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: error instanceof Error ? error.message : "Video stream failed" });
     }
   });
+
+  app.post(
+    "/api/videos/library/:channelId/:videoId/export-segment",
+    async (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
+      try {
+        const entry = getQueueEntry(req.params.videoId, req.params.channelId);
+        if (!entry?.video_path) {
+          return res.status(404).json({ error: "Video file is not recorded in the library" });
+        }
+
+        const inputPath = path.resolve(entry.video_path);
+        if (!fs.existsSync(inputPath)) {
+          return res.status(404).json({ error: "Video file not found on disk" });
+        }
+
+        const startSeconds = Number(req.body?.startSeconds);
+        const endSeconds = Number(req.body?.endSeconds);
+        if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || startSeconds < 0 || endSeconds <= startSeconds) {
+          return res.status(400).json({ error: "Valid startSeconds and endSeconds are required" });
+        }
+
+        const requestedMode = String(req.body?.mode || "fast") === "accurate" ? "accurate" : "fast";
+        const quality = ["same", "480", "720", "1080"].includes(String(req.body?.quality))
+          ? String(req.body.quality)
+          : "same";
+        const mode = quality === "same" ? requestedMode : "accurate";
+        const duration = endSeconds - startSeconds;
+        const outputDir = path.resolve(process.cwd(), "exports", "clips", channelFolderName(entry.channel_id));
+        fs.mkdirSync(outputDir, { recursive: true });
+
+        const baseName = datedBaseName(entry.title, entry.upload_date);
+        const startLabel = formatSecondsForFile(startSeconds);
+        const endLabel = formatSecondsForFile(endSeconds);
+        const outputPath = uniquePath(path.join(outputDir, `${baseName} - ${startLabel}_to_${endLabel}.mp4`));
+
+        await exportVideoSegment({
+          inputPath,
+          outputPath,
+          startSeconds,
+          duration,
+          mode,
+          quality,
+        });
+
+        res.json({
+          success: true,
+          outputPath,
+          fileName: path.basename(outputPath),
+          mode,
+          quality,
+          startSeconds,
+          endSeconds,
+        });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : "Video export failed" });
+      }
+    },
+  );
 
   app.get("/api/clips", (req, res) => {
     try {

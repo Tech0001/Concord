@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Sheet,
   SheetContent,
@@ -11,7 +12,7 @@ import {
 } from "@/components/ui/sheet";
 import { TagChip, TagPicker } from "@/components/TagPicker";
 import { apiRequest } from "@/lib/queryClient";
-import { BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, FileText, Play, Radio, Search, X } from "lucide-react";
+import { BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, Download, FileText, Loader2, Play, Radio, Scissors, Search, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 export interface VideoDrawerEntry {
@@ -87,12 +88,24 @@ function formatDuration(seconds?: number | null): string {
   return formatTimestamp(seconds);
 }
 
+function parseTimestampInput(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed) return Number.NaN;
+  if (/^\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
+  const parts = trimmed.split(":").map(part => Number(part));
+  if (parts.some(part => !Number.isFinite(part) || part < 0)) return Number.NaN;
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return Number.NaN;
+}
+
 function videoKey(video: VideoDrawerEntry | null): string {
   return video ? `${video.channel_id}:${video.video_id}` : "";
 }
 
 export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentIndex, onOpenChange }: VideoDrawerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const transcriptListRef = useRef<HTMLDivElement | null>(null);
   const segmentRefs = useRef<Record<number, HTMLButtonElement | null>>({});
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [loadingSegments, setLoadingSegments] = useState(false);
@@ -115,6 +128,13 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
   const [notes, setNotes] = useState("");
   const [notesStatus, setNotesStatus] = useState<"idle" | "saving" | "saved">("idle");
   const notesTimerRef = useRef<number | null>(null);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [exportStartInput, setExportStartInput] = useState(formatTimestamp(initialSeconds));
+  const [exportEndInput, setExportEndInput] = useState(formatTimestamp(initialSeconds + 60));
+  const [exportMode, setExportMode] = useState<"fast" | "accurate">("fast");
+  const [exportQuality, setExportQuality] = useState("same");
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const { toast } = useToast();
 
   const loadTagOptions = async () => {
@@ -143,6 +163,9 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     setSelectionStartIndex(null);
     setSelectionEndIndex(null);
     setRangeNote("");
+    setExportStartInput(formatTimestamp(initialSeconds));
+    setExportEndInput(formatTimestamp(initialSeconds + 60));
+    setExportOpen(false);
   }, [initialSeconds, initialSegmentIndex, videoKey(video)]);
 
   useEffect(() => {
@@ -234,8 +257,20 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
   };
 
   const onLoadedMetadata = () => {
+    const player = videoRef.current;
+    if (player && Number.isFinite(player.duration) && player.duration > 0) {
+      setVideoDuration(player.duration);
+    }
     if (activeSeconds > 0) seekTo(activeSeconds, false);
   };
+
+  // Reset duration when switching videos so the strip doesn't briefly render
+  // markers against the previous video's length.
+  useEffect(() => {
+    setVideoDuration(0);
+  }, [videoKey(video)]);
+
+  const effectiveDuration = videoDuration || video?.duration || 0;
 
   // Build a sorted list of clipped time ranges for "already clipped" hints
   // on the transcript. A segment is considered clipped if it overlaps any
@@ -285,15 +320,50 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     };
   }, [selectionEndIndex, selectionStartIndex]);
 
+  const exportStartSeconds = parseTimestampInput(exportStartInput);
+  const exportEndSeconds = parseTimestampInput(exportEndInput);
+  const exportValid = Number.isFinite(exportStartSeconds)
+    && Number.isFinite(exportEndSeconds)
+    && exportStartSeconds >= 0
+    && exportEndSeconds > exportStartSeconds;
+
+  /**
+   * Scroll *only* the transcript list (not the outer Sheet) so playback
+   * never drags the video out of view. `align="top"` puts the segment at
+   * the top of the visible area (with a small padding) — used for the live
+   * playback follow. `align="center"` is used for jumps from search.
+   */
+  const scrollTranscriptTo = (index: number, align: "top" | "center" = "top") => {
+    const container = transcriptListRef.current;
+    const node = segmentRefs.current[index];
+    if (!container || !node) return;
+    const containerRect = container.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    const delta = nodeRect.top - containerRect.top;
+    const offset = align === "center"
+      ? delta - (container.clientHeight - node.clientHeight) / 2
+      : delta - 8;
+    container.scrollTo({ top: container.scrollTop + offset, behavior: "smooth" });
+  };
+
+  // User-initiated jumps (search hits, deep-link via initialSegmentIndex):
+  // center the target so context is visible.
   useEffect(() => {
-    if (!open || highlightedSegmentIndex < 0 || loadingSegments) return;
-    window.setTimeout(() => {
-      segmentRefs.current[highlightedSegmentIndex]?.scrollIntoView({
-        block: "center",
-        behavior: "smooth",
-      });
-    }, 100);
-  }, [open, highlightedSegmentIndex, loadingSegments]);
+    if (!open || loadingSegments) return;
+    const target = selectedSearchIndex >= 0 ? selectedSearchIndex : initialSegmentIndex ?? -1;
+    if (target < 0) return;
+    const id = window.setTimeout(() => scrollTranscriptTo(target, "center"), 100);
+    return () => window.clearTimeout(id);
+  }, [open, loadingSegments, selectedSearchIndex, initialSegmentIndex]);
+
+  // Playback follow: keep the current line pinned near the top of the
+  // transcript list as the video plays. Only the inner container scrolls,
+  // so the video and notes above remain steady.
+  useEffect(() => {
+    if (!open || loadingSegments) return;
+    if (closestSegmentIndex < 0) return;
+    scrollTranscriptTo(closestSegmentIndex, "top");
+  }, [open, loadingSegments, closestSegmentIndex]);
 
   const jumpSearch = (direction: 1 | -1) => {
     if (!transcriptMatches.length) return;
@@ -301,6 +371,42 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     setSearchCursor(next);
     const segment = segments[transcriptMatches[next]];
     if (segment) seekTo(segment.start, false);
+  };
+
+  const useSelectedRangeForExport = () => {
+    if (!rangeBounds) return;
+    const start = segments[rangeBounds.start]?.start;
+    const end = segments[rangeBounds.end]?.end;
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      setExportStartInput(formatTimestamp(start));
+      setExportEndInput(formatTimestamp(end));
+    }
+  };
+
+  const exportSegment = async () => {
+    if (!video || !exportValid) return;
+    setExporting(true);
+    try {
+      const response = await apiRequest(
+        "POST",
+        `/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/export-segment`,
+        {
+          startSeconds: exportStartSeconds,
+          endSeconds: exportEndSeconds,
+          mode: exportMode,
+          quality: exportQuality,
+        },
+      );
+      const data = await response.json() as { outputPath?: string; mode?: string; quality?: string };
+      toast({
+        title: "Video segment exported",
+        description: data.outputPath || `${formatTimestamp(exportStartSeconds)} - ${formatTimestamp(exportEndSeconds)}`,
+      });
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Export failed", description: error.message });
+    } finally {
+      setExporting(false);
+    }
   };
 
   const saveClip = async (segment: TranscriptSegment, index: number) => {
@@ -377,9 +483,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     const fallbackIndex = segments.findIndex(segment => segment.start >= clip.start_seconds);
     const targetIndex = index >= 0 ? index : fallbackIndex;
     if (targetIndex >= 0) {
-      window.setTimeout(() => {
-        segmentRefs.current[targetIndex]?.scrollIntoView({ block: "center", behavior: "smooth" });
-      }, 100);
+      window.setTimeout(() => scrollTranscriptTo(targetIndex), 100);
     }
   };
 
@@ -429,11 +533,137 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                 </div>
               )}
 
+              {streamUrl && effectiveDuration > 0 && (
+                <ClipTimeline
+                  duration={effectiveDuration}
+                  clips={sameVideoClips}
+                  currentSeconds={activeSeconds}
+                  onSeek={seekTo}
+                />
+              )}
+
               <div className="flex flex-wrap gap-2">
                 {video.status && <Badge variant="outline">{video.status}</Badge>}
                 {!!video.word_count && <Badge variant="outline">{video.word_count} words</Badge>}
                 {video.video_path && <Badge variant="outline">video</Badge>}
                 {video.md_path && <Badge variant="outline">transcript</Badge>}
+              </div>
+
+              <div className="rounded-md border">
+                <button
+                  type="button"
+                  onClick={() => setExportOpen(open => !open)}
+                  className="flex w-full flex-wrap items-center justify-between gap-2 px-3 py-2 text-left hover:bg-accent"
+                  aria-expanded={exportOpen}
+                >
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Scissors className="h-4 w-4" />
+                    Export Video Segment
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={exportValid ? "outline" : "destructive"}>
+                      {exportValid
+                        ? `${formatTimestamp(exportStartSeconds)} - ${formatTimestamp(exportEndSeconds)}`
+                        : "Invalid range"}
+                    </Badge>
+                    {exportOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                  </div>
+                </button>
+
+                {exportOpen && (
+                  <div className="space-y-3 border-t p-3">
+                    <div className="grid gap-2 lg:grid-cols-[1fr_1fr_135px_115px_auto]">
+                      <div className="space-y-1">
+                        <label className="text-[11px] text-muted-foreground" htmlFor="export-start">Start</label>
+                        <div className="flex gap-1">
+                          <Input
+                            id="export-start"
+                            value={exportStartInput}
+                            onChange={event => setExportStartInput(event.target.value)}
+                            placeholder="01:05"
+                            className="h-8 text-xs"
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-2 text-xs"
+                            onClick={() => setExportStartInput(formatTimestamp(activeSeconds))}
+                          >
+                            Now
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[11px] text-muted-foreground" htmlFor="export-end">End</label>
+                        <div className="flex gap-1">
+                          <Input
+                            id="export-end"
+                            value={exportEndInput}
+                            onChange={event => setExportEndInput(event.target.value)}
+                            placeholder="02:34"
+                            className="h-8 text-xs"
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-2 text-xs"
+                            onClick={() => setExportEndInput(formatTimestamp(activeSeconds))}
+                          >
+                            Now
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[11px] text-muted-foreground">Mode</label>
+                        <Select value={exportMode} onValueChange={value => setExportMode(value as "fast" | "accurate")}>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="fast">Fast copy</SelectItem>
+                            <SelectItem value="accurate">Accurate</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[11px] text-muted-foreground">Quality</label>
+                        <Select value={exportQuality} onValueChange={setExportQuality}>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="same">Source</SelectItem>
+                            <SelectItem value="480">480p</SelectItem>
+                            <SelectItem value="720">720p</SelectItem>
+                            <SelectItem value="1080">1080p</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex items-end gap-1">
+                        {rangeBounds && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 whitespace-nowrap text-xs"
+                            onClick={useSelectedRangeForExport}
+                          >
+                            Use selected
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          className="h-8 whitespace-nowrap text-xs"
+                          disabled={!streamUrl || !exportValid || exporting}
+                          onClick={exportSegment}
+                        >
+                          {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                          Export
+                        </Button>
+                      </div>
+                    </div>
+                    {exportQuality !== "same" && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Scaling requires accurate export, so fast copy will be upgraded automatically.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1">
@@ -451,7 +681,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                   onChange={event => handleNotesChange(event.target.value)}
                   placeholder="Your notes about this video as a whole. Synthesis, themes, who is being interviewed, what to follow up on…"
                   rows={3}
-                  className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground/60 placeholder:font-normal placeholder:italic focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
                 />
               </div>
 
@@ -534,7 +764,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                   )}
                 </div>
 
-                <div className="max-h-[48vh] overflow-y-auto rounded-md border">
+                <div ref={transcriptListRef} className="max-h-[48vh] overflow-y-auto rounded-md border">
                   {segments.map((segment, index) => {
                     const active = index === closestSegmentIndex;
                     const highlighted = index === highlightedSegmentIndex;
@@ -687,6 +917,74 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+interface ClipTimelineProps {
+  duration: number;
+  clips: RelatedClip[];
+  currentSeconds: number;
+  onSeek: (seconds: number, autoplay?: boolean) => void;
+}
+
+/**
+ * A thin marker strip showing every saved clip in this video as a colored
+ * region positioned by start/duration. Click a marker to seek to that
+ * clip's start. Click empty space to scrub. The current playhead is drawn
+ * as a vertical line.
+ */
+function ClipTimeline({ duration, clips, currentSeconds, onSeek }: ClipTimelineProps) {
+  const handleStripClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const fraction = (event.clientX - rect.left) / rect.width;
+    onSeek(Math.max(0, Math.min(duration, fraction * duration)), false);
+  };
+
+  const playheadPercent = Math.max(0, Math.min(100, (currentSeconds / duration) * 100));
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+        <span>Clip timeline</span>
+        <span>{clips.length} marker{clips.length === 1 ? "" : "s"}</span>
+      </div>
+      <div
+        role="slider"
+        tabIndex={0}
+        aria-valuemin={0}
+        aria-valuemax={duration}
+        aria-valuenow={currentSeconds}
+        aria-label="Click to scrub. Markers represent saved clips."
+        onClick={handleStripClick}
+        className="relative h-5 w-full cursor-pointer overflow-hidden rounded-md border bg-muted"
+      >
+        {clips.map(clip => {
+          const left = Math.max(0, (clip.start_seconds / duration) * 100);
+          const widthPct = Math.max(0.4, ((clip.end_seconds - clip.start_seconds) / duration) * 100);
+          const tooltip = clip.note
+            ? `${clip.quote.slice(0, 80)}\n— ${clip.note}`
+            : clip.quote.slice(0, 120);
+          return (
+            <button
+              key={clip.id}
+              type="button"
+              title={tooltip}
+              onClick={event => {
+                event.stopPropagation();
+                onSeek(clip.start_seconds);
+              }}
+              style={{ left: `${left}%`, width: `${widthPct}%`, minWidth: 4 }}
+              className="absolute top-0 h-full bg-primary/40 transition-colors hover:bg-primary/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+              aria-label={`Saved clip from ${formatTimestamp(clip.start_seconds)} to ${formatTimestamp(clip.end_seconds)}`}
+            />
+          );
+        })}
+        <div
+          className="pointer-events-none absolute top-0 h-full w-px bg-foreground/80"
+          style={{ left: `${playheadPercent}%` }}
+        />
+      </div>
+    </div>
   );
 }
 
