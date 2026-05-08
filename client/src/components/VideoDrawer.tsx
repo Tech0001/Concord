@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Sheet,
   SheetContent,
@@ -9,7 +10,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { apiRequest } from "@/lib/queryClient";
-import { Calendar, Clock, FileText, Play, Radio } from "lucide-react";
+import { BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, FileText, Play, Radio, Search, X } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 export interface VideoDrawerEntry {
   video_id: string;
@@ -31,10 +33,25 @@ interface TranscriptSegment {
   text: string;
 }
 
+interface RelatedClip {
+  id: string;
+  video_id: string;
+  channel_id: string;
+  title: string;
+  channel_name: string | null;
+  upload_date: string | null;
+  start_seconds: number;
+  end_seconds: number;
+  quote: string;
+  note: string | null;
+  created_at: string;
+}
+
 interface VideoDrawerProps {
   open: boolean;
   video: VideoDrawerEntry | null;
   initialSeconds?: number;
+  initialSegmentIndex?: number;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -66,12 +83,24 @@ function videoKey(video: VideoDrawerEntry | null): string {
   return video ? `${video.channel_id}:${video.video_id}` : "";
 }
 
-export function VideoDrawer({ open, video, initialSeconds = 0, onOpenChange }: VideoDrawerProps) {
+export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentIndex, onOpenChange }: VideoDrawerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const segmentRefs = useRef<Record<number, HTMLButtonElement | null>>({});
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [loadingSegments, setLoadingSegments] = useState(false);
   const [segmentError, setSegmentError] = useState("");
   const [activeSeconds, setActiveSeconds] = useState(initialSeconds);
+  const [clipSegmentIndex, setClipSegmentIndex] = useState<number | null>(null);
+  const [clipNote, setClipNote] = useState("");
+  const [savingClip, setSavingClip] = useState(false);
+  const [transcriptQuery, setTranscriptQuery] = useState("");
+  const [searchCursor, setSearchCursor] = useState(0);
+  const [selectionStartIndex, setSelectionStartIndex] = useState<number | null>(null);
+  const [selectionEndIndex, setSelectionEndIndex] = useState<number | null>(null);
+  const [rangeNote, setRangeNote] = useState("");
+  const [relatedClips, setRelatedClips] = useState<RelatedClip[]>([]);
+  const [loadingRelated, setLoadingRelated] = useState(false);
+  const { toast } = useToast();
 
   const streamUrl = useMemo(() => {
     if (!video?.video_path) return "";
@@ -80,7 +109,14 @@ export function VideoDrawer({ open, video, initialSeconds = 0, onOpenChange }: V
 
   useEffect(() => {
     setActiveSeconds(initialSeconds);
-  }, [initialSeconds, videoKey(video)]);
+    setClipSegmentIndex(null);
+    setClipNote("");
+    setTranscriptQuery("");
+    setSearchCursor(0);
+    setSelectionStartIndex(null);
+    setSelectionEndIndex(null);
+    setRangeNote("");
+  }, [initialSeconds, initialSegmentIndex, videoKey(video)]);
 
   useEffect(() => {
     if (!open || !video) return;
@@ -104,6 +140,27 @@ export function VideoDrawer({ open, video, initialSeconds = 0, onOpenChange }: V
     };
 
     loadSegments();
+  }, [open, videoKey(video)]);
+
+  const loadRelatedClips = async () => {
+    if (!open || !video) return;
+    setLoadingRelated(true);
+    try {
+      const response = await apiRequest(
+        "GET",
+        `/api/clips/related/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}?t=${Date.now()}`,
+      );
+      const data = await response.json() as { rows?: RelatedClip[] };
+      setRelatedClips(data.rows || []);
+    } catch {
+      setRelatedClips([]);
+    } finally {
+      setLoadingRelated(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRelatedClips();
   }, [open, videoKey(video)]);
 
   const seekTo = (seconds: number, autoplay = true) => {
@@ -130,6 +187,120 @@ export function VideoDrawer({ open, video, initialSeconds = 0, onOpenChange }: V
     }
     return closest;
   }, [segments, activeSeconds]);
+
+  const transcriptMatches = useMemo(() => {
+    const query = transcriptQuery.trim().toLowerCase();
+    if (!query) return [];
+    return segments
+      .map((segment, index) => segment.text.toLowerCase().includes(query) ? index : -1)
+      .filter(index => index >= 0);
+  }, [segments, transcriptQuery]);
+
+  const selectedSearchIndex = transcriptMatches.length ? transcriptMatches[Math.min(searchCursor, transcriptMatches.length - 1)] : -1;
+  const highlightedSegmentIndex = selectedSearchIndex >= 0 ? selectedSearchIndex : initialSegmentIndex ?? closestSegmentIndex;
+
+  const rangeBounds = useMemo(() => {
+    if (selectionStartIndex === null) return null;
+    const end = selectionEndIndex ?? selectionStartIndex;
+    return {
+      start: Math.min(selectionStartIndex, end),
+      end: Math.max(selectionStartIndex, end),
+    };
+  }, [selectionEndIndex, selectionStartIndex]);
+
+  useEffect(() => {
+    if (!open || highlightedSegmentIndex < 0 || loadingSegments) return;
+    window.setTimeout(() => {
+      segmentRefs.current[highlightedSegmentIndex]?.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
+    }, 100);
+  }, [open, highlightedSegmentIndex, loadingSegments]);
+
+  const jumpSearch = (direction: 1 | -1) => {
+    if (!transcriptMatches.length) return;
+    const next = (searchCursor + direction + transcriptMatches.length) % transcriptMatches.length;
+    setSearchCursor(next);
+    const segment = segments[transcriptMatches[next]];
+    if (segment) seekTo(segment.start, false);
+  };
+
+  const saveClip = async (segment: TranscriptSegment, index: number) => {
+    if (!video) return;
+    setSavingClip(true);
+    try {
+      await apiRequest("POST", "/api/clips", {
+        videoId: video.video_id,
+        channelId: video.channel_id,
+        title: video.title,
+        channelName: video.channel_name || video.channel_id,
+        uploadDate: video.upload_date || null,
+        startSeconds: segment.start,
+        endSeconds: segment.end,
+        quote: segment.text,
+        note: clipSegmentIndex === index ? clipNote : "",
+      });
+      toast({
+        title: "Clip saved",
+        description: `${formatTimestamp(segment.start)} - ${formatTimestamp(segment.end)}`,
+      });
+      setClipSegmentIndex(null);
+      setClipNote("");
+      await loadRelatedClips();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Clip save failed", description: error.message });
+    } finally {
+      setSavingClip(false);
+    }
+  };
+
+  const saveSelectedRange = async () => {
+    if (!video || !rangeBounds) return;
+    const selected = segments.slice(rangeBounds.start, rangeBounds.end + 1);
+    if (!selected.length) return;
+
+    const first = selected[0];
+    const last = selected[selected.length - 1];
+    setSavingClip(true);
+    try {
+      await apiRequest("POST", "/api/clips", {
+        videoId: video.video_id,
+        channelId: video.channel_id,
+        title: video.title,
+        channelName: video.channel_name || video.channel_id,
+        uploadDate: video.upload_date || null,
+        startSeconds: first.start,
+        endSeconds: last.end,
+        quote: selected.map(segment => segment.text).join("\n\n"),
+        note: rangeNote,
+      });
+      toast({
+        title: "Clip saved",
+        description: `${formatTimestamp(first.start)} - ${formatTimestamp(last.end)}`,
+      });
+      setSelectionStartIndex(null);
+      setSelectionEndIndex(null);
+      setRangeNote("");
+      await loadRelatedClips();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Clip save failed", description: error.message });
+    } finally {
+      setSavingClip(false);
+    }
+  };
+
+  const seekRelatedClip = (clip: RelatedClip) => {
+    seekTo(clip.start_seconds);
+    const index = segments.findIndex(segment => segment.start <= clip.start_seconds && segment.end >= clip.start_seconds);
+    const fallbackIndex = segments.findIndex(segment => segment.start >= clip.start_seconds);
+    const targetIndex = index >= 0 ? index : fallbackIndex;
+    if (targetIndex >= 0) {
+      window.setTimeout(() => {
+        segmentRefs.current[targetIndex]?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 100);
+    }
+  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -195,24 +366,149 @@ export function VideoDrawer({ open, video, initialSeconds = 0, onOpenChange }: V
                   )}
                 </div>
 
+                <div className="flex flex-col gap-2 rounded-md border bg-muted/30 p-2">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
+                      <Input
+                        value={transcriptQuery}
+                        onChange={event => {
+                          setTranscriptQuery(event.target.value);
+                          setSearchCursor(0);
+                        }}
+                        placeholder="Search inside this transcript"
+                        className="h-8 pl-7 text-xs"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Badge variant="outline" className="h-8">
+                        {transcriptMatches.length ? `${Math.min(searchCursor + 1, transcriptMatches.length)} / ${transcriptMatches.length}` : "0 matches"}
+                      </Badge>
+                      <Button size="icon" variant="outline" className="h-8 w-8" disabled={!transcriptMatches.length} onClick={() => jumpSearch(-1)}>
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button size="icon" variant="outline" className="h-8 w-8" disabled={!transcriptMatches.length} onClick={() => jumpSearch(1)}>
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+
+                  {rangeBounds && (
+                    <div className="flex flex-col gap-2 border-t pt-2">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <Badge variant="secondary">
+                          {rangeBounds.end - rangeBounds.start + 1} rows selected
+                        </Badge>
+                        <span className="text-muted-foreground">
+                          {formatTimestamp(segments[rangeBounds.start]?.start || 0)} - {formatTimestamp(segments[rangeBounds.end]?.end || 0)}
+                        </span>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => {
+                          setSelectionStartIndex(null);
+                          setSelectionEndIndex(null);
+                          setRangeNote("");
+                        }}>
+                          <X className="h-3 w-3" />
+                          Clear
+                        </Button>
+                      </div>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Input
+                          value={rangeNote}
+                          onChange={event => setRangeNote(event.target.value)}
+                          placeholder="Optional note for selected section"
+                          className="h-8 text-xs"
+                        />
+                        <Button size="sm" className="h-8 whitespace-nowrap text-xs" disabled={savingClip} onClick={saveSelectedRange}>
+                          Save selected clip
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="max-h-[48vh] overflow-y-auto rounded-md border">
                   {segments.map((segment, index) => {
                     const active = index === closestSegmentIndex;
+                    const highlighted = index === highlightedSegmentIndex;
+                    const searchMatch = transcriptMatches.includes(index);
+                    const selected = !!rangeBounds && index >= rangeBounds.start && index <= rangeBounds.end;
+                    const takingNote = clipSegmentIndex === index;
                     return (
-                      <button
+                      <div
                         key={`${segment.start}:${index}`}
-                        type="button"
-                        onClick={() => seekTo(segment.start)}
-                        className={`block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-accent ${
-                          active ? "bg-accent" : ""
+                        className={`border-b px-3 py-2 text-sm last:border-b-0 ${
+                          selected ? "bg-primary/15" : highlighted ? "bg-primary/10" : active ? "bg-accent" : ""
                         }`}
                       >
-                        <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-                          <Play className="h-3 w-3" />
-                          {formatTimestamp(segment.start)} - {formatTimestamp(segment.end)}
-                        </span>
-                        <span className="leading-6">{segment.text}</span>
-                      </button>
+                        <button
+                          ref={node => { segmentRefs.current[index] = node; }}
+                          type="button"
+                          onClick={() => seekTo(segment.start)}
+                          className="block w-full text-left hover:text-foreground"
+                        >
+                          <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+                            <Play className="h-3 w-3" />
+                            {formatTimestamp(segment.start)} - {formatTimestamp(segment.end)}
+                            {highlighted && <Badge variant="secondary" className="h-5">match</Badge>}
+                            {searchMatch && <Badge variant="outline" className="h-5">search</Badge>}
+                          </span>
+                          <span className="leading-6">{segment.text}</span>
+                        </button>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-xs"
+                            onClick={() => {
+                              setSelectionStartIndex(index);
+                              if (selectionEndIndex !== null && index > selectionEndIndex) setSelectionEndIndex(null);
+                            }}
+                          >
+                            Start
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-xs"
+                            onClick={() => {
+                              if (selectionStartIndex === null) setSelectionStartIndex(index);
+                              setSelectionEndIndex(index);
+                            }}
+                          >
+                            End
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() => {
+                              setClipSegmentIndex(takingNote ? null : index);
+                              setClipNote("");
+                            }}
+                          >
+                            <BookmarkPlus className="h-3 w-3" />
+                            Clip
+                          </Button>
+                          {takingNote && (
+                            <>
+                              <Input
+                                value={clipNote}
+                                onChange={event => setClipNote(event.target.value)}
+                                placeholder="Optional note"
+                                className="h-7 min-w-[220px] flex-1 text-xs"
+                              />
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs"
+                                disabled={savingClip}
+                                onClick={() => saveClip(segment, index)}
+                              >
+                                Save
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
                     );
                   })}
                   {loadingSegments && (
@@ -223,6 +519,34 @@ export function VideoDrawer({ open, video, initialSeconds = 0, onOpenChange }: V
                   )}
                   {!loadingSegments && !segmentError && !segments.length && (
                     <p className="p-3 text-sm text-muted-foreground">No timestamped transcript is available for this video.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-medium">Related Clips</div>
+                  <Badge variant="outline">{relatedClips.length}</Badge>
+                </div>
+                <div className="rounded-md border">
+                  {relatedClips.map(clip => (
+                    <button
+                      key={clip.id}
+                      type="button"
+                      onClick={() => seekRelatedClip(clip)}
+                      className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-accent"
+                    >
+                      <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+                        <Play className="h-3 w-3" />
+                        {formatTimestamp(clip.start_seconds)} - {formatTimestamp(clip.end_seconds)}
+                      </span>
+                      <span className="line-clamp-2 leading-6">{clip.quote}</span>
+                      {clip.note && <span className="mt-1 block text-xs text-muted-foreground">{clip.note}</span>}
+                    </button>
+                  ))}
+                  {loadingRelated && <p className="p-3 text-sm text-muted-foreground">Loading related clips...</p>}
+                  {!loadingRelated && !relatedClips.length && (
+                    <p className="p-3 text-sm text-muted-foreground">No saved clips for this video yet.</p>
                   )}
                 </div>
               </div>

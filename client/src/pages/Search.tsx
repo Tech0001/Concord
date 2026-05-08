@@ -84,6 +84,7 @@ export default function TranscriptSearch() {
   const [indexStats, setIndexStats] = useState<IndexStats>({ files: 0, segments: 0 });
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
+  const [drawerSegmentIndex, setDrawerSegmentIndex] = useState<number | undefined>();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { toast } = useToast();
 
@@ -169,6 +170,7 @@ export default function TranscriptSearch() {
       word_count: result.word_count,
     });
     setDrawerSeconds(result.start_seconds);
+    setDrawerSegmentIndex(result.segment_index);
     setDrawerOpen(true);
   };
 
@@ -298,6 +300,7 @@ export default function TranscriptSearch() {
         open={drawerOpen}
         video={drawerVideo}
         initialSeconds={drawerSeconds}
+        initialSegmentIndex={drawerSegmentIndex}
         onOpenChange={setDrawerOpen}
       />
     </div>

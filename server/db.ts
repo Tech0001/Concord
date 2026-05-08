@@ -63,6 +63,24 @@ const SCHEMA = `
     text,
     tokenize = 'unicode61'
   );
+
+  CREATE TABLE IF NOT EXISTS transcript_clips (
+    id            TEXT PRIMARY KEY,
+    video_id      TEXT NOT NULL,
+    channel_id    TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    channel_name  TEXT,
+    upload_date   TEXT,
+    start_seconds REAL NOT NULL,
+    end_seconds   REAL NOT NULL,
+    quote         TEXT NOT NULL,
+    note          TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_clips_video ON transcript_clips(video_id, channel_id);
+  CREATE INDEX IF NOT EXISTS idx_clips_created ON transcript_clips(created_at);
 `;
 
 export interface QueueEntry {
@@ -472,6 +490,27 @@ export interface TranscriptSearchResult {
   rank: number;
 }
 
+export interface TranscriptClip {
+  id: string;
+  video_id: string;
+  channel_id: string;
+  title: string;
+  channel_name: string | null;
+  upload_date: string | null;
+  start_seconds: number;
+  end_seconds: number;
+  quote: string;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+  video_path: string | null;
+  md_path: string | null;
+  word_count: number;
+  is_live: number;
+  duration: number | null;
+  status: string;
+}
+
 export interface TranscriptSegment {
   start: number;
   end: number;
@@ -612,6 +651,137 @@ export function getTranscriptSegmentsForVideo(videoId: string, channelId: string
   const entry = getQueueEntry(videoId, channelId);
   if (!entry?.md_path || !fs.existsSync(entry.md_path)) return [];
   return parseTranscriptSegments(entry.md_path);
+}
+
+export function createTranscriptClip(clip: {
+  id: string;
+  videoId: string;
+  channelId: string;
+  title: string;
+  channelName?: string | null;
+  uploadDate?: string | null;
+  startSeconds: number;
+  endSeconds: number;
+  quote: string;
+  note?: string | null;
+}): TranscriptClip {
+  getDb().prepare(`
+    INSERT INTO transcript_clips (
+      id, video_id, channel_id, title, channel_name, upload_date,
+      start_seconds, end_seconds, quote, note, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(
+    clip.id,
+    clip.videoId,
+    clip.channelId,
+    clip.title,
+    clip.channelName ?? null,
+    clip.uploadDate ?? null,
+    clip.startSeconds,
+    clip.endSeconds,
+    clip.quote,
+    clip.note?.trim() || null,
+  );
+
+  const created = getTranscriptClip(clip.id);
+  if (!created) throw new Error("Clip was not created");
+  return created;
+}
+
+export function getTranscriptClip(id: string): TranscriptClip | undefined {
+  return getDb().prepare(`
+    SELECT
+      clip.*,
+      q.video_path,
+      q.md_path,
+      q.word_count,
+      q.is_live,
+      q.duration,
+      q.status
+    FROM transcript_clips clip
+    LEFT JOIN video_queue q ON q.video_id = clip.video_id AND q.channel_id = clip.channel_id
+    WHERE clip.id = ?
+  `).get(id) as TranscriptClip | undefined;
+}
+
+export function listTranscriptClips(filters: { q?: string; channelId?: string; limit?: number; offset?: number } = {}): {
+  rows: TranscriptClip[];
+  total: number;
+} {
+  const where: string[] = [];
+  const params: any[] = [];
+
+  if (filters.channelId && filters.channelId !== "all") {
+    where.push("clip.channel_id = ?");
+    params.push(filters.channelId);
+  }
+  if (filters.q?.trim()) {
+    const like = `%${filters.q.trim()}%`;
+    where.push(`(
+      clip.title LIKE ?
+      OR COALESCE(clip.channel_name, '') LIKE ?
+      OR clip.quote LIKE ?
+      OR COALESCE(clip.note, '') LIKE ?
+      OR clip.upload_date LIKE ?
+    )`);
+    params.push(like, like, like, like, like);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const limit = Math.min(Math.max(Math.floor(filters.limit ?? 100), 1), 250);
+  const offset = Math.max(Math.floor(filters.offset ?? 0), 0);
+  const fromSql = `
+    FROM transcript_clips clip
+    LEFT JOIN video_queue q ON q.video_id = clip.video_id AND q.channel_id = clip.channel_id
+  `;
+  const totalRow = getDb().prepare(`SELECT COUNT(*) as count ${fromSql} ${whereSql}`).get(...params) as { count: number } | undefined;
+  const rows = getDb().prepare(`
+    SELECT
+      clip.*,
+      q.video_path,
+      q.md_path,
+      q.word_count,
+      q.is_live,
+      q.duration,
+      q.status
+    ${fromSql}
+    ${whereSql}
+    ORDER BY clip.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset) as TranscriptClip[];
+
+  return { rows, total: totalRow?.count ?? 0 };
+}
+
+export function listRelatedTranscriptClips(videoId: string, channelId: string, excludeId?: string): TranscriptClip[] {
+  const params: any[] = [videoId, channelId];
+  let excludeSql = "";
+  if (excludeId) {
+    excludeSql = "AND clip.id != ?";
+    params.push(excludeId);
+  }
+
+  return getDb().prepare(`
+    SELECT
+      clip.*,
+      q.video_path,
+      q.md_path,
+      q.word_count,
+      q.is_live,
+      q.duration,
+      q.status
+    FROM transcript_clips clip
+    LEFT JOIN video_queue q ON q.video_id = clip.video_id AND q.channel_id = clip.channel_id
+    WHERE clip.video_id = ? AND clip.channel_id = ?
+    ${excludeSql}
+    ORDER BY clip.start_seconds ASC, clip.created_at DESC
+    LIMIT 50
+  `).all(...params) as TranscriptClip[];
+}
+
+export function deleteTranscriptClip(id: string): boolean {
+  return getDb().prepare("DELETE FROM transcript_clips WHERE id = ?").run(id).changes > 0;
 }
 
 function parseTranscriptSegments(mdPath: string): TranscriptSegment[] {

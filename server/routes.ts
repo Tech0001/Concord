@@ -5,13 +5,17 @@ import { getYouTubeVideoInfo, downloadYouTubeVideo, formatDuration } from "./you
 import { getPipeline, Pipeline } from "./pipeline";
 import {
   countByStatus,
+  createTranscriptClip,
+  deleteTranscriptClip,
   enqueueVideo,
   getChannelQueue,
   getQueueEntry,
   getQueueEntryByVideoId,
   getQueueList,
+  listRelatedTranscriptClips,
   getTranscriptSegmentsForVideo,
   getTranscriptSearchIndexStats,
+  listTranscriptClips,
   refreshTranscriptSearchIndex,
   searchTranscriptSegments,
   updateQueueStatus,
@@ -958,6 +962,86 @@ export async function registerRoutes(app: Express): Promise<Server> {
       fs.createReadStream(videoPath, { start, end }).pipe(res);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Video stream failed" });
+    }
+  });
+
+  app.get("/api/clips", (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const requestedLimit = Number(req.query.limit);
+      const requestedOffset = Number(req.query.offset);
+      const result = listTranscriptClips({
+        q: req.query.q ? String(req.query.q) : "",
+        channelId: String(req.query.channelId || "all"),
+        limit: Number.isFinite(requestedLimit) ? requestedLimit : 100,
+        offset: Number.isFinite(requestedOffset) ? requestedOffset : 0,
+      });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to list clips" });
+    }
+  });
+
+  app.post("/api/clips", (req, res) => {
+    try {
+      const {
+        videoId,
+        channelId,
+        startSeconds,
+        endSeconds,
+        quote,
+        note,
+        title,
+        channelName,
+        uploadDate,
+      } = req.body;
+
+      if (!videoId || !channelId || !quote) {
+        return res.status(400).json({ error: "videoId, channelId, and quote are required" });
+      }
+
+      const entry = getQueueEntry(String(videoId), String(channelId));
+      const clip = createTranscriptClip({
+        id: nanoid(),
+        videoId: String(videoId),
+        channelId: String(channelId),
+        title: String(title || entry?.title || "Untitled video"),
+        channelName: channelName !== undefined ? String(channelName) : null,
+        uploadDate: uploadDate || entry?.upload_date || null,
+        startSeconds: Number(startSeconds) || 0,
+        endSeconds: Number(endSeconds) || Number(startSeconds) || 0,
+        quote: String(quote),
+        note: note ? String(note) : null,
+      });
+
+      res.json({ success: true, clip });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to save clip" });
+    }
+  });
+
+  app.get("/api/clips/related/:channelId/:videoId", (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({
+        rows: listRelatedTranscriptClips(
+          req.params.videoId,
+          req.params.channelId,
+          req.query.excludeId ? String(req.query.excludeId) : undefined,
+        ),
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to list related clips" });
+    }
+  });
+
+  app.delete("/api/clips/:clipId", (req, res) => {
+    try {
+      const deleted = deleteTranscriptClip(req.params.clipId);
+      if (!deleted) return res.status(404).json({ error: "Clip not found" });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to delete clip" });
     }
   });
 

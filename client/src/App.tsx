@@ -15,10 +15,12 @@ import Home from "@/pages/Home";
 import Pipeline from "@/pages/Pipeline";
 import Library from "@/pages/Library";
 import Search from "@/pages/Search";
+import Clips from "@/pages/Clips";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
   Activity,
+  Bookmark,
   Database,
   Download,
   Moon,
@@ -31,6 +33,7 @@ const NAV_ITEMS = [
   { href: "/pipeline", label: "Pipeline", icon: Activity },
   { href: "/library", label: "Library", icon: Database },
   { href: "/search", label: "Search", icon: SearchIcon },
+  { href: "/clips", label: "Clips", icon: Bookmark },
 ] as const;
 
 function TopBar() {
@@ -101,6 +104,7 @@ function Router() {
       <Route path="/pipeline" component={Pipeline} />
       <Route path="/library" component={Library} />
       <Route path="/search" component={Search} />
+      <Route path="/clips" component={Clips} />
       <Route component={NotFound} />
     </Switch>
   );
