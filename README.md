@@ -7,9 +7,7 @@ Local YouTube download + transcription pipeline. Vite + React frontend with a No
 ```
 client/         — Vite + React frontend
 server/         — Node/TypeScript backend
-shared/         — Shared types/utilities between client and server
 pipeline.db     — SQLite job database (tracked in git as backup)
-drizzle.config.ts — Drizzle ORM config
 package.json    — Node dependencies
 ```
 
