@@ -3,7 +3,17 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getYouTubeVideoInfo, downloadYouTubeVideo, formatDuration } from "./youtube-dl";
 import { getPipeline, Pipeline } from "./pipeline";
-import { countByStatus, enqueueVideo, getChannelQueue, getAllQueue, getQueueEntryByVideoId, updateQueueStatus } from "./db";
+import {
+  countByStatus,
+  enqueueVideo,
+  getChannelQueue,
+  getQueueEntryByVideoId,
+  getQueueList,
+  getTranscriptSearchIndexStats,
+  refreshTranscriptSearchIndex,
+  searchTranscriptSegments,
+  updateQueueStatus,
+} from "./db";
 import { copyAudioTrack } from "./audio";
 import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
 import path from "path";
@@ -837,6 +847,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Search transcript segments across indexed markdown/json transcript files
+  app.get("/api/transcripts/search", (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const query = String(req.query.q || "");
+      const liveFilter = String(req.query.type || "all");
+      const results = searchTranscriptSegments(query, {
+        channelId: String(req.query.channelId || "all"),
+        status: String(req.query.status || "complete"),
+        isLive: liveFilter === "live" ? true : liveFilter === "video" ? false : undefined,
+        dateFrom: req.query.dateFrom ? String(req.query.dateFrom) : undefined,
+        dateTo: req.query.dateTo ? String(req.query.dateTo) : undefined,
+        limit: req.query.limit ? Number(req.query.limit) : 100,
+      });
+      res.json({ results, index: getTranscriptSearchIndexStats() });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Transcript search failed" });
+    }
+  });
+
+  // Force-refresh the local transcript search index
+  app.post("/api/transcripts/search/reindex", (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ success: true, ...refreshTranscriptSearchIndex() });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Transcript reindex failed" });
+    }
+  });
+
+  app.get("/api/transcripts/search/stats", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(getTranscriptSearchIndexStats());
+  });
+
   // Get queue statistics for a channel
   app.get("/api/pipeline/queue/:channelId", (req, res) => {
     const counts = countByStatus(req.params.channelId);
@@ -846,13 +891,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get full queue overview
   app.get("/api/pipeline/queue", (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
     const requestedLimit = Number(req.query.limit);
-    const limit = Number.isFinite(requestedLimit)
-      ? Math.min(Math.max(Math.floor(requestedLimit), 1), 10000)
-      : 50;
-    const counts = countByStatus();
-    const recent = getAllQueue(limit);
-    res.json({ counts, recent });
+    const limit = Number.isFinite(requestedLimit) ? requestedLimit : 100;
+    const requestedOffset = Number(req.query.offset);
+    const offset = Number.isFinite(requestedOffset) ? requestedOffset : 0;
+    const result = getQueueList({
+      limit,
+      offset,
+      status: String(req.query.status || "all"),
+      channelId: String(req.query.channelId || "all"),
+      type: String(req.query.type || "all"),
+      hasTranscript: String(req.query.hasTranscript || "all"),
+      q: req.query.q ? String(req.query.q) : "",
+      sort: String(req.query.sort || "upload_desc"),
+    });
+    res.json({
+      counts: result.counts,
+      recent: result.rows,
+      total: result.total,
+      limit: Math.min(Math.max(Math.floor(limit), 1), 250),
+      offset: Math.max(Math.floor(offset), 0),
+    });
   });
 
   // Set up cleanup for the interval when server shuts down

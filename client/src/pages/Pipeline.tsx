@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import UrlInput from "@/components/UrlInput";
@@ -436,7 +435,7 @@ export default function PipelineStatus() {
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-1"><List className="h-4 w-4"/>Recent Jobs</CardTitle></CardHeader>
         <CardContent>
-          <ScrollArea className="max-h-[400px]">
+          <div className="max-h-[400px] overflow-y-auto pr-2">
             <div className="space-y-2">
               {state?.jobs.map(job => (
                 <div key={job.id} className="p-3 rounded border text-sm">
@@ -466,6 +465,7 @@ export default function PipelineStatus() {
                           <SelectItem value="medium">medium</SelectItem>
                           <SelectItem value="small">small</SelectItem>
                           <SelectItem value="tiny">tiny</SelectItem>
+                          <SelectItem value="nvidia/parakeet-tdt-0.6b-v3">parakeet-v3</SelectItem>
                         </SelectContent>
                       </Select>
                       <Button
@@ -484,7 +484,7 @@ export default function PipelineStatus() {
               ))}
               {(!state?.jobs.length) && <p className="text-xs text-muted-foreground">No jobs yet.</p>}
             </div>
-          </ScrollArea>
+          </div>
         </CardContent>
       </Card>
     </div>

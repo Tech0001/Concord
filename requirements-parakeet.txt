@@ -1,0 +1,7 @@
+# Install this in the dedicated Python 3.12 environment:
+#   /usr/bin/python3.12 -m venv venv-parakeet
+#   ./venv-parakeet/bin/pip install -r requirements-parakeet.txt
+#
+# Keep Parakeet isolated from the faster-whisper venv because NeMo's ASR stack
+# has a large CUDA/PyTorch dependency tree.
+nemo_toolkit[asr]==2.7.3

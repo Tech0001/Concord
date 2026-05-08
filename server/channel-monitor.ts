@@ -48,10 +48,31 @@ export async function getAllChannelVideos(
   channelUrl: string,
   progressCallback?: (info: { fetched: number; total: number | null; currentTitle: string }) => void
 ): Promise<ChannelVideo[]> {
-  const scanUrl = normalizeChannelVideosUrl(channelUrl);
-  console.log(`[monitor] Fetching ALL videos from channel: ${scanUrl}`);
-  
   const allVideos: ChannelVideo[] = [];
+  const seen = new Set<string>();
+  const scanUrls = normalizeChannelScanUrls(channelUrl);
+  console.log(`[monitor] Fetching ALL videos from channel tabs: ${scanUrls.join(", ")}`);
+
+  for (const scanUrl of scanUrls) {
+    await fetchAllVideosFromTab(scanUrl, allVideos, seen, progressCallback);
+  }
+
+  // Return sorted oldest-first
+  allVideos.sort((a, b) => {
+    if (!a.uploadDate || !b.uploadDate) return 0;
+    return a.uploadDate.localeCompare(b.uploadDate);
+  });
+
+  console.log(`[monitor] Total videos found: ${allVideos.length}`);
+  return allVideos;
+}
+
+async function fetchAllVideosFromTab(
+  scanUrl: string,
+  allVideos: ChannelVideo[],
+  seen: Set<string>,
+  progressCallback?: (info: { fetched: number; total: number | null; currentTitle: string }) => void
+): Promise<void> {
   let offset = 0;
   const batchSize = 50;
   
@@ -78,7 +99,12 @@ export async function getAllChannelVideos(
       if (!entries.length) break; // No more videos
 
       const parsed = parseVideoEntries(entries, entries.length);
-      allVideos.push(...parsed);
+      const unique = parsed.filter(v => {
+        if (seen.has(v.id)) return false;
+        seen.add(v.id);
+        return true;
+      });
+      allVideos.push(...unique);
 
       offset += entries.length;
 
@@ -89,7 +115,7 @@ export async function getAllChannelVideos(
         progressCallback({
           fetched: allVideos.length,
           total: playlistTotal,
-          currentTitle: parsed[parsed.length - 1]?.title || "",
+          currentTitle: unique[unique.length - 1]?.title || parsed[parsed.length - 1]?.title || "",
         });
       }
 
@@ -106,15 +132,6 @@ export async function getAllChannelVideos(
       break;
     }
   }
-
-  // Return sorted oldest-first
-  allVideos.sort((a, b) => {
-    if (!a.uploadDate || !b.uploadDate) return 0;
-    return a.uploadDate.localeCompare(b.uploadDate);
-  });
-
-  console.log(`[monitor] Total videos found: ${allVideos.length}`);
-  return allVideos;
 }
 
 /**
@@ -126,45 +143,57 @@ async function fetchChannelVideos(
   maxResults: number
 ): Promise<ChannelVideo[]> {
   try {
-    const scanUrl = normalizeChannelVideosUrl(channelUrl);
     const end = start + maxResults - 1;
-    console.log(`[monitor] Fetching videos from channel: ${scanUrl} (${start}-${end})`);
+    const results: ChannelVideo[] = [];
+    const seen = new Set<string>();
 
-    const result = await youtubedl(scanUrl, {
-      dumpSingleJson: true,
-      playlistStart: start,
-      playlistEnd: end,
-      noWarnings: true,
-      cacheDir: "./youtube-dl-cache",
-      ignoreErrors: true,
-      skipDownload: true,
-    });
+    for (const scanUrl of normalizeChannelScanUrls(channelUrl)) {
+      console.log(`[monitor] Fetching videos from channel: ${scanUrl} (${start}-${end})`);
 
-    const entries = Array.isArray(result) ? result : [];
-    if (!entries.length) {
-      const playlistResult = result as any;
-      if (playlistResult?.entries && Array.isArray(playlistResult.entries)) {
-        return parseVideoEntries(playlistResult.entries, maxResults);
+      const result = await youtubedl(scanUrl, {
+        dumpSingleJson: true,
+        playlistStart: start,
+        playlistEnd: end,
+        noWarnings: true,
+        cacheDir: "./youtube-dl-cache",
+        ignoreErrors: true,
+        skipDownload: true,
+      });
+
+      const entries = Array.isArray(result)
+        ? result
+        : ((result as any)?.entries && Array.isArray((result as any).entries) ? (result as any).entries : []);
+
+      for (const video of parseVideoEntries(entries, maxResults)) {
+        if (seen.has(video.id)) continue;
+        seen.add(video.id);
+        results.push(video);
       }
-      return [];
     }
 
-    return parseVideoEntries(entries, maxResults);
+    return results.sort(compareNewestFirst);
   } catch (error) {
     console.error(`[monitor] Error fetching channel ${channelUrl}:`, error);
     throw error;
   }
 }
 
-function normalizeChannelVideosUrl(channelUrl: string): string {
+function normalizeChannelScanUrls(channelUrl: string): string[] {
   const trimmed = channelUrl.trim().replace(/\/+$/, "");
-  if (/\/(videos|streams|shorts|featured|playlists|community|live)$/i.test(trimmed)) {
-    return trimmed;
-  }
+
   if (/youtube\.com\/(@|channel\/|c\/|user\/)/i.test(trimmed)) {
-    return `${trimmed}/videos`;
+    const base = trimmed.replace(/\/(videos|streams|shorts|featured|playlists|community|live)$/i, "");
+    return [`${base}/videos`, `${base}/streams`];
   }
-  return trimmed;
+
+  return [trimmed];
+}
+
+function compareNewestFirst(a: ChannelVideo, b: ChannelVideo): number {
+  if (a.uploadDate && b.uploadDate && a.uploadDate !== b.uploadDate) {
+    return b.uploadDate.localeCompare(a.uploadDate);
+  }
+  return a.title.localeCompare(b.title);
 }
 
 /**

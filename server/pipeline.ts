@@ -99,6 +99,16 @@ export interface PipelineState {
   monitoredChannels: ChannelConfig[];
 }
 
+function isNonRetryableTranscriptionError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("no cuda-capable device is detected") ||
+    lower.includes("can't initialize nvml") ||
+    lower.includes("cuda driver") ||
+    lower.includes("cuda failed")
+  );
+}
+
 // ---- Pipeline ----
 
 export class Pipeline extends EventEmitter {
@@ -324,7 +334,7 @@ export class Pipeline extends EventEmitter {
         for (const v of videos) {
           if (videoExists(v.id)) {
             foundKnownVideo = true;
-            break;
+            continue;
           }
 
           if (this.config.skipShorts && v.isShorts) continue;
@@ -449,7 +459,6 @@ export class Pipeline extends EventEmitter {
         updateQueueStatus(video.id, channel.id, { status: "waiting_live" });
         this.emit("jobUpdated", job);
         console.log(`[pipeline] ⏳ ${video.title} is live. Deferring...`);
-        this.activeJobs--;
         // Schedule re-check later
         setTimeout(() => this.recheckLive(video, channel), 5 * 60 * 1000);
         return;
@@ -593,7 +602,11 @@ export class Pipeline extends EventEmitter {
       console.error(`[pipeline] ❌ ${video.title} — ${errMsg}`);
 
       const retries = queueEntry.retries + 1;
-      if (retries <= this.config.processing.maxRetries) {
+      if (isNonRetryableTranscriptionError(errMsg)) {
+        updateQueueStatus(video.id, channel.id, { status: "failed", retries, error: errMsg });
+        job.status = "failed";
+        job.completedAt = new Date().toISOString();
+      } else if (retries <= this.config.processing.maxRetries) {
         updateQueueStatus(video.id, channel.id, { status: "pending", retries, error: errMsg });
         job.status = "pending";
       } else {

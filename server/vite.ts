@@ -35,7 +35,11 @@ export async function setupVite(app: Express, server: Server) {
         process.exit(1);
       },
     },
-    server: serverOptions,
+    server: {
+      ...viteConfig.server,
+      ...serverOptions,
+      watch: viteConfig.server?.watch,
+    },
     appType: "custom",
   });
 

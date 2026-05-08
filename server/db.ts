@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import fs from "fs";
 import path from "path";
 
 let db: Database.Database | null = null;
@@ -42,6 +43,26 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_queue_status  ON video_queue(channel_id, status);
   CREATE INDEX IF NOT EXISTS idx_queue_date    ON video_queue(channel_id, upload_date);
   CREATE INDEX IF NOT EXISTS idx_channels_enabled ON channels(enabled);
+
+  CREATE TABLE IF NOT EXISTS transcript_index (
+    video_id       TEXT NOT NULL,
+    channel_id     TEXT NOT NULL,
+    md_path        TEXT NOT NULL,
+    md_mtime_ms    REAL NOT NULL,
+    segment_count  INTEGER NOT NULL DEFAULT 0,
+    indexed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (video_id, channel_id)
+  );
+
+  CREATE VIRTUAL TABLE IF NOT EXISTS transcript_segments_fts USING fts5(
+    video_id UNINDEXED,
+    channel_id UNINDEXED,
+    segment_index UNINDEXED,
+    start_seconds UNINDEXED,
+    end_seconds UNINDEXED,
+    text,
+    tokenize = 'unicode61'
+  );
 `;
 
 export interface QueueEntry {
@@ -327,6 +348,320 @@ export function getAllQueue(limit: number = 100): QueueEntry[] {
   return getDb().prepare(
     "SELECT * FROM video_queue ORDER BY updated_at DESC LIMIT ?"
   ).all(limit) as QueueEntry[];
+}
+
+export interface QueueListFilters {
+  limit?: number;
+  offset?: number;
+  status?: string;
+  channelId?: string;
+  type?: string;
+  hasTranscript?: string;
+  q?: string;
+  sort?: string;
+}
+
+export interface QueueListResult {
+  rows: QueueEntry[];
+  total: number;
+  counts: Record<string, number>;
+}
+
+export function getQueueList(filters: QueueListFilters = {}): QueueListResult {
+  const where: string[] = ["q.is_shorts = 0"];
+  const params: any[] = [];
+
+  if (filters.status && filters.status !== "all") {
+    where.push("q.status = ?");
+    params.push(filters.status);
+  }
+  if (filters.channelId && filters.channelId !== "all") {
+    where.push("q.channel_id = ?");
+    params.push(filters.channelId);
+  }
+  if (filters.type === "live") {
+    where.push("q.is_live = 1");
+  } else if (filters.type === "video") {
+    where.push("q.is_live = 0");
+  }
+  if (filters.hasTranscript === "yes") {
+    where.push("q.md_path IS NOT NULL AND q.md_path != ''");
+  } else if (filters.hasTranscript === "no") {
+    where.push("(q.md_path IS NULL OR q.md_path = '')");
+  }
+  if (filters.q?.trim()) {
+    const like = `%${filters.q.trim()}%`;
+    where.push(`(
+      q.title LIKE ?
+      OR q.video_id LIKE ?
+      OR q.channel_id LIKE ?
+      OR COALESCE(c.name, '') LIKE ?
+      OR q.upload_date LIKE ?
+      OR q.status LIKE ?
+      OR COALESCE(q.md_path, '') LIKE ?
+      OR COALESCE(q.video_path, '') LIKE ?
+    )`);
+    params.push(like, like, like, like, like, like, like, like);
+  }
+
+  const whereSql = `WHERE ${where.join(" AND ")}`;
+  const orderSql = queueOrderSql(filters.sort);
+  const limit = Math.min(Math.max(Math.floor(filters.limit ?? 100), 1), 250);
+  const offset = Math.max(Math.floor(filters.offset ?? 0), 0);
+
+  const fromSql = "FROM video_queue q LEFT JOIN channels c ON c.id = q.channel_id";
+  const totalRow = getDb().prepare(`SELECT COUNT(*) as count ${fromSql} ${whereSql}`).get(...params) as { count: number } | undefined;
+  const rows = getDb().prepare(`
+    SELECT q.*
+    ${fromSql}
+    ${whereSql}
+    ${orderSql}
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset) as QueueEntry[];
+
+  return { rows, total: totalRow?.count ?? 0, counts: countByStatus() };
+}
+
+function queueOrderSql(sort?: string): string {
+  switch (sort) {
+    case "upload_asc":
+      return "ORDER BY q.upload_date ASC NULLS LAST, q.created_at ASC";
+    case "updated_desc":
+      return "ORDER BY q.updated_at DESC, q.upload_date DESC NULLS LAST";
+    case "words_desc":
+      return "ORDER BY q.word_count DESC, q.upload_date DESC NULLS LAST";
+    case "title":
+      return "ORDER BY q.title COLLATE NOCASE ASC";
+    case "upload_desc":
+    default:
+      return "ORDER BY q.upload_date DESC NULLS LAST, q.created_at DESC";
+  }
+}
+
+export interface TranscriptSearchFilters {
+  channelId?: string;
+  status?: string;
+  isLive?: boolean;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+}
+
+export interface TranscriptSearchResult {
+  video_id: string;
+  channel_id: string;
+  channel_name: string | null;
+  title: string;
+  url: string;
+  upload_date: string | null;
+  status: string;
+  is_live: number;
+  video_path: string | null;
+  md_path: string | null;
+  word_count: number;
+  segment_index: number;
+  start_seconds: number;
+  end_seconds: number;
+  text: string;
+  rank: number;
+}
+
+interface TranscriptSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
+export function getTranscriptSearchIndexStats(): { files: number; segments: number } {
+  const files = getDb().prepare("SELECT COUNT(*) as count FROM transcript_index").get() as { count: number } | undefined;
+  const segments = getDb().prepare("SELECT COUNT(*) as count FROM transcript_segments_fts").get() as { count: number } | undefined;
+  return { files: files?.count ?? 0, segments: segments?.count ?? 0 };
+}
+
+export function refreshTranscriptSearchIndex(): { indexed: number; skipped: number; segments: number; totalFiles: number; totalSegments: number } {
+  const rows = getDb().prepare(`
+    SELECT video_id, channel_id, md_path
+    FROM video_queue
+    WHERE md_path IS NOT NULL AND md_path != ''
+  `).all() as Pick<QueueEntry, "video_id" | "channel_id" | "md_path">[];
+
+  let indexed = 0;
+  let skipped = 0;
+  let segments = 0;
+
+  const current = getDb().prepare(`
+    SELECT md_path, md_mtime_ms
+    FROM transcript_index
+    WHERE video_id = ? AND channel_id = ?
+  `);
+  const clearIndex = getDb().prepare("DELETE FROM transcript_index WHERE video_id = ? AND channel_id = ?");
+  const clearSegments = getDb().prepare("DELETE FROM transcript_segments_fts WHERE video_id = ? AND channel_id = ?");
+  const insertIndex = getDb().prepare(`
+    INSERT INTO transcript_index (video_id, channel_id, md_path, md_mtime_ms, segment_count, indexed_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+  `);
+  const insertSegment = getDb().prepare(`
+    INSERT INTO transcript_segments_fts (video_id, channel_id, segment_index, start_seconds, end_seconds, text)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  const tx = getDb().transaction((row: Pick<QueueEntry, "video_id" | "channel_id" | "md_path">, parsed: TranscriptSegment[], mtimeMs: number) => {
+    clearIndex.run(row.video_id, row.channel_id);
+    clearSegments.run(row.video_id, row.channel_id);
+    insertIndex.run(row.video_id, row.channel_id, row.md_path, mtimeMs, parsed.length);
+    parsed.forEach((seg, index) => {
+      insertSegment.run(row.video_id, row.channel_id, index, seg.start, seg.end, seg.text);
+    });
+  });
+
+  for (const row of rows) {
+    if (!row.md_path || !fs.existsSync(row.md_path)) {
+      skipped++;
+      continue;
+    }
+
+    const stat = fs.statSync(row.md_path);
+    const existing = current.get(row.video_id, row.channel_id) as { md_path: string; md_mtime_ms: number } | undefined;
+    if (existing && existing.md_path === row.md_path && existing.md_mtime_ms === stat.mtimeMs) {
+      skipped++;
+      continue;
+    }
+
+    const parsed = parseTranscriptSegments(row.md_path);
+    if (!parsed.length) {
+      skipped++;
+      continue;
+    }
+
+    tx(row, parsed, stat.mtimeMs);
+    indexed++;
+    segments += parsed.length;
+  }
+
+  const stats = getTranscriptSearchIndexStats();
+  return { indexed, skipped, segments, totalFiles: stats.files, totalSegments: stats.segments };
+}
+
+export function searchTranscriptSegments(query: string, filters: TranscriptSearchFilters = {}): TranscriptSearchResult[] {
+  refreshTranscriptSearchIndex();
+
+  const ftsQuery = buildFtsQuery(query);
+  if (!ftsQuery) return [];
+
+  const where: string[] = ["transcript_segments_fts MATCH ?"];
+  const params: any[] = [ftsQuery];
+
+  if (filters.channelId && filters.channelId !== "all") {
+    where.push("q.channel_id = ?");
+    params.push(filters.channelId);
+  }
+  if (filters.status && filters.status !== "all") {
+    where.push("q.status = ?");
+    params.push(filters.status);
+  }
+  if (filters.isLive !== undefined) {
+    where.push("q.is_live = ?");
+    params.push(filters.isLive ? 1 : 0);
+  }
+  if (filters.dateFrom) {
+    where.push("q.upload_date >= ?");
+    params.push(normalizeDateFilter(filters.dateFrom));
+  }
+  if (filters.dateTo) {
+    where.push("q.upload_date <= ?");
+    params.push(normalizeDateFilter(filters.dateTo));
+  }
+
+  const limit = Math.min(Math.max(Math.floor(filters.limit ?? 100), 1), 500);
+  params.push(limit);
+
+  return getDb().prepare(`
+    SELECT
+      q.video_id,
+      q.channel_id,
+      c.name AS channel_name,
+      q.title,
+      q.url,
+      q.upload_date,
+      q.status,
+      q.is_live,
+      q.video_path,
+      q.md_path,
+      q.word_count,
+      CAST(s.segment_index AS INTEGER) AS segment_index,
+      CAST(s.start_seconds AS REAL) AS start_seconds,
+      CAST(s.end_seconds AS REAL) AS end_seconds,
+      s.text,
+      bm25(transcript_segments_fts) AS rank
+    FROM transcript_segments_fts s
+    JOIN video_queue q ON q.video_id = s.video_id AND q.channel_id = s.channel_id
+    LEFT JOIN channels c ON c.id = q.channel_id
+    WHERE ${where.join(" AND ")}
+    ORDER BY rank ASC, q.upload_date DESC, s.start_seconds ASC
+    LIMIT ?
+  `).all(...params) as TranscriptSearchResult[];
+}
+
+function parseTranscriptSegments(mdPath: string): TranscriptSegment[] {
+  const jsonPath = mdPath.replace(/\.md$/i, ".json");
+  if (fs.existsSync(jsonPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+      if (Array.isArray(parsed?.segments)) {
+        const segments = parsed.segments
+          .map((seg: any) => ({
+            start: Number(seg.start),
+            end: Number(seg.end),
+            text: String(seg.text || "").trim(),
+          }))
+          .filter((seg: TranscriptSegment) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.text);
+        if (segments.length) return segments;
+      }
+    } catch {}
+  }
+
+  return parseMarkdownTranscriptSegments(fs.readFileSync(mdPath, "utf8"));
+}
+
+function parseMarkdownTranscriptSegments(markdown: string): TranscriptSegment[] {
+  const segments: TranscriptSegment[] = [];
+  const linePattern = /^-\s+\[(\d{2}:\d{2}(?::\d{2})?)\s*(?:→|->|-)\s*(\d{2}:\d{2}(?::\d{2})?)\]\s+(.+)$/;
+
+  for (const line of markdown.split(/\r?\n/)) {
+    const match = line.match(linePattern);
+    if (!match) continue;
+
+    const start = parseTimestampSeconds(match[1]);
+    const end = parseTimestampSeconds(match[2]);
+    const text = match[3].trim();
+    if (Number.isFinite(start) && Number.isFinite(end) && text) {
+      segments.push({ start, end, text });
+    }
+  }
+
+  return segments;
+}
+
+function parseTimestampSeconds(value: string): number {
+  const parts = value.split(":").map(Number);
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return Number.NaN;
+}
+
+function normalizeDateFilter(value: string): string {
+  return value.replaceAll("-", "");
+}
+
+function buildFtsQuery(query: string): string {
+  const tokens = query
+    .trim()
+    .split(/\s+/)
+    .map(token => token.replace(/[^A-Za-z0-9_'-]/g, "").trim())
+    .filter(Boolean)
+    .slice(0, 12);
+
+  return tokens.map(token => `"${token.replaceAll('"', '""')}"`).join(" AND ");
 }
 
 export function closeDb(): void {

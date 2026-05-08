@@ -129,6 +129,7 @@ def transcribe(
     # Also save JSON metadata
     json_path = output_path.rsplit(".", 1)[0] + ".json"
     metadata = {
+        "schema_version": 2,
         "model": model_name,
         "language": detected_lang,
         "language_probability": lang_prob,
@@ -139,6 +140,8 @@ def transcribe(
         "transcription_time_seconds": round(t_trans, 1),
         "realtime_factor": round(info.duration / t_trans, 1) if t_trans > 0 else 0,
         "word_count": sum(len(seg["text"].split()) for seg in all_segments),
+        "text": " ".join(full_text_parts),
+        "segments": all_segments,
     }
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)

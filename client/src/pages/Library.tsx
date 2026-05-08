@@ -4,18 +4,21 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import {
   AlertCircle,
   CheckCircle,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Database,
   Download,
   FileText,
-  List,
   Loader2,
   Mic,
+  Radio,
   RefreshCw,
   RotateCcw,
   Search,
@@ -34,6 +37,9 @@ interface QueueEntry {
   channel_id: string;
   title: string;
   url: string;
+  duration: number | null;
+  is_live: number;
+  is_shorts: number;
   upload_date: string | null;
   status: string;
   video_path: string | null;
@@ -47,11 +53,37 @@ interface QueueEntry {
 interface QueueResponse {
   counts: Record<string, number>;
   recent: QueueEntry[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 interface ConfigResponse {
   channels: Channel[];
   transcription?: { model?: string };
+}
+
+const LIBRARY_SETTINGS_KEY = "youtube-ripper-library-settings-v1";
+
+interface LibrarySettings {
+  model?: string;
+  query?: string;
+  status?: string;
+  channelId?: string;
+  type?: string;
+  hasTranscript?: string;
+  sort?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+function loadLibrarySettings(): LibrarySettings {
+  if (typeof window === "undefined") return {};
+  try {
+    return JSON.parse(window.localStorage.getItem(LIBRARY_SETTINGS_KEY) || "{}") as LibrarySettings;
+  } catch {
+    return {};
+  }
 }
 
 function formatDate(uploadDate: string | null): string {
@@ -60,6 +92,15 @@ function formatDate(uploadDate: string | null): string {
     return `${uploadDate.slice(0, 4)}-${uploadDate.slice(4, 6)}-${uploadDate.slice(6, 8)}`;
   }
   return uploadDate;
+}
+
+function formatDuration(seconds: number | null): string {
+  if (!seconds || seconds <= 0) return "";
+  const safe = Math.floor(seconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 }
 
 function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
@@ -72,6 +113,7 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
 function statusBadge(status: string) {
   const map: Record<string, { v: "default" | "secondary" | "destructive" | "outline"; icon: any; label: string }> = {
     pending: { v: "secondary", icon: Clock, label: "Pending" },
+    waiting_live: { v: "secondary", icon: Radio, label: "Live" },
     downloading: { v: "secondary", icon: Download, label: "Downloading" },
     extracting_audio: { v: "secondary", icon: Mic, label: "Extracting" },
     transcribing: { v: "secondary", icon: FileText, label: "Transcribing" },
@@ -81,7 +123,7 @@ function statusBadge(status: string) {
   };
   const statusConfig = map[status] || { v: "outline" as const, icon: AlertCircle, label: status };
   return (
-    <Badge variant={statusConfig.v} className="gap-1">
+    <Badge variant={statusConfig.v} className="gap-1 whitespace-nowrap">
       <statusConfig.icon className="h-3 w-3" />
       {statusConfig.label}
     </Badge>
@@ -91,7 +133,7 @@ function statusBadge(status: string) {
 function modelSelector(value: string, onChange: (value: string) => void) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="h-6 text-xs w-[140px]">
+      <SelectTrigger className="h-8 text-xs w-[150px]">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -100,19 +142,27 @@ function modelSelector(value: string, onChange: (value: string) => void) {
         <SelectItem value="medium">medium</SelectItem>
         <SelectItem value="small">small</SelectItem>
         <SelectItem value="tiny">tiny</SelectItem>
-        <SelectItem value="parakeet-tdt-0.6b-v2" disabled>parakeet soon</SelectItem>
+        <SelectItem value="nvidia/parakeet-tdt-0.6b-v3">parakeet-v3</SelectItem>
       </SelectContent>
     </Select>
   );
 }
 
 export default function Library() {
+  const savedSettings = useMemo(() => loadLibrarySettings(), []);
   const [entries, setEntries] = useState<QueueEntry[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [model, setModel] = useState("large-v3");
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("all");
+  const [model, setModel] = useState(savedSettings.model || "large-v3");
+  const [query, setQuery] = useState(savedSettings.query || "");
+  const [status, setStatus] = useState(savedSettings.status || "all");
+  const [channelId, setChannelId] = useState(savedSettings.channelId || "all");
+  const [type, setType] = useState(savedSettings.type || "all");
+  const [hasTranscript, setHasTranscript] = useState(savedSettings.hasTranscript || "all");
+  const [sort, setSort] = useState(savedSettings.sort || "upload_desc");
+  const [page, setPage] = useState(savedSettings.page || 0);
+  const [pageSize, setPageSize] = useState(savedSettings.pageSize || 50);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [retranscribing, setRetranscribing] = useState<Record<string, boolean>>({});
   const { toast } = useToast();
@@ -121,41 +171,53 @@ export default function Library() {
     return Object.fromEntries(channels.map(ch => [ch.id, ch.name]));
   }, [channels]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return entries.filter(entry => {
-      if (status !== "all" && entry.status !== status) return false;
-      if (!q) return true;
-      const channelName = channelNames[entry.channel_id] || entry.channel_id;
-      return [
-        entry.title,
-        entry.video_id,
-        entry.channel_id,
-        channelName,
-        formatDate(entry.upload_date),
-        entry.status,
-      ].some(value => value.toLowerCase().includes(q));
-    }).sort((a, b) => {
-      const aDate = a.upload_date || "99999999";
-      const bDate = b.upload_date || "99999999";
-      if (aDate !== bDate) return aDate.localeCompare(bDate);
-      return a.title.localeCompare(b.title);
-    });
-  }, [channelNames, entries, query, status]);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const startRow = total === 0 ? 0 : page * pageSize + 1;
+  const endRow = Math.min(total, page * pageSize + entries.length);
+
+  useEffect(() => {
+    setPage(0);
+  }, [channelId, hasTranscript, pageSize, query, sort, status, type]);
+
+  useEffect(() => {
+    window.localStorage.setItem(LIBRARY_SETTINGS_KEY, JSON.stringify({
+      model,
+      query,
+      status,
+      channelId,
+      type,
+      hasTranscript,
+      sort,
+      page,
+      pageSize,
+    }));
+  }, [channelId, hasTranscript, model, page, pageSize, query, sort, status, type]);
 
   const fetchData = async () => {
     setLoading(true);
     try {
+      const params = new URLSearchParams({
+        limit: String(pageSize),
+        offset: String(page * pageSize),
+        status,
+        channelId,
+        type,
+        hasTranscript,
+        sort,
+        q: query.trim(),
+        t: String(Date.now()),
+      });
       const [queueRes, configRes] = await Promise.all([
-        apiRequest("GET", "/api/pipeline/queue?limit=5000"),
-        apiRequest("GET", "/api/pipeline/config"),
+        apiRequest("GET", `/api/pipeline/queue?${params.toString()}`),
+        apiRequest("GET", `/api/pipeline/config?t=${Date.now()}`),
       ]);
       const queue = await queueRes.json() as QueueResponse;
       const config = await configRes.json() as ConfigResponse;
       setEntries(queue.recent || []);
       setCounts(queue.counts || {});
+      setTotal(queue.total || 0);
       setChannels(config.channels || []);
-      setModel(config.transcription?.model || "large-v3");
+      setModel(current => current || config.transcription?.model || "large-v3");
     } catch (error: any) {
       toast({ variant: "destructive", title: "Library load failed", description: error.message });
     } finally {
@@ -165,7 +227,7 @@ export default function Library() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [page, pageSize, status, channelId, type, hasTranscript, sort, query]);
 
   const retranscribe = async (entry: QueueEntry) => {
     const key = `${entry.channel_id}:${entry.video_id}`;
@@ -189,99 +251,197 @@ export default function Library() {
     <div className="mx-auto max-w-7xl px-4 py-4 space-y-4">
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <CardTitle className="text-lg flex items-center gap-2">
               <Database className="h-5 w-5" />
               Transcription Library
             </CardTitle>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="flex flex-wrap gap-2">
               <div className="relative">
                 <Search className="h-4 w-4 absolute left-2 top-2.5 text-muted-foreground" />
                 <Input
                   value={query}
                   onChange={e => setQuery(e.target.value)}
-                  placeholder="Search videos"
-                  className="h-9 pl-8 sm:w-72"
+                  placeholder="Search title, channel, path"
+                  className="h-9 pl-8 w-full sm:w-72"
                 />
               </div>
+              <Select value={channelId} onValueChange={setChannelId}>
+                <SelectTrigger className="h-9 w-[170px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All channels</SelectItem>
+                  {channels.map(ch => <SelectItem key={ch.id} value={ch.id}>{ch.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
               <Select value={status} onValueChange={setStatus}>
-                <SelectTrigger className="h-9 sm:w-40">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="h-9 w-[145px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All statuses</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="waiting_live">Live wait</SelectItem>
                   <SelectItem value="downloading">Downloading</SelectItem>
                   <SelectItem value="transcribing">Transcribing</SelectItem>
                   <SelectItem value="complete">Complete</SelectItem>
                   <SelectItem value="failed">Failed</SelectItem>
                 </SelectContent>
               </Select>
-              <Button size="sm" variant="outline" onClick={fetchData} disabled={loading}>
+              <Select value={type} onValueChange={setType}>
+                <SelectTrigger className="h-9 w-[120px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All types</SelectItem>
+                  <SelectItem value="video">Videos</SelectItem>
+                  <SelectItem value="live">Lives</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={hasTranscript} onValueChange={setHasTranscript}>
+                <SelectTrigger className="h-9 w-[150px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Any transcript</SelectItem>
+                  <SelectItem value="yes">Has transcript</SelectItem>
+                  <SelectItem value="no">No transcript</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={sort} onValueChange={setSort}>
+                <SelectTrigger className="h-9 w-[150px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="upload_desc">Newest upload</SelectItem>
+                  <SelectItem value="upload_asc">Oldest upload</SelectItem>
+                  <SelectItem value="updated_desc">Recently updated</SelectItem>
+                  <SelectItem value="words_desc">Most words</SelectItem>
+                  <SelectItem value="title">Title</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button size="sm" variant="outline" onClick={fetchData} disabled={loading} className="h-9">
                 <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
                 Refresh
               </Button>
             </div>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
-            <Badge variant="secondary">{entries.length} total loaded</Badge>
+            <Badge variant="secondary">{total} matching</Badge>
+            <Badge variant="outline">{entries.length} loaded</Badge>
             {Object.entries(counts).map(([key, value]) => (
               <Badge key={key} variant={statusVariant(key)}>{key}: {value}</Badge>
             ))}
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-sm font-medium flex items-center gap-1">
-              <List className="h-4 w-4" />
-              Records
+        <CardContent className="space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-muted-foreground">
+              Showing {startRow}-{endRow} of {total} matching records.
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Re-transcribe model</span>
+              <span className="text-xs text-muted-foreground">Rows</span>
+              <Select value={String(pageSize)} onValueChange={value => setPageSize(Number(value))}>
+                <SelectTrigger className="h-8 text-xs w-[90px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="50">50</SelectItem>
+                  <SelectItem value="100">100</SelectItem>
+                  <SelectItem value="250">250</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="text-xs text-muted-foreground">Model</span>
               {modelSelector(model, setModel)}
             </div>
           </div>
-          <div className="space-y-2">
-              {filtered.map(entry => {
-                const key = `${entry.channel_id}:${entry.video_id}`;
-                const canRetranscribe = !!entry.video_path && entry.status !== "downloading" && entry.status !== "transcribing";
-                return (
-                  <div key={key} className="p-3 rounded border text-sm">
-                    <div className="flex items-center justify-between mb-1 gap-2">
-                      <span className="font-medium truncate flex-1">{entry.title}</span>
-                      {statusBadge(entry.status)}
-                    </div>
-                    <div className="text-xs text-muted-foreground mb-1">
-                      {channelNames[entry.channel_id] || entry.channel_id} • {formatDate(entry.upload_date) || "No upload date"}
-                      {entry.retries > 0 && ` • ${entry.retries} retries`}
-                      {entry.updated_at && ` • updated ${new Date(entry.updated_at).toLocaleString()}`}
-                    </div>
-                    <div className="text-xs text-muted-foreground font-mono mb-1">{entry.video_id}</div>
-                    {entry.error && <p className="text-xs text-red-500 mt-1">{entry.error}</p>}
-                    <div className="flex gap-1 mt-1 flex-wrap items-center">
-                      {entry.word_count > 0 && <Badge variant="outline" className="text-xs">{entry.word_count} words</Badge>}
-                      {entry.video_path && <Badge variant="outline" className="text-xs">video saved</Badge>}
-                      {entry.md_path && <Badge variant="outline" className="text-xs">transcript saved</Badge>}
-                      {modelSelector(model, setModel)}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 text-xs"
-                        disabled={!canRetranscribe || retranscribing[key]}
-                        onClick={() => retranscribe(entry)}
-                      >
-                        {retranscribing[key]
-                          ? <Loader2 className="h-3 w-3 animate-spin" />
-                          : <RotateCcw className="h-3 w-3" />}
-                        <span className="ml-1">Re-transcribe</span>
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-              {!filtered.length && (
-                <p className="text-xs text-muted-foreground p-3">No videos match this filter.</p>
-              )}
+
+          <div className="rounded border bg-background">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[110px]">Upload</TableHead>
+                  <TableHead>Title</TableHead>
+                  <TableHead className="w-[150px]">Channel</TableHead>
+                  <TableHead className="w-[120px]">Status</TableHead>
+                  <TableHead className="w-[95px]">Words</TableHead>
+                  <TableHead className="w-[120px]">Files</TableHead>
+                  <TableHead className="w-[250px] text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {entries.map(entry => {
+                  const key = `${entry.channel_id}:${entry.video_id}`;
+                  const canRetranscribe = !!entry.video_path && entry.status !== "downloading" && entry.status !== "transcribing";
+                  return (
+                    <TableRow key={key}>
+                      <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
+                        {formatDate(entry.upload_date) || "No date"}
+                        {entry.duration ? <div>{formatDuration(entry.duration)}</div> : null}
+                      </TableCell>
+                      <TableCell className="py-2 min-w-[280px]">
+                        <div className="font-medium line-clamp-2">{entry.title}</div>
+                        <div className="text-xs text-muted-foreground font-mono mt-1">{entry.video_id}</div>
+                        {entry.error && <div className="text-xs text-red-500 mt-1 line-clamp-2">{entry.error}</div>}
+                      </TableCell>
+                      <TableCell className="py-2 text-sm">
+                        <div className="truncate max-w-[140px]">{channelNames[entry.channel_id] || entry.channel_id}</div>
+                        {!!entry.is_live && <Badge variant="outline" className="mt-1 gap-1"><Radio className="h-3 w-3" />Live</Badge>}
+                      </TableCell>
+                      <TableCell className="py-2">{statusBadge(entry.status)}</TableCell>
+                      <TableCell className="py-2 text-sm">{entry.word_count || ""}</TableCell>
+                      <TableCell className="py-2">
+                        <div className="flex flex-wrap gap-1">
+                          {entry.video_path && <Badge variant="outline">video</Badge>}
+                          {entry.md_path && <Badge variant="outline">md</Badge>}
+                          {!entry.video_path && !entry.md_path && <span className="text-xs text-muted-foreground">none</span>}
+                        </div>
+                      </TableCell>
+                      <TableCell className="py-2">
+                        <div className="flex justify-end gap-2">
+                          {modelSelector(model, setModel)}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 text-xs whitespace-nowrap"
+                            disabled={!canRetranscribe || retranscribing[key]}
+                            onClick={() => retranscribe(entry)}
+                          >
+                            {retranscribing[key]
+                              ? <Loader2 className="h-3 w-3 animate-spin" />
+                              : <RotateCcw className="h-3 w-3" />}
+                            <span className="ml-1">Re-transcribe</span>
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {!entries.length && (
+                  <TableRow>
+                    <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
+                      No videos match these filters.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs text-muted-foreground">
+              Page {Math.min(page + 1, pageCount)} of {pageCount}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={page === 0 || loading}
+                onClick={() => setPage(value => Math.max(0, value - 1))}
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                Previous
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={page + 1 >= pageCount || loading}
+                onClick={() => setPage(value => value + 1)}
+              >
+                Next
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

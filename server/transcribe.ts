@@ -24,6 +24,37 @@ export interface TranscriptionResult {
   word_count: number;
 }
 
+function isParakeetModel(model: string): boolean {
+  return model.toLowerCase().includes("parakeet");
+}
+
+function defaultPythonPath(parakeet: boolean): string {
+  if (parakeet) {
+    return process.env.PARAKEET_PYTHON
+      || path.join(process.cwd(), "venv-parakeet", "bin", "python");
+  }
+
+  return process.env.WHISPER_PYTHON
+    || path.join(process.cwd(), "venv", "bin", "python");
+}
+
+let transcriptionLock: Promise<void> = Promise.resolve();
+
+async function withTranscriptionLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = transcriptionLock;
+  let release: () => void = () => {};
+  transcriptionLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 /**
  * TypeScript wrapper for the Python transcription script.
  * Spawns a Python process and waits for completion.
@@ -39,27 +70,81 @@ export function transcribeAudio(
     device = "cuda",
     computeType = "float16",
     beamSize = 5,
-    pythonPath = path.join(process.cwd(), "venv", "bin", "python"),
+    pythonPath,
   } = options;
 
-  const scriptPath = path.join(process.cwd(), "server", "transcribe.py");
+  const parakeet = isParakeetModel(model);
+  const resolvedPythonPath = pythonPath || defaultPythonPath(parakeet);
+  const scriptPath = path.join(
+    process.cwd(),
+    "server",
+    parakeet ? "transcribe-parakeet.py" : "transcribe.py",
+  );
+
+  return withTranscriptionLock(() => spawnTranscriber({
+    audioPath,
+    outputMdPath,
+    model,
+    language,
+    device,
+    computeType,
+    beamSize,
+    resolvedPythonPath,
+    scriptPath,
+    parakeet,
+  }));
+}
+
+function spawnTranscriber(argsInput: {
+  audioPath: string;
+  outputMdPath: string;
+  model: string;
+  language: string;
+  device: string;
+  computeType: string;
+  beamSize: number;
+  resolvedPythonPath: string;
+  scriptPath: string;
+  parakeet: boolean;
+}): Promise<TranscriptionResult> {
+  const {
+    audioPath,
+    outputMdPath,
+    model,
+    language,
+    device,
+    computeType,
+    beamSize,
+    resolvedPythonPath,
+    scriptPath,
+    parakeet,
+  } = argsInput;
 
   return new Promise((resolve, reject) => {
-    const args = [
-      scriptPath,
-      audioPath,
-      outputMdPath,
-      "--model", model,
-      "--language", language,
-      "--device", device,
-      "--compute-type", computeType,
-      "--beam-size", String(beamSize),
-      "--json",
-    ];
+    const args = parakeet
+      ? [
+        scriptPath,
+        audioPath,
+        outputMdPath,
+        "--model", model,
+        "--device", device,
+        "--json",
+      ]
+      : [
+        scriptPath,
+        audioPath,
+        outputMdPath,
+        "--model", model,
+        "--language", language,
+        "--device", device,
+        "--compute-type", computeType,
+        "--beam-size", String(beamSize),
+        "--json",
+      ];
 
-    console.log(`[transcribe] Spawning: ${pythonPath} ${args.join(" ")}`);
+    console.log(`[transcribe] Spawning: ${resolvedPythonPath} ${args.join(" ")}`);
 
-    const proc = spawn(pythonPath, args, {
+    const proc = spawn(resolvedPythonPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: process.cwd(),
     });
@@ -135,7 +220,10 @@ export function transcribeAudio(
     });
 
     proc.on("error", (err) => {
-      reject(new Error(`Failed to start Python transcriber: ${err.message}\nMake sure the virtual environment is set up: python3 -m venv venv && venv/bin/pip install faster-whisper`));
+      const packageHint = parakeet
+        ? "/usr/bin/python3.12 -m venv venv-parakeet && ./venv-parakeet/bin/pip install -r requirements-parakeet.txt"
+        : "python3 -m venv venv && ./venv/bin/pip install faster-whisper";
+      reject(new Error(`Failed to start Python transcriber: ${err.message}\nMake sure the virtual environment is set up: ${packageHint}`));
     });
   });
 }
