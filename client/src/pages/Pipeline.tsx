@@ -267,28 +267,28 @@ export default function PipelineStatus() {
   const running = state?.status === "running";
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-7xl px-4 py-4 space-y-4">
       {/* Controls */}
       <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Activity className="h-5 w-5" />
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="h-4 w-4" />
               Pipeline
               <Badge variant={running ? "default" : "secondary"}>{running ? "Running" : state?.status || "?"}</Badge>
             </CardTitle>
             <div className="flex gap-2">
               {running ? (
-                <Button size="sm" variant="outline" onClick={stop}><Square className="h-4 w-4 mr-1"/>Stop</Button>
+                <Button size="sm" variant="outline" onClick={stop}><Square className="h-4 w-4"/>Stop</Button>
               ) : (
-                <Button size="sm" onClick={start}><Play className="h-4 w-4 mr-1"/>Start</Button>
+                <Button size="sm" onClick={start}><Play className="h-4 w-4"/>Start</Button>
               )}
-              <Button size="sm" variant="outline" onClick={checkNow}><RefreshCw className="h-4 w-4 mr-1"/>Check</Button>
+              <Button size="sm" variant="outline" onClick={checkNow}><RefreshCw className="h-4 w-4"/>Check</Button>
             </div>
           </div>
-          <div className="flex gap-4 text-xs text-muted-foreground mt-1">
-            <span>✅ {state?.totalCompleted || 0} done</span>
-            <span>⏳ {state?.pendingCount || 0} pending</span>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span>{state?.totalCompleted || 0} done</span>
+            <span>{state?.pendingCount || 0} pending</span>
             {state?.lastCheck && <span>Last check: {new Date(state.lastCheck).toLocaleTimeString()}</span>}
           </div>
         </CardHeader>
@@ -320,31 +320,31 @@ export default function PipelineStatus() {
 
       {/* Directories */}
       <Card>
-        <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm flex items-center gap-1"><HardDrive className="h-4 w-4"/>Settings</CardTitle>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-1.5"><HardDrive className="h-4 w-4"/>Settings</CardTitle>
             <Button size="sm" variant="ghost" onClick={() => setEditDir(!editDir)}>{editDir ? "Cancel" : "Edit"}</Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-2 text-xs">
           {editDir ? (
             <>
-              <div>
-                <label className="text-muted-foreground">Working (local temp):</label>
-                <span className="ml-2 font-mono">{config?.workingDir}</span>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <span className="text-muted-foreground">Working (temp)</span>
+                <code className="font-mono text-foreground">{config?.workingDir}</code>
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-muted-foreground whitespace-nowrap">Video save:</label>
-                <Input value={videoSaveDir} onChange={e => setVideoSaveDir(e.target.value)} className="h-7 text-xs font-mono"/>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <label className="text-muted-foreground" htmlFor="videoSaveDir">Video save</label>
+                <Input id="videoSaveDir" value={videoSaveDir} onChange={e => setVideoSaveDir(e.target.value)} className="h-8 font-mono"/>
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-muted-foreground whitespace-nowrap">Transcripts:</label>
-                <Input value={transcriptDir} onChange={e => setTranscriptDir(e.target.value)} className="h-7 text-xs font-mono"/>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <label className="text-muted-foreground" htmlFor="transcriptDir">Transcripts</label>
+                <Input id="transcriptDir" value={transcriptDir} onChange={e => setTranscriptDir(e.target.value)} className="h-8 font-mono"/>
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-muted-foreground whitespace-nowrap">Download quality:</label>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <label className="text-muted-foreground">Download quality</label>
                 <Select value={videoQuality} onValueChange={setVideoQuality}>
-                  <SelectTrigger className="h-7 text-xs">
+                  <SelectTrigger className="h-8">
                     <SelectValue placeholder="Quality" />
                   </SelectTrigger>
                   <SelectContent>
@@ -358,26 +358,30 @@ export default function PipelineStatus() {
               <Button size="sm" onClick={saveDirs}>Save</Button>
             </>
           ) : (
-            <>
-              <div><span className="text-muted-foreground">Working: </span><code className="text-xs">{config?.workingDir}</code></div>
-              <div><span className="text-muted-foreground">Videos saved to: </span><code className="text-xs">{config?.videoSaveDir}</code></div>
-              <div><span className="text-muted-foreground">Transcripts: </span><code className="text-xs">{config?.transcriptDir}</code></div>
-              <div><span className="text-muted-foreground">Download quality: </span><code className="text-xs">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code></div>
-            </>
+            <div className="grid grid-cols-[140px_1fr] gap-x-2 gap-y-1">
+              <span className="text-muted-foreground">Working</span>
+              <code className="font-mono text-foreground">{config?.workingDir}</code>
+              <span className="text-muted-foreground">Videos</span>
+              <code className="font-mono text-foreground">{config?.videoSaveDir}</code>
+              <span className="text-muted-foreground">Transcripts</span>
+              <code className="font-mono text-foreground">{config?.transcriptDir}</code>
+              <span className="text-muted-foreground">Download quality</span>
+              <code className="font-mono text-foreground">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code>
+            </div>
           )}
         </CardContent>
       </Card>
 
       {/* Channels */}
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm">Channels</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Channels</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           {config?.channels.map(ch => (
-            <div key={ch.id} className="p-2 rounded bg-muted/50 space-y-1">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
+            <div key={ch.id} className="rounded-md border bg-muted/30 px-2 py-2 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
                   <Switch checked={ch.enabled} onCheckedChange={v => toggleChannel(ch.id, v)}/>
-                  <span className="font-medium text-sm">{ch.name}</span>
+                  <span className="font-medium text-sm truncate">{ch.name}</span>
                 </div>
                 <div className="flex gap-1">
                   <Button
@@ -386,40 +390,40 @@ export default function PipelineStatus() {
                     disabled={archiving[ch.id]}
                   >
                     {archiving[ch.id] ? <Loader2 className="h-3 w-3 animate-spin"/> : <Archive className="h-3 w-3"/>}
-                    <span className="ml-1 text-xs">Full Scan</span>
+                    Full Scan
                   </Button>
-                  <Button size="icon" variant="ghost" onClick={() => removeChannel(ch.id)}>
-                    <Trash2 className="h-4 w-4 text-red-500"/>
+                  <Button size="icon" variant="ghost" onClick={() => removeChannel(ch.id)} aria-label="Remove channel">
+                    <Trash2 className="h-4 w-4 text-destructive"/>
                   </Button>
                 </div>
               </div>
-              <div className="text-xs text-muted-foreground truncate">{ch.url}</div>
-              {archiveMsg[ch.id] && <div className="text-xs text-blue-600">{archiveMsg[ch.id]}</div>}
+              <div className="text-xs text-muted-foreground truncate font-mono">{ch.url}</div>
+              {archiveMsg[ch.id] && <div className="text-xs text-muted-foreground">{archiveMsg[ch.id]}</div>}
             </div>
           ))}
           {(!config?.channels.length) && <p className="text-xs text-muted-foreground">No channels.</p>}
 
           <div className="flex gap-2 pt-2">
             <Input placeholder="Name" value={newChannelName} onChange={e => setNewChannelName(e.target.value)} className="flex-1"/>
-            <Input placeholder="Channel URL" value={newChannelUrl} onChange={e => setNewChannelUrl(e.target.value)} className="flex-[2]"/>
-            <Button size="sm" onClick={addChannel} disabled={!newChannelName || !newChannelUrl}><Plus className="h-4 w-4 mr-1"/>Add</Button>
+            <Input placeholder="Channel URL" value={newChannelUrl} onChange={e => setNewChannelUrl(e.target.value)} className="flex-[2] font-mono text-xs"/>
+            <Button size="sm" onClick={addChannel} disabled={!newChannelName || !newChannelUrl}><Plus className="h-4 w-4"/>Add</Button>
           </div>
         </CardContent>
       </Card>
 
       {/* Live status display for active pipeline jobs */}
       {state && state.jobs.some(j => j.status !== "complete" && j.status !== "failed") && (
-        <Card className="border-blue-300 bg-blue-50/30">
-          <CardHeader className="pb-1"><CardTitle className="text-sm flex items-center gap-2"><Activity className="h-4 w-4 text-blue-600 animate-pulse"/>Live Status</CardTitle></CardHeader>
-          <CardContent className="space-y-2">
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 animate-pulse"/>Live Status</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
             {state.jobs.filter(j => j.status !== "complete" && j.status !== "failed").slice(0, 3).map(job => (
               <div key={job.id} className="text-sm">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-2">
                   <span className="font-medium truncate">{job.videoTitle}</span>
                   {statusBadge(job.status)}
                 </div>
                 {(job.status === "downloading" || job.status === "extracting_audio" || job.status === "transcribing") && (
-                  <Progress value={job.progress} className="h-2 mt-1" />
+                  <Progress value={job.progress} className="h-1.5 mt-1.5" />
                 )}
                 {job.status === "downloading" && <p className="text-xs text-muted-foreground mt-1">Downloading video with yt-dlp…</p>}
                 {job.status === "extracting_audio" && <p className="text-xs text-muted-foreground mt-1">Extracting audio with ffmpeg (16kHz mono WAV)…</p>}
@@ -433,23 +437,23 @@ export default function PipelineStatus() {
 
       {/* Recent Jobs */}
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-1"><List className="h-4 w-4"/>Recent Jobs</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="flex items-center gap-1.5"><List className="h-4 w-4"/>Recent Jobs</CardTitle></CardHeader>
         <CardContent>
-          <div className="max-h-[400px] overflow-y-auto pr-2">
+          <div className="max-h-[480px] overflow-y-auto pr-1">
             <div className="space-y-2">
               {state?.jobs.map(job => (
-                <div key={job.id} className="p-3 rounded border text-sm">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-medium truncate flex-1 mr-2">{job.videoTitle}</span>
+                <div key={job.id} className="rounded-md border px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium truncate flex-1">{job.videoTitle}</span>
                     {statusBadge(job.status)}
                   </div>
-                  <div className="text-xs text-muted-foreground mb-1">
-                    {job.channelName} • {new Date(job.startedAt).toLocaleString()}
-                    {job.retries > 0 && ` • ${job.retries} retries`}
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    {job.channelName} · {new Date(job.startedAt).toLocaleString()}
+                    {job.retries > 0 && ` · ${job.retries} retries`}
                   </div>
-                  {job.error && <p className="text-xs text-red-500 mt-1">{job.error}</p>}
+                  {job.error && <p className="mt-1 text-xs text-destructive line-clamp-2">{job.error}</p>}
                   {(job.status === "downloading" || job.status === "extracting_audio" || job.status === "transcribing") && (
-                    <Progress value={job.progress} className="h-1.5 mt-1"/>
+                    <Progress value={job.progress} className="h-1.5 mt-2"/>
                   )}
                   {job.status === "complete" && job.transcriptionResult && (
                     <div className="flex gap-1 mt-1 flex-wrap items-center">

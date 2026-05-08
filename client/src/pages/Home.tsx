@@ -38,24 +38,25 @@ export default function Home() {
   };
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-3xl">
-        <Header />
-        
+    <div className="mx-auto max-w-4xl px-4 py-6">
+      <Header />
+
+      <div className="space-y-4">
         <DownloadSettings onSettingsChange={handleSettingsChange} />
-        
-        <UrlInput 
-          onVideoFetched={handleVideoFetched} 
-          onLoading={setIsLoading} 
-          onError={handleError} 
+
+        <UrlInput
+          onVideoFetched={handleVideoFetched}
+          onLoading={setIsLoading}
+          onError={handleError}
         />
 
         {isLoading && <LoadingIndicator />}
-        
+
         {error && <ErrorMessage error={error} />}
-        
+
         {videoData && (
-          <VideoPreview 
-            videoData={videoData} 
+          <VideoPreview
+            videoData={videoData}
             downloadProgress={downloadProgress}
             isDownloading={isDownloading}
             setIsDownloading={setIsDownloading}
@@ -63,9 +64,10 @@ export default function Home() {
             downloadSettings={downloadSettings}
           />
         )}
-        
+
         <Instructions />
         <Footer />
       </div>
+    </div>
   );
 }

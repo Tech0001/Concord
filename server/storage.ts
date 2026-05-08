@@ -1,4 +1,31 @@
-import { users, type User, type InsertUser, type VideoInfo } from "@shared/schema";
+export interface User {
+  id: number;
+  username: string;
+  password: string;
+}
+
+export type InsertUser = Omit<User, "id">;
+
+export interface VideoInfo {
+  id: string;
+  title: string;
+  thumbnail?: string;
+  duration?: string | number;
+  views?: string;
+  uploadDate?: string | null;
+  channelId?: string | null;
+  channelName?: string | null;
+  channelUrl?: string | null;
+  formats: {
+    format_id: string;
+    format?: string;
+    quality?: string;
+    ext?: string;
+    resolution?: string;
+    filesize?: number;
+    filesize_approx?: number;
+  }[];
+}
 
 // Interface for storage operations
 export interface IStorage {

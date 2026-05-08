@@ -1,11 +1,12 @@
 import { Card, CardContent } from "@/components/ui/card";
+import { Loader2 } from "lucide-react";
 
 export default function LoadingIndicator() {
   return (
-    <Card className="mb-6">
-      <CardContent className="p-6 flex justify-center items-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#FF0000]"></div>
-        <span className="ml-3 text-gray-600">Fetching video information...</span>
+    <Card className="mb-4">
+      <CardContent className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        <span>Fetching video information…</span>
       </CardContent>
     </Card>
   );

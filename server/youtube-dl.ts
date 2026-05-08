@@ -1,5 +1,4 @@
 import youtubedl from "youtube-dl-exec";
-import { VideoInfo } from "../shared/schema";
 import fs from "fs";
 import path from "path";
 
