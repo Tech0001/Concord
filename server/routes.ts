@@ -7,8 +7,10 @@ import {
   countByStatus,
   enqueueVideo,
   getChannelQueue,
+  getQueueEntry,
   getQueueEntryByVideoId,
   getQueueList,
+  getTranscriptSegmentsForVideo,
   getTranscriptSearchIndexStats,
   refreshTranscriptSearchIndex,
   searchTranscriptSegments,
@@ -880,6 +882,83 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/transcripts/search/stats", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json(getTranscriptSearchIndexStats());
+  });
+
+  app.get("/api/videos/library/:channelId/:videoId/transcript", (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const entry = getQueueEntry(req.params.videoId, req.params.channelId);
+      if (!entry) {
+        return res.status(404).json({ error: "Video not found" });
+      }
+
+      res.json({
+        videoId: entry.video_id,
+        channelId: entry.channel_id,
+        segments: getTranscriptSegmentsForVideo(entry.video_id, entry.channel_id),
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Transcript load failed" });
+    }
+  });
+
+  app.get("/api/videos/library/:channelId/:videoId/stream", (req: Request, res: Response) => {
+    try {
+      const entry = getQueueEntry(req.params.videoId, req.params.channelId);
+      if (!entry?.video_path) {
+        return res.status(404).json({ error: "Video file is not recorded in the library" });
+      }
+
+      const videoPath = path.resolve(entry.video_path);
+      if (!fs.existsSync(videoPath)) {
+        return res.status(404).json({ error: "Video file not found on disk" });
+      }
+
+      const stat = fs.statSync(videoPath);
+      const fileSize = stat.size;
+      const ext = path.extname(videoPath).toLowerCase();
+      const contentType =
+        ext === ".webm" ? "video/webm" :
+        ext === ".mkv" ? "video/x-matroska" :
+        ext === ".m4v" ? "video/x-m4v" :
+        "video/mp4";
+      const range = req.headers.range;
+
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Cache-Control", "no-store");
+
+      if (!range) {
+        res.writeHead(200, {
+          "Content-Length": fileSize,
+          "Content-Type": contentType,
+        });
+        fs.createReadStream(videoPath).pipe(res);
+        return;
+      }
+
+      const match = range.match(/bytes=(\d*)-(\d*)/);
+      if (!match) {
+        res.status(416).setHeader("Content-Range", `bytes */${fileSize}`);
+        return res.end();
+      }
+
+      const start = match[1] ? Number(match[1]) : 0;
+      const end = match[2] ? Number(match[2]) : fileSize - 1;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start >= fileSize || end >= fileSize || start > end) {
+        res.status(416).setHeader("Content-Range", `bytes */${fileSize}`);
+        return res.end();
+      }
+
+      res.writeHead(206, {
+        "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": end - start + 1,
+        "Content-Type": contentType,
+      });
+      fs.createReadStream(videoPath, { start, end }).pipe(res);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Video stream failed" });
+    }
   });
 
   // Get queue statistics for a channel

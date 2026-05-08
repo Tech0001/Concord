@@ -4,9 +4,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Calendar, Clock, DatabaseZap, FileText, Loader2, Radio, Search as SearchIcon } from "lucide-react";
+import { Calendar, Clock, DatabaseZap, FileText, Loader2, Play, Radio, Search as SearchIcon } from "lucide-react";
 
 interface Channel {
   id: string;
@@ -81,6 +82,9 @@ export default function TranscriptSearch() {
   const [loading, setLoading] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [indexStats, setIndexStats] = useState<IndexStats>({ files: 0, segments: 0 });
+  const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
+  const [drawerSeconds, setDrawerSeconds] = useState(0);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const { toast } = useToast();
 
   const resultCountByVideo = useMemo(() => {
@@ -149,6 +153,23 @@ export default function TranscriptSearch() {
     } finally {
       setReindexing(false);
     }
+  };
+
+  const openDrawer = (result: TranscriptSearchResult) => {
+    setDrawerVideo({
+      video_id: result.video_id,
+      channel_id: result.channel_id,
+      channel_name: result.channel_name,
+      title: result.title,
+      upload_date: result.upload_date,
+      status: result.status,
+      is_live: result.is_live,
+      video_path: result.video_path,
+      md_path: result.md_path,
+      word_count: result.word_count,
+    });
+    setDrawerSeconds(result.start_seconds);
+    setDrawerOpen(true);
   };
 
   return (
@@ -246,9 +267,21 @@ export default function TranscriptSearch() {
                   </div>
                 </div>
                 <p className="mt-2 leading-6 text-sm">{result.text}</p>
-                <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground font-mono">
-                  {result.md_path && <span>{result.md_path}</span>}
-                  {result.video_path && <span>{result.video_path}</span>}
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground font-mono">
+                    {result.md_path && <span>{result.md_path}</span>}
+                    {result.video_path && <span>{result.video_path}</span>}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!result.video_path}
+                    onClick={() => openDrawer(result)}
+                    className="h-8 w-fit whitespace-nowrap"
+                  >
+                    <Play className="h-3 w-3" />
+                    Open at {formatTimestamp(result.start_seconds)}
+                  </Button>
                 </div>
               </div>
             ))}
@@ -261,6 +294,12 @@ export default function TranscriptSearch() {
           </div>
         </CardContent>
       </Card>
+      <VideoDrawer
+        open={drawerOpen}
+        video={drawerVideo}
+        initialSeconds={drawerSeconds}
+        onOpenChange={setDrawerOpen}
+      />
     </div>
   );
 }

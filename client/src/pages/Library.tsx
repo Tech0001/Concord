@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import {
@@ -18,6 +19,7 @@ import {
   FileText,
   Loader2,
   Mic,
+  Play,
   Radio,
   RefreshCw,
   RotateCcw,
@@ -165,6 +167,9 @@ export default function Library() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [retranscribing, setRetranscribing] = useState<Record<string, boolean>>({});
+  const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
+  const [drawerSeconds, setDrawerSeconds] = useState(0);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const { toast } = useToast();
 
   const channelNames = useMemo(() => {
@@ -245,6 +250,24 @@ export default function Library() {
     } finally {
       setRetranscribing(prev => ({ ...prev, [key]: false }));
     }
+  };
+
+  const openDrawer = (entry: QueueEntry) => {
+    setDrawerVideo({
+      video_id: entry.video_id,
+      channel_id: entry.channel_id,
+      channel_name: channelNames[entry.channel_id] || entry.channel_id,
+      title: entry.title,
+      upload_date: entry.upload_date,
+      duration: entry.duration,
+      status: entry.status,
+      is_live: entry.is_live,
+      video_path: entry.video_path,
+      md_path: entry.md_path,
+      word_count: entry.word_count,
+    });
+    setDrawerSeconds(0);
+    setDrawerOpen(true);
   };
 
   return (
@@ -357,7 +380,7 @@ export default function Library() {
                   <TableHead className="w-[120px]">Status</TableHead>
                   <TableHead className="w-[95px]">Words</TableHead>
                   <TableHead className="w-[120px]">Files</TableHead>
-                  <TableHead className="w-[250px] text-right">Actions</TableHead>
+                  <TableHead className="w-[330px] text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -391,6 +414,16 @@ export default function Library() {
                       <TableCell className="py-2">
                         <div className="flex justify-end gap-2">
                           {modelSelector(model, setModel)}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 text-xs whitespace-nowrap"
+                            disabled={!entry.video_path}
+                            onClick={() => openDrawer(entry)}
+                          >
+                            <Play className="h-3 w-3" />
+                            <span className="ml-1">Open</span>
+                          </Button>
                           <Button
                             size="sm"
                             variant="ghost"
@@ -445,6 +478,12 @@ export default function Library() {
           </div>
         </CardContent>
       </Card>
+      <VideoDrawer
+        open={drawerOpen}
+        video={drawerVideo}
+        initialSeconds={drawerSeconds}
+        onOpenChange={setDrawerOpen}
+      />
     </div>
   );
 }

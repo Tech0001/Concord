@@ -195,6 +195,12 @@ export function getQueueEntryByVideoId(videoId: string): QueueEntry | undefined 
   ).get(videoId) as QueueEntry | undefined;
 }
 
+export function getQueueEntry(videoId: string, channelId: string): QueueEntry | undefined {
+  return getDb().prepare(
+    "SELECT * FROM video_queue WHERE video_id = ? AND channel_id = ? LIMIT 1"
+  ).get(videoId, channelId) as QueueEntry | undefined;
+}
+
 export function videoExists(videoId: string): boolean {
   const row = getDb().prepare("SELECT 1 FROM video_queue WHERE video_id = ? LIMIT 1").get(videoId);
   return !!row;
@@ -466,7 +472,7 @@ export interface TranscriptSearchResult {
   rank: number;
 }
 
-interface TranscriptSegment {
+export interface TranscriptSegment {
   start: number;
   end: number;
   text: string;
@@ -600,6 +606,12 @@ export function searchTranscriptSegments(query: string, filters: TranscriptSearc
     ORDER BY rank ASC, q.upload_date DESC, s.start_seconds ASC
     LIMIT ?
   `).all(...params) as TranscriptSearchResult[];
+}
+
+export function getTranscriptSegmentsForVideo(videoId: string, channelId: string): TranscriptSegment[] {
+  const entry = getQueueEntry(videoId, channelId);
+  if (!entry?.md_path || !fs.existsSync(entry.md_path)) return [];
+  return parseTranscriptSegments(entry.md_path);
 }
 
 function parseTranscriptSegments(mdPath: string): TranscriptSegment[] {
