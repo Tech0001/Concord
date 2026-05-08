@@ -250,10 +250,10 @@ export default function Library() {
   return (
     <div className="mx-auto max-w-7xl px-4 py-4 space-y-4">
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader>
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Database className="h-5 w-5" />
+            <CardTitle className="flex items-center gap-2">
+              <Database className="h-4 w-4" />
               Transcription Library
             </CardTitle>
             <div className="flex flex-wrap gap-2">
@@ -347,7 +347,7 @@ export default function Library() {
             </div>
           </div>
 
-          <div className="rounded border bg-background">
+          <div className="overflow-x-auto rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -373,7 +373,7 @@ export default function Library() {
                       <TableCell className="py-2 min-w-[280px]">
                         <div className="font-medium line-clamp-2">{entry.title}</div>
                         <div className="text-xs text-muted-foreground font-mono mt-1">{entry.video_id}</div>
-                        {entry.error && <div className="text-xs text-red-500 mt-1 line-clamp-2">{entry.error}</div>}
+                        {entry.error && <div className="text-xs text-destructive mt-1 line-clamp-2">{entry.error}</div>}
                       </TableCell>
                       <TableCell className="py-2 text-sm">
                         <div className="truncate max-w-[140px]">{channelNames[entry.channel_id] || entry.channel_id}</div>

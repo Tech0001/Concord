@@ -154,10 +154,10 @@ export default function TranscriptSearch() {
   return (
     <div className="mx-auto max-w-7xl px-4 py-4 space-y-4">
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <SearchIcon className="h-5 w-5" />
+            <CardTitle className="flex items-center gap-2">
+              <SearchIcon className="h-4 w-4" />
               Transcript Search
             </CardTitle>
             <Button size="sm" variant="outline" onClick={reindex} disabled={reindexing}>
@@ -220,16 +220,16 @@ export default function TranscriptSearch() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm flex items-center gap-2">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-1.5">
             <FileText className="h-4 w-4" />
             Results
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-2">
+          <div className="divide-y rounded-md border">
             {results.map(result => (
-              <div key={`${result.channel_id}:${result.video_id}:${result.segment_index}`} className="rounded border p-3 text-sm bg-background">
+              <div key={`${result.channel_id}:${result.video_id}:${result.segment_index}`} className="p-3 text-sm">
                 <div className="flex flex-col gap-1 md:flex-row md:items-start md:justify-between">
                   <div className="min-w-0">
                     <div className="font-medium truncate">{result.title}</div>

@@ -441,161 +441,140 @@ export default function VideoPreview({
   if (!videoData) return null;
 
   return (
-    <Card className="overflow-hidden mb-6">
+    <Card className="overflow-hidden">
       <div className="md:flex">
         <div className="md:w-2/5">
-          <img 
-            src={videoData.thumbnail} 
-            alt={videoData.title} 
-            className="w-full h-full object-cover"
+          <img
+            src={videoData.thumbnail}
+            alt={videoData.title}
+            className="aspect-video w-full object-cover md:aspect-auto md:h-full"
           />
         </div>
-        <div className="p-6 md:w-3/5">
-          <h2 className="text-xl font-bold mb-2 truncate">
+        <div className="flex-1 p-4 md:w-3/5">
+          <h2 className="text-base font-semibold leading-snug">
             {videoData.title}
           </h2>
-          <div className="flex items-center mb-4 text-gray-600">
-            <span className="flex items-center mr-4">
-              <EyeIcon className="h-5 w-5 mr-1" />
-              <span>{videoData.views}</span>
+          <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1">
+              <EyeIcon className="h-3.5 w-3.5" />
+              {videoData.views}
             </span>
-            <span className="flex items-center">
-              <ClockIcon className="h-5 w-5 mr-1" />
-              <span>{videoData.duration}</span>
+            <span className="inline-flex items-center gap-1">
+              <ClockIcon className="h-3.5 w-3.5" />
+              {videoData.duration}
             </span>
           </div>
-          
-          <div className="mb-4">
-            <label htmlFor="resolution" className="block text-sm font-medium text-gray-600 mb-2">
-              Select Resolution
+
+          <div className="mt-4">
+            <label htmlFor="resolution" className="text-xs font-medium text-muted-foreground">
+              Resolution
             </label>
-            <Select value={selectedResolution} onValueChange={handleResolutionChange}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select resolution" />
-              </SelectTrigger>
-              <SelectContent>
-                {/* Filter to only show video formats that work well with audio merging */}
-                {videoData.formats
-                  .filter(format => {
-                    // Include common video formats
-                    if (format.ext === "mp4" && format.resolution) {
-                      return true;
-                    }
-                    
-                    // Include high-quality audio formats
-                    if (format.ext === "m4a" && !format.resolution) {
-                      return true;
-                    }
-                    
-                    // For other formats, only show if they have a valid format ID and extension
-                    return format.format_id && (format.ext === "mp4" || format.ext === "webm");
-                  })
-                  .map(format => (
-                    <SelectItem 
-                      key={format.format_id} 
-                      value={format.format_id}
-                    >
-                      {format.resolution || "Audio only"} ({format.ext.toUpperCase()})
-                      {format.quality ? ` - ${format.quality}` : ''}
-                    </SelectItem>
-                  ))
-                }
-              </SelectContent>
-            </Select>
+            <div className="mt-1.5">
+              <Select value={selectedResolution} onValueChange={handleResolutionChange}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select resolution" />
+                </SelectTrigger>
+                <SelectContent>
+                  {videoData.formats
+                    .filter(format => {
+                      if (format.ext === "mp4" && format.resolution) return true;
+                      if (format.ext === "m4a" && !format.resolution) return true;
+                      return format.format_id && (format.ext === "mp4" || format.ext === "webm");
+                    })
+                    .map(format => (
+                      <SelectItem key={format.format_id} value={format.format_id}>
+                        {format.resolution || "Audio only"} ({format.ext.toUpperCase()})
+                        {format.quality ? ` - ${format.quality}` : ''}
+                      </SelectItem>
+                    ))
+                  }
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-          
-          <div className="flex flex-col sm:flex-row sm:items-center">
+
+          <div className="mt-4 flex flex-wrap items-center gap-3">
             {downloadComplete && downloadId ? (
               wasSavedToCustom && finalFilePath ? (
-                // Show confirmation if saved to custom location
-                <div className="flex items-center text-green-600 font-medium">
-                  <FolderCheck className="h-5 w-5 mr-2 flex-shrink-0" />
-                  <span>Saved to your folder!</span>
+                <div className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground">
+                  <FolderCheck className="h-4 w-4" />
+                  Saved to your folder
                 </div>
               ) : (
-                // Show download button if saved to temp
-                <Button 
-                  className="bg-green-600 hover:bg-green-700"
-                  onClick={handleSaveToComputer}
-                >
-                  <DownloadIcon className="h-5 w-5 mr-2" />
-                  <span>Save to your computer</span>
+                <Button size="sm" onClick={handleSaveToComputer}>
+                  <DownloadIcon className="h-4 w-4" />
+                  Save to your computer
                 </Button>
               )
             ) : (
-              // Show regular download/processing button
-              <Button 
-                className="bg-[#065FD4] hover:bg-blue-700"
+              <Button
+                size="sm"
                 onClick={handleDownload}
                 disabled={isDownloading}
               >
-                <DownloadIcon className="h-5 w-5 mr-2" />
-                <span>
-                  {isDownloading 
-                    ? downloadProgress < 90 
-                      ? "Downloading..." 
-                      : "Processing..." // Changed from "Merging..."
-                    : "Download"
-                  }
-                </span>
+                <DownloadIcon className="h-4 w-4" />
+                {isDownloading
+                  ? downloadProgress < 90
+                    ? "Downloading…"
+                    : "Processing…"
+                  : "Download"}
               </Button>
             )}
-            
-            <div className="mt-3 sm:mt-0 sm:ml-4 text-gray-600">
-              <span className="text-sm">File size: </span>
-              <span className="font-medium">
+
+            <div className="text-xs text-muted-foreground">
+              File size:{" "}
+              <span className="font-medium text-foreground">
                 {selectedFormat ? formatFileSize(selectedFormat.filesize || selectedFormat.filesize_approx) : "Unknown"}
               </span>
             </div>
           </div>
-          
+
           {downloadComplete && wasSavedToCustom && finalFilePath && (
-            <>
-            <div className="mt-3 p-2 rounded bg-green-50 border border-green-200 flex items-center text-green-600">
-              <CheckCircle className="h-5 w-5 mr-2 flex-shrink-0" />
-              <span className="text-sm font-medium">Video saved to: {finalFilePath}</span>
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                <CheckCircle className="h-4 w-4 shrink-0" />
+                <span className="font-mono text-xs">{finalFilePath}</span>
+              </div>
+              {showTranscribe && onTranscribe && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onTranscribe(finalFilePath, videoData.title, videoData.uploadDate, videoData.id, videoData.channelId, videoData.channelName)}
+                >
+                  <FileText className="h-4 w-4" />
+                  Transcribe with Pipeline
+                </Button>
+              )}
             </div>
-            {showTranscribe && onTranscribe && (
-              <Button
-                className="mt-2"
-                variant="outline"
-                onClick={() => onTranscribe(finalFilePath, videoData.title, videoData.uploadDate, videoData.id, videoData.channelId, videoData.channelName)}
-              >
-                <FileText className="h-4 w-4 mr-2" />
-                Transcribe with Pipeline
-              </Button>
-            )}
-            </>
           )}
-          
-          {/* Keep the original completion message for non-custom downloads */}
+
           {downloadComplete && !wasSavedToCustom && downloadId && (
-            <div className="mt-3 p-2 rounded bg-green-50 border border-green-200 flex items-center text-green-600">
-              <CheckCircle className="h-5 w-5 mr-2 flex-shrink-0" />
-              <span className="text-sm font-medium">Video processing complete! Click the green button above to download.</span>
+            <div className="mt-3 flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+              <CheckCircle className="h-4 w-4 shrink-0" />
+              <span>Processing complete — click Save to your computer above.</span>
             </div>
           )}
         </div>
       </div>
-      
+
       {showProgress && (
-        <div className="p-6 pt-0">
-          <div className="mb-2 flex justify-between items-center">
-            <span className="text-sm font-medium text-gray-600">
-              {downloadProgress < 90 
-                ? "Downloading Video & Audio" 
-                : downloadProgress < 100 
-                  ? "Processing & Merging" 
-                  : "Complete!"}
+        <div className="border-t bg-muted/30 px-4 py-3">
+          <div className="mb-1.5 flex items-center justify-between text-xs">
+            <span className="font-medium text-muted-foreground">
+              {downloadProgress < 90
+                ? "Downloading video & audio"
+                : downloadProgress < 100
+                  ? "Processing & merging"
+                  : "Complete"}
             </span>
-            <span className="text-sm font-medium text-[#065FD4]">{downloadProgress}%</span>
+            <span className="font-mono tabular-nums text-foreground">{downloadProgress}%</span>
           </div>
-          <Progress value={downloadProgress} className="h-2.5" />
-          
+          <Progress value={downloadProgress} className="h-1.5" />
+
           {downloadProgress >= 90 && downloadProgress < 100 && (
-            <div className="mt-2 text-xs text-gray-500">
-              This may take a moment as we merge the audio and video tracks for the best quality.
-            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Merging audio and video tracks…
+            </p>
           )}
         </div>
       )}
