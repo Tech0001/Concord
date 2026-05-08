@@ -81,6 +81,26 @@ const SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_clips_video ON transcript_clips(video_id, channel_id);
   CREATE INDEX IF NOT EXISTS idx_clips_created ON transcript_clips(created_at);
+
+  CREATE TABLE IF NOT EXISTS clip_tags (
+    clip_id    TEXT NOT NULL REFERENCES transcript_clips(id) ON DELETE CASCADE,
+    tag        TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (clip_id, tag)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_clip_tags_tag ON clip_tags(tag);
+
+  CREATE TABLE IF NOT EXISTS clip_links (
+    from_clip_id TEXT NOT NULL REFERENCES transcript_clips(id) ON DELETE CASCADE,
+    to_clip_id   TEXT NOT NULL REFERENCES transcript_clips(id) ON DELETE CASCADE,
+    kind         TEXT NOT NULL,
+    note         TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (from_clip_id, to_clip_id, kind)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_clip_links_to ON clip_links(to_clip_id);
 `;
 
 export interface QueueEntry {
@@ -98,6 +118,7 @@ export interface QueueEntry {
   word_count: number;
   error: string | null;
   retries: number;
+  notes: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -115,10 +136,32 @@ export function getDb(dbPath?: string): Database.Database {
     db = new Database(resolvedPath);
     db.pragma("journal_mode = WAL");
     db.pragma("busy_timeout = 5000");
+    db.pragma("foreign_keys = ON");
     db.exec(SCHEMA);
+    runMigrations(db);
     console.log(`[db] SQLite ready: ${resolvedPath}`);
   }
   return db;
+}
+
+/**
+ * Idempotent column adds for existing databases. SQLite has no
+ * `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so we read pragma_table_info
+ * and skip columns that already exist.
+ */
+function runMigrations(database: Database.Database) {
+  const ensureColumn = (table: string, column: string, definition: string) => {
+    const cols = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some(c => c.name === column)) {
+      database.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+    }
+  };
+  ensureColumn("video_queue", "notes", "TEXT");
+
+  // Renamed link kind: same_scripture → same_topic. Migrate any existing rows.
+  database
+    .prepare("UPDATE clip_links SET kind = 'same_topic' WHERE kind = 'same_scripture'")
+    .run();
 }
 
 // ---- Pipeline config operations ----
@@ -468,6 +511,7 @@ export interface TranscriptSearchFilters {
   isLive?: boolean;
   dateFrom?: string;
   dateTo?: string;
+  tags?: string[];
   limit?: number;
 }
 
@@ -509,6 +553,12 @@ export interface TranscriptClip {
   is_live: number;
   duration: number | null;
   status: string;
+  tags: string[];
+}
+
+export interface TagCount {
+  tag: string;
+  count: number;
 }
 
 export interface TranscriptSegment {
@@ -617,6 +667,23 @@ export function searchTranscriptSegments(query: string, filters: TranscriptSearc
     params.push(normalizeDateFilter(filters.dateTo));
   }
 
+  // Tag scope: only return segments from videos that have at least one clip
+  // matching every requested tag. Hierarchical: "religion" matches clips
+  // tagged "religion" or "religion.<anything>".
+  const tagFilter = (filters.tags ?? [])
+    .map(t => t.trim().toLowerCase().replace(/\s+/g, " "))
+    .filter(Boolean);
+  for (const tag of tagFilter) {
+    where.push(`EXISTS (
+      SELECT 1
+      FROM transcript_clips tc
+      JOIN clip_tags ct ON ct.clip_id = tc.id
+      WHERE tc.video_id = q.video_id AND tc.channel_id = q.channel_id
+        AND (ct.tag = ? OR ct.tag LIKE ? || '.%')
+    )`);
+    params.push(tag, tag);
+  }
+
   const limit = Math.min(Math.max(Math.floor(filters.limit ?? 100), 1), 500);
   params.push(limit);
 
@@ -653,6 +720,123 @@ export function getTranscriptSegmentsForVideo(videoId: string, channelId: string
   return parseTranscriptSegments(entry.md_path);
 }
 
+/**
+ * Tag normalization. Lowercase + trim, collapse internal whitespace, allow
+ * dots for hierarchy (e.g. "religion.end-times.rapture"). Returns "" for
+ * tags that aren't worth storing.
+ */
+function normalizeTag(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function dedupe(strings: string[]): string[] {
+  return Array.from(new Set(strings));
+}
+
+export function setClipTags(clipId: string, rawTags: string[]): string[] {
+  const tags = dedupe(rawTags.map(normalizeTag).filter(t => t.length > 0));
+  const db = getDb();
+  const apply = db.transaction((nextTags: string[]) => {
+    db.prepare("DELETE FROM clip_tags WHERE clip_id = ?").run(clipId);
+    if (!nextTags.length) return;
+    const insert = db.prepare("INSERT INTO clip_tags (clip_id, tag) VALUES (?, ?)");
+    for (const tag of nextTags) insert.run(clipId, tag);
+  });
+  apply(tags);
+  return tags;
+}
+
+export function getClipTags(clipId: string): string[] {
+  return (
+    getDb()
+      .prepare("SELECT tag FROM clip_tags WHERE clip_id = ? ORDER BY tag")
+      .all(clipId) as { tag: string }[]
+  ).map(row => row.tag);
+}
+
+function attachTagsToClips<T extends { id: string }>(clips: T[]): (T & { tags: string[] })[] {
+  if (!clips.length) return [] as (T & { tags: string[] })[];
+  const ids = clips.map(c => c.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(`SELECT clip_id, tag FROM clip_tags WHERE clip_id IN (${placeholders}) ORDER BY tag`)
+    .all(...ids) as { clip_id: string; tag: string }[];
+
+  const byClip = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = byClip.get(row.clip_id);
+    if (list) list.push(row.tag);
+    else byClip.set(row.clip_id, [row.tag]);
+  }
+  return clips.map(clip => ({ ...clip, tags: byClip.get(clip.id) ?? [] }));
+}
+
+export function listAllClipTags(): TagCount[] {
+  return getDb()
+    .prepare(`
+      SELECT tag, COUNT(*) AS count
+      FROM clip_tags
+      GROUP BY tag
+      ORDER BY count DESC, tag ASC
+    `)
+    .all() as TagCount[];
+}
+
+/**
+ * Rename or merge a tag. If `includeDescendants` is true, "religion" → "faith"
+ * also moves "religion.foo" → "faith.foo". Returns counts so the UI can
+ * report "renamed N, merged into existing M".
+ */
+export function renameClipTag(
+  from: string,
+  to: string,
+  includeDescendants = false,
+): { renamed: number; merged: number } {
+  const fromN = normalizeTag(from);
+  const toN = normalizeTag(to);
+  if (!fromN || !toN || fromN === toN) return { renamed: 0, merged: 0 };
+
+  const db = getDb();
+  return db.transaction(() => {
+    const sourceRows = (
+      includeDescendants
+        ? db
+            .prepare("SELECT clip_id, tag FROM clip_tags WHERE tag = ? OR tag LIKE ? || '.%'")
+            .all(fromN, fromN)
+        : db.prepare("SELECT clip_id, tag FROM clip_tags WHERE tag = ?").all(fromN)
+    ) as { clip_id: string; tag: string }[];
+
+    const insertOrIgnore = db.prepare("INSERT OR IGNORE INTO clip_tags (clip_id, tag) VALUES (?, ?)");
+    const deleteRow = db.prepare("DELETE FROM clip_tags WHERE clip_id = ? AND tag = ?");
+
+    let renamed = 0;
+    let merged = 0;
+    for (const row of sourceRows) {
+      const nextTag =
+        includeDescendants && row.tag !== fromN
+          ? toN + row.tag.slice(fromN.length)
+          : toN;
+      const result = insertOrIgnore.run(row.clip_id, nextTag);
+      if (result.changes > 0) renamed += 1;
+      else merged += 1;
+      deleteRow.run(row.clip_id, row.tag);
+    }
+    return { renamed, merged };
+  })();
+}
+
+/** Remove a tag globally. Optionally also removes hierarchical descendants. */
+export function deleteClipTag(tag: string, includeDescendants = false): number {
+  const tagN = normalizeTag(tag);
+  if (!tagN) return 0;
+  if (includeDescendants) {
+    return getDb()
+      .prepare("DELETE FROM clip_tags WHERE tag = ? OR tag LIKE ? || '.%'")
+      .run(tagN, tagN).changes;
+  }
+  return getDb().prepare("DELETE FROM clip_tags WHERE tag = ?").run(tagN).changes;
+}
+
 export function createTranscriptClip(clip: {
   id: string;
   videoId: string;
@@ -664,25 +848,30 @@ export function createTranscriptClip(clip: {
   endSeconds: number;
   quote: string;
   note?: string | null;
+  tags?: string[];
 }): TranscriptClip {
-  getDb().prepare(`
-    INSERT INTO transcript_clips (
-      id, video_id, channel_id, title, channel_name, upload_date,
-      start_seconds, end_seconds, quote, note, updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `).run(
-    clip.id,
-    clip.videoId,
-    clip.channelId,
-    clip.title,
-    clip.channelName ?? null,
-    clip.uploadDate ?? null,
-    clip.startSeconds,
-    clip.endSeconds,
-    clip.quote,
-    clip.note?.trim() || null,
-  );
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO transcript_clips (
+        id, video_id, channel_id, title, channel_name, upload_date,
+        start_seconds, end_seconds, quote, note, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `).run(
+      clip.id,
+      clip.videoId,
+      clip.channelId,
+      clip.title,
+      clip.channelName ?? null,
+      clip.uploadDate ?? null,
+      clip.startSeconds,
+      clip.endSeconds,
+      clip.quote,
+      clip.note?.trim() || null,
+    );
+    if (clip.tags?.length) setClipTags(clip.id, clip.tags);
+  })();
 
   const created = getTranscriptClip(clip.id);
   if (!created) throw new Error("Clip was not created");
@@ -690,7 +879,7 @@ export function createTranscriptClip(clip: {
 }
 
 export function getTranscriptClip(id: string): TranscriptClip | undefined {
-  return getDb().prepare(`
+  const row = getDb().prepare(`
     SELECT
       clip.*,
       q.video_path,
@@ -702,13 +891,23 @@ export function getTranscriptClip(id: string): TranscriptClip | undefined {
     FROM transcript_clips clip
     LEFT JOIN video_queue q ON q.video_id = clip.video_id AND q.channel_id = clip.channel_id
     WHERE clip.id = ?
-  `).get(id) as TranscriptClip | undefined;
+  `).get(id) as Omit<TranscriptClip, "tags"> | undefined;
+  if (!row) return undefined;
+  return { ...row, tags: getClipTags(id) };
 }
 
-export function listTranscriptClips(filters: { q?: string; channelId?: string; limit?: number; offset?: number } = {}): {
-  rows: TranscriptClip[];
-  total: number;
-} {
+/**
+ * Filter clips. `tags` is an intersect filter — every listed tag must match
+ * the clip, where matching is hierarchical: "religion" matches clips tagged
+ * "religion" OR "religion.<anything>".
+ */
+export function listTranscriptClips(filters: {
+  q?: string;
+  channelId?: string;
+  tags?: string[];
+  limit?: number;
+  offset?: number;
+} = {}): { rows: TranscriptClip[]; total: number } {
   const where: string[] = [];
   const params: any[] = [];
 
@@ -728,6 +927,16 @@ export function listTranscriptClips(filters: { q?: string; channelId?: string; l
     params.push(like, like, like, like, like);
   }
 
+  const tagFilter = (filters.tags ?? [])
+    .map(normalizeTag)
+    .filter(t => t.length > 0);
+  for (const tag of tagFilter) {
+    where.push(`clip.id IN (
+      SELECT clip_id FROM clip_tags WHERE tag = ? OR tag LIKE ? || '.%'
+    )`);
+    params.push(tag, tag);
+  }
+
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const limit = Math.min(Math.max(Math.floor(filters.limit ?? 100), 1), 250);
   const offset = Math.max(Math.floor(filters.offset ?? 0), 0);
@@ -735,7 +944,10 @@ export function listTranscriptClips(filters: { q?: string; channelId?: string; l
     FROM transcript_clips clip
     LEFT JOIN video_queue q ON q.video_id = clip.video_id AND q.channel_id = clip.channel_id
   `;
-  const totalRow = getDb().prepare(`SELECT COUNT(*) as count ${fromSql} ${whereSql}`).get(...params) as { count: number } | undefined;
+  const totalRow = getDb()
+    .prepare(`SELECT COUNT(*) as count ${fromSql} ${whereSql}`)
+    .get(...params) as { count: number } | undefined;
+
   const rows = getDb().prepare(`
     SELECT
       clip.*,
@@ -749,20 +961,31 @@ export function listTranscriptClips(filters: { q?: string; channelId?: string; l
     ${whereSql}
     ORDER BY clip.created_at DESC
     LIMIT ? OFFSET ?
-  `).all(...params, limit, offset) as TranscriptClip[];
+  `).all(...params, limit, offset) as Omit<TranscriptClip, "tags">[];
 
-  return { rows, total: totalRow?.count ?? 0 };
+  return { rows: attachTagsToClips(rows), total: totalRow?.count ?? 0 };
 }
 
-export function listRelatedTranscriptClips(videoId: string, channelId: string, excludeId?: string): TranscriptClip[] {
-  const params: any[] = [videoId, channelId];
+/**
+ * Related clips for a video: split into "byTags" (clips from OTHER videos
+ * sharing ≥1 tag with clips of the source video, ranked by overlap) and
+ * "sameVideo" (clips from this video, the legacy behavior). Both lists
+ * include their tag arrays so the UI can show match chips.
+ */
+export function listRelatedTranscriptClips(
+  videoId: string,
+  channelId: string,
+  excludeId?: string,
+): { byTags: (TranscriptClip & { overlap: number })[]; sameVideo: TranscriptClip[] } {
+  const db = getDb();
+
+  const sameVideoParams: any[] = [videoId, channelId];
   let excludeSql = "";
   if (excludeId) {
     excludeSql = "AND clip.id != ?";
-    params.push(excludeId);
+    sameVideoParams.push(excludeId);
   }
-
-  return getDb().prepare(`
+  const sameVideoRows = db.prepare(`
     SELECT
       clip.*,
       q.video_path,
@@ -777,11 +1000,189 @@ export function listRelatedTranscriptClips(videoId: string, channelId: string, e
     ${excludeSql}
     ORDER BY clip.start_seconds ASC, clip.created_at DESC
     LIMIT 50
-  `).all(...params) as TranscriptClip[];
+  `).all(...sameVideoParams) as Omit<TranscriptClip, "tags">[];
+  const sameVideo = attachTagsToClips(sameVideoRows);
+
+  const sourceTags = (db.prepare(`
+    SELECT DISTINCT t.tag
+    FROM clip_tags t
+    JOIN transcript_clips c ON c.id = t.clip_id
+    WHERE c.video_id = ? AND c.channel_id = ?
+  `).all(videoId, channelId) as { tag: string }[]).map(r => r.tag);
+
+  if (!sourceTags.length) {
+    return { byTags: [], sameVideo };
+  }
+
+  const tagPlaceholders = sourceTags.map(() => "?").join(",");
+  const byTagsRows = db.prepare(`
+    SELECT
+      clip.*,
+      q.video_path,
+      q.md_path,
+      q.word_count,
+      q.is_live,
+      q.duration,
+      q.status,
+      (
+        SELECT COUNT(DISTINCT t.tag)
+        FROM clip_tags t
+        WHERE t.clip_id = clip.id AND t.tag IN (${tagPlaceholders})
+      ) AS overlap
+    FROM transcript_clips clip
+    LEFT JOIN video_queue q ON q.video_id = clip.video_id AND q.channel_id = clip.channel_id
+    WHERE NOT (clip.video_id = ? AND clip.channel_id = ?)
+      AND EXISTS (
+        SELECT 1 FROM clip_tags t
+        WHERE t.clip_id = clip.id AND t.tag IN (${tagPlaceholders})
+      )
+    ORDER BY overlap DESC, clip.created_at DESC
+    LIMIT 50
+  `).all(...sourceTags, videoId, channelId, ...sourceTags) as (Omit<TranscriptClip, "tags"> & { overlap: number })[];
+
+  return {
+    byTags: attachTagsToClips(byTagsRows) as (TranscriptClip & { overlap: number })[],
+    sameVideo,
+  };
 }
 
 export function deleteTranscriptClip(id: string): boolean {
   return getDb().prepare("DELETE FROM transcript_clips WHERE id = ?").run(id).changes > 0;
+}
+
+// ---- Per-video notes ----
+
+export function setVideoNotes(videoId: string, channelId: string, notes: string | null): void {
+  const trimmed = notes?.trim() ? notes.trim() : null;
+  getDb().prepare(`
+    UPDATE video_queue
+    SET notes = ?, updated_at = datetime('now')
+    WHERE video_id = ? AND channel_id = ?
+  `).run(trimmed, videoId, channelId);
+}
+
+// ---- Clip links (manual, typed) ----
+
+export const CLIP_LINK_KINDS = [
+  "same_claim",
+  "contradicts",
+  "same_topic",
+  "follow_up",
+  "context",
+] as const;
+
+export type ClipLinkKind = (typeof CLIP_LINK_KINDS)[number];
+
+const SYMMETRIC_LINK_KINDS = new Set<ClipLinkKind>(["same_claim", "contradicts", "same_topic"]);
+
+export interface ClipLink {
+  from_clip_id: string;
+  to_clip_id: string;
+  kind: ClipLinkKind;
+  note: string | null;
+  created_at: string;
+}
+
+export interface ClipLinkWithClip extends ClipLink {
+  direction: "outgoing" | "incoming";
+  other: TranscriptClip;
+}
+
+export function addClipLink(
+  fromId: string,
+  toId: string,
+  kind: ClipLinkKind,
+  note?: string | null,
+): { inserted: number } {
+  if (fromId === toId) throw new Error("A clip cannot link to itself");
+  if (!CLIP_LINK_KINDS.includes(kind)) throw new Error(`Unknown link kind: ${kind}`);
+
+  const cleanedNote = note?.trim() || null;
+  const db = getDb();
+  return db.transaction(() => {
+    const main = db
+      .prepare(`INSERT OR REPLACE INTO clip_links (from_clip_id, to_clip_id, kind, note) VALUES (?, ?, ?, ?)`)
+      .run(fromId, toId, kind, cleanedNote);
+    let inserted = main.changes;
+    if (SYMMETRIC_LINK_KINDS.has(kind)) {
+      const mirror = db
+        .prepare(`INSERT OR REPLACE INTO clip_links (from_clip_id, to_clip_id, kind, note) VALUES (?, ?, ?, ?)`)
+        .run(toId, fromId, kind, cleanedNote);
+      inserted += mirror.changes;
+    }
+    return { inserted };
+  })();
+}
+
+export function removeClipLink(fromId: string, toId: string, kind: ClipLinkKind): { removed: number } {
+  const db = getDb();
+  return db.transaction(() => {
+    let removed = db
+      .prepare("DELETE FROM clip_links WHERE from_clip_id = ? AND to_clip_id = ? AND kind = ?")
+      .run(fromId, toId, kind).changes;
+    if (SYMMETRIC_LINK_KINDS.has(kind)) {
+      removed += db
+        .prepare("DELETE FROM clip_links WHERE from_clip_id = ? AND to_clip_id = ? AND kind = ?")
+        .run(toId, fromId, kind).changes;
+    }
+    return { removed };
+  })();
+}
+
+/**
+ * Returns links that involve the given clip, with the OTHER clip preloaded
+ * (and its tags). Outgoing = `from_clip_id = clipId`. Incoming reverses the
+ * pair. For symmetric kinds the `addClipLink` mirror means there's already
+ * an outgoing row for the inverse, so the UI should only render outgoing
+ * unless you explicitly want both — see `linkPanels` server-side helper.
+ */
+export function getClipLinks(clipId: string): ClipLinkWithClip[] {
+  const db = getDb();
+  const outgoing = db.prepare(`
+    SELECT * FROM clip_links WHERE from_clip_id = ?
+    ORDER BY kind, created_at DESC
+  `).all(clipId) as ClipLink[];
+  const incoming = db.prepare(`
+    SELECT * FROM clip_links WHERE to_clip_id = ? AND from_clip_id != ?
+    ORDER BY kind, created_at DESC
+  `).all(clipId, clipId) as ClipLink[];
+
+  const otherIds = new Set<string>();
+  outgoing.forEach(l => otherIds.add(l.to_clip_id));
+  incoming.forEach(l => otherIds.add(l.from_clip_id));
+
+  if (otherIds.size === 0) return [];
+
+  const ids = Array.from(otherIds);
+  const placeholders = ids.map(() => "?").join(",");
+  const otherClips = db.prepare(`
+    SELECT
+      clip.*,
+      q.video_path,
+      q.md_path,
+      q.word_count,
+      q.is_live,
+      q.duration,
+      q.status
+    FROM transcript_clips clip
+    LEFT JOIN video_queue q ON q.video_id = clip.video_id AND q.channel_id = clip.channel_id
+    WHERE clip.id IN (${placeholders})
+  `).all(...ids) as Omit<TranscriptClip, "tags">[];
+
+  const withTags = attachTagsToClips(otherClips);
+  const byId = new Map(withTags.map(c => [c.id, c]));
+
+  const result: ClipLinkWithClip[] = [];
+  for (const link of outgoing) {
+    const other = byId.get(link.to_clip_id);
+    if (other) result.push({ ...link, direction: "outgoing", other });
+  }
+  for (const link of incoming) {
+    if (SYMMETRIC_LINK_KINDS.has(link.kind)) continue; // already counted via outgoing mirror
+    const other = byId.get(link.from_clip_id);
+    if (other) result.push({ ...link, direction: "incoming", other });
+  }
+  return result;
 }
 
 function parseTranscriptSegments(mdPath: string): TranscriptSegment[] {
@@ -835,15 +1236,31 @@ function normalizeDateFilter(value: string): string {
   return value.replaceAll("-", "");
 }
 
+/**
+ * Convert a user query into an FTS5 MATCH expression.
+ *  - Quoted strings ("red heifer") become a single FTS phrase.
+ *  - Unquoted words become individual phrase tokens.
+ *  - All tokens are AND-ed together so every term must match.
+ */
 function buildFtsQuery(query: string): string {
-  const tokens = query
-    .trim()
-    .split(/\s+/)
-    .map(token => token.replace(/[^A-Za-z0-9_'-]/g, "").trim())
-    .filter(Boolean)
-    .slice(0, 12);
+  const trimmed = query.trim();
+  if (!trimmed) return "";
 
-  return tokens.map(token => `"${token.replaceAll('"', '""')}"`).join(" AND ");
+  const tokens: string[] = [];
+  const phrasePattern = /"([^"]+)"|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = phrasePattern.exec(trimmed)) !== null) {
+    const phrase = match[1] ?? match[2] ?? "";
+    const cleaned = phrase
+      .split(/\s+/)
+      .map(t => t.replace(/[^A-Za-z0-9_'-]/g, "").trim())
+      .filter(Boolean)
+      .join(" ");
+    if (cleaned) tokens.push(`"${cleaned.replaceAll('"', '""')}"`);
+    if (tokens.length >= 12) break;
+  }
+
+  return tokens.join(" AND ");
 }
 
 export function closeDb(): void {

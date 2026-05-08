@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -40,6 +41,11 @@ interface TranscriptSearchResult {
 interface IndexStats {
   files: number;
   segments: number;
+}
+
+interface TagOption {
+  tag: string;
+  count: number;
 }
 
 function formatUploadDate(uploadDate: string | null): string {
@@ -82,6 +88,8 @@ export default function TranscriptSearch() {
   const [loading, setLoading] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [indexStats, setIndexStats] = useState<IndexStats>({ files: 0, segments: 0 });
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [tagOptions, setTagOptions] = useState<TagOption[]>([]);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerSegmentIndex, setDrawerSegmentIndex] = useState<number | undefined>();
@@ -92,6 +100,16 @@ export default function TranscriptSearch() {
     return new Set(results.map(result => `${result.channel_id}:${result.video_id}`)).size;
   }, [results]);
 
+  const loadTagOptions = async () => {
+    try {
+      const response = await apiRequest("GET", `/api/clips/tags?t=${Date.now()}`);
+      const data = await response.json() as { tags?: TagOption[] };
+      setTagOptions(data.tags || []);
+    } catch {
+      setTagOptions([]);
+    }
+  };
+
   useEffect(() => {
     const loadConfig = async () => {
       try {
@@ -100,6 +118,7 @@ export default function TranscriptSearch() {
         setChannels(config.channels || []);
         const statsResponse = await apiRequest("GET", `/api/transcripts/search/stats?t=${Date.now()}`);
         setIndexStats(await statsResponse.json() as IndexStats);
+        await loadTagOptions();
       } catch (error: any) {
         toast({ variant: "destructive", title: "Could not load channels", description: error.message });
       }
@@ -125,6 +144,7 @@ export default function TranscriptSearch() {
         type,
         dateFrom: dateFrom.replaceAll("-", ""),
         dateTo: dateTo.replaceAll("-", ""),
+        tags: tagFilter.join(","),
         limit: "200",
         t: String(Date.now()),
       }));
@@ -232,6 +252,33 @@ export default function TranscriptSearch() {
               Search
             </Button>
           </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">Tag scope:</span>
+            <TagPicker
+              value={tagFilter}
+              onChange={setTagFilter}
+              options={tagOptions}
+              size="sm"
+              placeholder="Pick clip tags..."
+              onOpen={loadTagOptions}
+            />
+            {tagFilter.length > 0 && (
+              <>
+                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setTagFilter([])}>
+                  Clear
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  Restricting to videos that have at least one clip with every selected tag.
+                </span>
+              </>
+            )}
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Tip: wrap a phrase in quotes to match exactly &mdash; e.g. <code className="rounded bg-muted px-1 font-mono">"red heifer"</code> finds the exact phrase, while <code className="rounded bg-muted px-1 font-mono">red heifer</code> finds segments containing both words anywhere.
+          </p>
+
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <Badge variant="secondary">{results.length} matching segments</Badge>
             <Badge variant="outline">{resultCountByVideo} videos</Badge>
