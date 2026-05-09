@@ -4,12 +4,17 @@ import { DEFAULT_THEME, themes } from "@/themes";
 
 type Mode = "light" | "dark";
 
-const MODE_KEY = "yt-ripper-theme";
-const NAME_KEY = "yt-ripper-theme-name";
+const MODE_KEY = "concord-theme";
+const NAME_KEY = "concord-theme-name";
+// Old keys from when the project was named "YouTube Ripper". Read these as a
+// fallback so existing users keep their picked theme + light/dark choice.
+const LEGACY_MODE_KEY = "yt-ripper-theme";
+const LEGACY_NAME_KEY = "yt-ripper-theme-name";
 
 function readMode(): Mode {
   if (typeof window === "undefined") return "light";
-  const stored = window.localStorage.getItem(MODE_KEY);
+  const stored = window.localStorage.getItem(MODE_KEY)
+    ?? window.localStorage.getItem(LEGACY_MODE_KEY);
   if (stored === "dark" || stored === "light") return stored;
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches
     ? "dark"
@@ -18,7 +23,8 @@ function readMode(): Mode {
 
 function readThemeName(): string {
   if (typeof window === "undefined") return DEFAULT_THEME;
-  const stored = window.localStorage.getItem(NAME_KEY);
+  const stored = window.localStorage.getItem(NAME_KEY)
+    ?? window.localStorage.getItem(LEGACY_NAME_KEY);
   return stored && themes.includes(stored) ? stored : DEFAULT_THEME;
 }
 

@@ -1,5 +1,7 @@
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
+import { fileURLToPath, pathToFileURL } from "url";
 import { EventEmitter } from "events";
 import youtubedl from "youtube-dl-exec";
 import {
@@ -111,6 +113,113 @@ function isNonRetryableTranscriptionError(message: string): boolean {
   );
 }
 
+// ---- Local-folder channel helpers ----
+//
+// A channel whose `url` starts with `file://` is a local folder rather than a
+// YouTube channel. Scanning walks the folder for media files; "downloading"
+// is a no-op because the file's already on disk; everything else (audio
+// extraction, transcription, FTS indexing, clips/tags/links) reuses the same
+// pipeline as YouTube videos.
+
+const VIDEO_FILE_EXTS = new Set([".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v"]);
+const AUDIO_FILE_EXTS = new Set([".mp3", ".m4a", ".wav", ".flac", ".aac", ".opus", ".ogg"]);
+
+export function isLocalChannel(channel: { url: string }): boolean {
+  return typeof channel.url === "string" && channel.url.startsWith("file://");
+}
+
+function isLocalVideoUrl(url: string): boolean {
+  return typeof url === "string" && url.startsWith("file://");
+}
+
+function fileUrlToPath(fileUrl: string): string {
+  // Node's fileURLToPath handles all the cross-platform pain: Windows drive
+  // letters, percent-decoding, separator normalization. Falls back to a
+  // crude strip for malformed inputs so we never throw.
+  try {
+    return fileURLToPath(fileUrl);
+  } catch {
+    return fileUrl.replace(/^file:\/\//, "");
+  }
+}
+
+function pathToFileUrl(absPath: string): string {
+  return pathToFileURL(absPath).toString();
+}
+
+function isMediaFile(name: string): boolean {
+  const ext = path.extname(name).toLowerCase();
+  return VIDEO_FILE_EXTS.has(ext) || AUDIO_FILE_EXTS.has(ext);
+}
+
+function isAudioOnlyPath(filePath: string): boolean {
+  return AUDIO_FILE_EXTS.has(path.extname(filePath).toLowerCase());
+}
+
+/** Stable per-file ID. SHA-256 of the absolute path, prefixed with "local-"
+ *  so it's distinguishable from YouTube IDs at a glance. Same path always
+ *  produces the same ID across rescans. */
+function localStableId(absPath: string): string {
+  const hash = crypto.createHash("sha256").update(absPath).digest("hex");
+  return `local-${hash.substring(0, 11)}`;
+}
+
+function mtimeToYYYYMMDD(mtimeMs: number): string {
+  const d = new Date(mtimeMs);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}${m}${dd}`;
+}
+
+/** Recursively walk a folder and return one ChannelVideo per media file
+ *  found. Doesn't ffprobe (would be slow on big folders); duration is
+ *  resolved later during processing. */
+function scanLocalFolder(folderUrl: string): ChannelVideo[] {
+  const folder = fileUrlToPath(folderUrl);
+  if (!fs.existsSync(folder)) {
+    console.error(`[pipeline] Local channel folder not found: ${folder}`);
+    return [];
+  }
+
+  const out: ChannelVideo[] = [];
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      console.error(`[pipeline] Cannot read directory ${dir}:`, err);
+      return;
+    }
+    for (const entry of entries) {
+      // Skip hidden / system files
+      if (entry.name.startsWith(".")) continue;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile() && isMediaFile(entry.name)) {
+        try {
+          const stat = fs.statSync(fullPath);
+          out.push({
+            id: localStableId(fullPath),
+            title: path.basename(entry.name, path.extname(entry.name)),
+            url: pathToFileUrl(fullPath),
+            duration: null,
+            isLive: false,
+            isShorts: false,
+            uploadDate: mtimeToYYYYMMDD(stat.mtimeMs),
+            thumbnail: null,
+          });
+        } catch (err) {
+          console.error(`[pipeline] Stat failed for ${fullPath}:`, err);
+        }
+      }
+    }
+  };
+  walk(folder);
+  return out;
+}
+
 // ---- Pipeline ----
 
 export class Pipeline extends EventEmitter {
@@ -127,6 +236,30 @@ export class Pipeline extends EventEmitter {
     super();
     this.config = this.loadConfig();
     this.persistConfig(this.config);
+    this.recoverStuckJobs();
+  }
+
+  /** Reset any rows left in an in-flight status (downloading, transcribing,
+   *  etc.) back to "pending" so they get re-picked-up on the next scan.
+   *  Runs once on pipeline boot. Safe because the pipeline is the only
+   *  process that drives those statuses — if we just booted, nothing else
+   *  is in the middle of anything. Without this, rows stay stuck forever
+   *  any time the server crashes or the user closes the app mid-job. */
+  private recoverStuckJobs(): void {
+    const stuck = ["downloading", "extracting_audio", "transcribing", "saving_md"];
+    const placeholders = stuck.map(() => "?").join(",");
+    const result = getDb()
+      .prepare(`
+        UPDATE video_queue
+        SET status = 'pending', updated_at = datetime('now')
+        WHERE status IN (${placeholders})
+      `)
+      .run(...stuck);
+    if (result.changes > 0) {
+      console.log(
+        `[pipeline] Recovered ${result.changes} stuck job${result.changes === 1 ? "" : "s"} from a previous run`,
+      );
+    }
   }
 
   // ---- Config ----
@@ -307,6 +440,22 @@ export class Pipeline extends EventEmitter {
   /** Fetch recent videos from one channel and enqueue new ones. */
   private async scanRecent(channel: ChannelConfig, allowInitialInventory: boolean): Promise<number> {
     try {
+      if (isLocalChannel(channel)) {
+        const videos = scanLocalFolder(channel.url);
+        let added = 0;
+        for (const v of videos) {
+          if (videoExists(v.id)) continue;
+          if (enqueueVideo({
+            videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
+            duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
+          })) added++;
+        }
+        if (added > 0) {
+          console.log(`[pipeline] ${channel.name}: +${added} new local file${added === 1 ? "" : "s"}`);
+        }
+        return added;
+      }
+
       if (countChannelQueueEntries(channel.id) === 0) {
         if (!allowInitialInventory) {
           console.log(`[pipeline] ${channel.name}: no inventory yet; run Check or Full Scan before Start`);
@@ -374,9 +523,11 @@ export class Pipeline extends EventEmitter {
 
     console.log(`[pipeline] Full scan for channel: ${channel.name} — fetching all videos...`);
 
-    const videos = await getAllChannelVideos(channel.url, (info) => {
-      this.emit("archiveProgress", { channelId, channelName: channel.name, ...info });
-    });
+    const videos = isLocalChannel(channel)
+      ? scanLocalFolder(channel.url)
+      : await getAllChannelVideos(channel.url, (info) => {
+          this.emit("archiveProgress", { channelId, channelName: channel.name, ...info });
+        });
 
     let newVideos = 0;
     const toEnqueue = videos
@@ -469,7 +620,11 @@ export class Pipeline extends EventEmitter {
         return;
       }
 
-      // Step 2: Download
+      const isLocal = isLocalVideoUrl(video.url);
+      const localFilePath = isLocal ? fileUrlToPath(video.url) : null;
+      const audioOnlyLocal = !!localFilePath && isAudioOnlyPath(localFilePath);
+
+      // Step 2: Download (skipped for local-folder channels — file is already on disk)
       job.status = "downloading";
       updateQueueStatus(video.id, channel.id, { status: "downloading" });
       this.emit("jobUpdated", job);
@@ -477,25 +632,42 @@ export class Pipeline extends EventEmitter {
       const safeName = datedBaseName(video.title, video.uploadDate);
       const channelFolder = channelFolderName(channel.name);
 
-      // Channel-specific subdirectories
+      // Channel-specific subdirectories. saveChannelDir is irrelevant for
+      // local channels (we never move the user's file), but the working
+      // and transcript dirs are still used for intermediate audio + the
+      // produced markdown.
       const workChannelDir  = path.join(this.config.workingDir,    channelFolder);
       const saveChannelDir  = path.join(this.config.videoSaveDir, channelFolder);
       const transChannelDir = path.join(this.config.transcriptDir, channelFolder);
 
-      [workChannelDir, saveChannelDir, transChannelDir].forEach(d => {
+      [workChannelDir, transChannelDir].forEach(d => {
         if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
       });
+      if (!isLocal && !fs.existsSync(saveChannelDir)) {
+        fs.mkdirSync(saveChannelDir, { recursive: true });
+      }
 
-      const workVideoPath = path.join(workChannelDir, `${safeName}.mp4`);
+      const workVideoPath = isLocal && localFilePath
+        ? localFilePath
+        : path.join(workChannelDir, `${safeName}.mp4`);
 
-      await this.downloadVideo(video.id, workVideoPath, (pct) => {
-        job.progress = Math.floor(pct * 0.4);
+      if (isLocal) {
+        if (!fs.existsSync(workVideoPath)) {
+          throw new Error(`Local file no longer exists: ${workVideoPath}`);
+        }
+        job.videoPath = workVideoPath;
+        job.progress = 40;
         this.emit("jobUpdated", job);
-      });
+      } else {
+        await this.downloadVideo(video.id, workVideoPath, (pct) => {
+          job.progress = Math.floor(pct * 0.4);
+          this.emit("jobUpdated", job);
+        });
 
-      job.videoPath = workVideoPath;
-      job.progress = 40;
-      this.emit("jobUpdated", job);
+        job.videoPath = workVideoPath;
+        job.progress = 40;
+        this.emit("jobUpdated", job);
+      }
 
       // Step 3: Extract audio — stream-copy m4a first (instant), then convert to wav
       job.status = "extracting_audio";
@@ -505,13 +677,18 @@ export class Pipeline extends EventEmitter {
       const m4aPath = path.join(workChannelDir, `${safeName}.m4a`);
       const audioPath = path.join(workChannelDir, `${safeName}.wav`);
 
-      // Stream-copy the audio track (nearly instant — just demuxes)
-      if (!fs.existsSync(m4aPath)) {
-        await copyAudioTrack(workVideoPath, m4aPath);
+      if (audioOnlyLocal) {
+        // The "video" file is already audio (mp3/m4a/wav/flac/etc).
+        // Skip the demux step and re-encode straight to whisper-ready WAV.
+        await extractAudio(workVideoPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
+      } else {
+        // Stream-copy the audio track (nearly instant — just demuxes)
+        if (!fs.existsSync(m4aPath)) {
+          await copyAudioTrack(workVideoPath, m4aPath);
+        }
+        // Convert m4a to 16kHz mono WAV for whisper (audio-only, no video decode overhead)
+        await extractAudio(m4aPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
       }
-      
-      // Convert m4a to 16kHz mono WAV for whisper (audio-only, no video decode overhead)
-      await extractAudio(m4aPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
 
       job.audioPath = audioPath;
       job.progress = 55;
@@ -550,13 +727,14 @@ export class Pipeline extends EventEmitter {
         } catch (e) { console.error("[pipeline] QMD copy failed:", e); }
       }
 
-      // Step 6: Move video to save directory
+      // Step 6: Move video to save directory (skipped for local channels —
+      // the file already lives wherever the user pointed the channel at).
       job.status = "saving_md";
       this.emit("jobUpdated", job);
 
       const savePath = path.join(saveChannelDir, `${safeName}.mp4`);
       const saveM4aPath = path.join(saveChannelDir, `${safeName}.m4a`);
-      if (fs.existsSync(workVideoPath) && this.config.workingDir !== this.config.videoSaveDir) {
+      if (!isLocal && fs.existsSync(workVideoPath) && this.config.workingDir !== this.config.videoSaveDir) {
         try {
           // Handle cross-device moves by copy+delete
           fs.copyFileSync(workVideoPath, savePath);
@@ -568,7 +746,7 @@ export class Pipeline extends EventEmitter {
           // Keep working path
         }
       }
-      if (this.config.processing.keepAudio && fs.existsSync(m4aPath) && m4aPath !== saveM4aPath) {
+      if (!isLocal && this.config.processing.keepAudio && fs.existsSync(m4aPath) && m4aPath !== saveM4aPath) {
         try {
           fs.copyFileSync(m4aPath, saveM4aPath);
           fs.unlinkSync(m4aPath);

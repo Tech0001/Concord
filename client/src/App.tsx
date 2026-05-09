@@ -12,7 +12,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import NotFound from "@/pages/not-found";
-import Home from "@/pages/Home";
 import Pipeline from "@/pages/Pipeline";
 import Library from "@/pages/Library";
 import Search from "@/pages/Search";
@@ -23,7 +22,6 @@ import {
   Activity,
   Bookmark,
   Database,
-  Download,
   Map as MapIcon,
   Moon,
   Search as SearchIcon,
@@ -33,12 +31,11 @@ import {
 const MapPage = lazy(() => import("@/pages/Map"));
 
 const NAV_ITEMS = [
-  { href: "/", label: "Download", icon: Download },
-  { href: "/pipeline", label: "Pipeline", icon: Activity },
   { href: "/library", label: "Library", icon: Database },
   { href: "/search", label: "Search", icon: SearchIcon },
   { href: "/clips", label: "Clips", icon: Bookmark },
   { href: "/map", label: "Map", icon: MapIcon },
+  { href: "/pipeline", label: "Pipeline", icon: Activity },
 ] as const;
 
 function TopBar() {
@@ -49,11 +46,11 @@ function TopBar() {
     <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <div className="mx-auto flex h-12 max-w-7xl items-center gap-6 px-4">
         <div className="flex items-center gap-2">
-          <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-foreground text-[10px] font-semibold text-background tracking-tight">
-            YR
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-foreground text-[11px] font-semibold text-background tracking-tight">
+            C
           </span>
           <span className="text-sm font-semibold tracking-tight">
-            YouTube Ripper
+            Concord
           </span>
         </div>
         <nav className="flex flex-1 items-center gap-1 text-sm">
@@ -105,7 +102,7 @@ function TopBar() {
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
+      <Route path="/" component={Library} />
       <Route path="/pipeline" component={Pipeline} />
       <Route path="/library" component={Library} />
       <Route path="/search" component={Search} />

@@ -11,7 +11,11 @@ injectThemes();
   try {
     const root = document.documentElement;
 
-    const storedMode = localStorage.getItem("yt-ripper-theme");
+    // Read the new keys, falling back to the legacy "yt-ripper-*" names so
+    // existing users keep their persisted theme + light/dark choice across
+    // the rename.
+    const storedMode = localStorage.getItem("concord-theme")
+      ?? localStorage.getItem("yt-ripper-theme");
     const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
     const mode = storedMode === "dark" || storedMode === "light"
       ? storedMode
@@ -19,7 +23,8 @@ injectThemes();
     root.classList.toggle("dark", mode === "dark");
     root.style.colorScheme = mode;
 
-    const storedName = localStorage.getItem("yt-ripper-theme-name");
+    const storedName = localStorage.getItem("concord-theme-name")
+      ?? localStorage.getItem("yt-ripper-theme-name");
     const name = storedName && themes.includes(storedName) ? storedName : DEFAULT_THEME;
     if (name !== DEFAULT_THEME) {
       root.classList.add(`theme-${name}`);
