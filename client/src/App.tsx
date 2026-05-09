@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { Switch, Route, Link, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -23,10 +24,13 @@ import {
   Bookmark,
   Database,
   Download,
+  Map as MapIcon,
   Moon,
   Search as SearchIcon,
   Sun,
 } from "lucide-react";
+
+const MapPage = lazy(() => import("@/pages/Map"));
 
 const NAV_ITEMS = [
   { href: "/", label: "Download", icon: Download },
@@ -34,6 +38,7 @@ const NAV_ITEMS = [
   { href: "/library", label: "Library", icon: Database },
   { href: "/search", label: "Search", icon: SearchIcon },
   { href: "/clips", label: "Clips", icon: Bookmark },
+  { href: "/map", label: "Map", icon: MapIcon },
 ] as const;
 
 function TopBar() {
@@ -105,6 +110,11 @@ function Router() {
       <Route path="/library" component={Library} />
       <Route path="/search" component={Search} />
       <Route path="/clips" component={Clips} />
+      <Route path="/map">
+        <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading map...</div>}>
+          <MapPage />
+        </Suspense>
+      </Route>
       <Route component={NotFound} />
     </Switch>
   );

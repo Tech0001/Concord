@@ -35,6 +35,26 @@ interface TranscriptSegment {
   text: string;
 }
 
+interface VideoStreamInfo {
+  codec: string | null;
+  codecLong: string | null;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  container: string | null;
+  fileSizeMb: number | null;
+}
+
+function codecDisplayName(codec: string | null): string {
+  if (!codec) return "";
+  const lc = codec.toLowerCase();
+  if (lc.includes("av1") || lc.includes("av01")) return "AV1";
+  if (lc.includes("vp9")) return "VP9";
+  if (lc.includes("h264") || lc.includes("avc")) return "H.264";
+  if (lc.includes("hevc") || lc.includes("h265")) return "HEVC";
+  return codec.toUpperCase();
+}
+
 interface RelatedClip {
   id: string;
   video_id: string;
@@ -108,6 +128,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
   const transcriptListRef = useRef<HTMLDivElement | null>(null);
   const segmentRefs = useRef<Record<number, HTMLButtonElement | null>>({});
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  const [videoInfo, setVideoInfo] = useState<VideoStreamInfo | null>(null);
   const [loadingSegments, setLoadingSegments] = useState(false);
   const [segmentError, setSegmentError] = useState("");
   const [activeSeconds, setActiveSeconds] = useState(initialSeconds);
@@ -179,10 +200,15 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
           "GET",
           `/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/transcript?t=${Date.now()}`,
         );
-        const data = await response.json() as { segments?: TranscriptSegment[]; notes?: string };
+        const data = await response.json() as {
+          segments?: TranscriptSegment[];
+          notes?: string;
+          video?: VideoStreamInfo | null;
+        };
         setSegments(data.segments || []);
         setNotes(data.notes || "");
         setNotesStatus("idle");
+        setVideoInfo(data.video ?? null);
       } catch (error: any) {
         setSegments([]);
         setSegmentError(error.message || "Could not load transcript timestamps");
@@ -547,6 +573,23 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                 {!!video.word_count && <Badge variant="outline">{video.word_count} words</Badge>}
                 {video.video_path && <Badge variant="outline">video</Badge>}
                 {video.md_path && <Badge variant="outline">transcript</Badge>}
+                {videoInfo?.codec && (
+                  <Badge
+                    variant="secondary"
+                    title={[
+                      videoInfo.codecLong || codecDisplayName(videoInfo.codec),
+                      videoInfo.width && videoInfo.height ? `${videoInfo.width}×${videoInfo.height}` : "",
+                      videoInfo.fps ? `${videoInfo.fps} fps` : "",
+                      videoInfo.container ? `.${videoInfo.container}` : "",
+                    ].filter(Boolean).join(" · ")}
+                  >
+                    {codecDisplayName(videoInfo.codec)}
+                    {videoInfo.height ? ` ${videoInfo.height}p` : ""}
+                  </Badge>
+                )}
+                {videoInfo?.fileSizeMb != null && (
+                  <Badge variant="outline">{videoInfo.fileSizeMb} MB</Badge>
+                )}
               </div>
 
               <div className="rounded-md border">

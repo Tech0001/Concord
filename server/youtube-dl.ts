@@ -41,8 +41,12 @@ export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoIn
       // Using proper properties for youtube-dl-exec
       preferFreeFormats: true,
       // Adding cache dir to improve speed
-      cacheDir: './youtube-dl-cache'
-    });
+      cacheDir: './youtube-dl-cache',
+      // Without a JS runtime yt-dlp can't decode YouTube's player and falls
+      // back to the android_vr API, which only exposes H.264. Pointing it
+      // at the local node binary unlocks the full AV1/VP9 format list.
+      jsRuntimes: 'node',
+    } as Parameters<typeof youtubedl>[1]);
 
     return result as unknown as YouTubeDlVideoInfo;
   } catch (error) {
@@ -93,12 +97,20 @@ export async function downloadYouTubeVideo(
       // Enable all postprocessors
       embedSubs: false,
       // Additional debugging
-      verbose: true
-    });
+      verbose: true,
+      // Use Node as the JS runtime so yt-dlp can decode YouTube's player
+      // and see AV1/VP9 streams (otherwise falls back to H.264-only API).
+      jsRuntimes: 'node',
+    } as Parameters<typeof youtubedl>[1]);
 
     if (!downloader.stdout || !downloader.stderr) {
       throw new Error("Failed to create download process");
     }
+
+    // youtube-dl-exec auto-rejects on non-zero exit. We track failure via
+    // the "exit" event below; swallow this rejection to prevent an
+    // unhandled-promise crash when YouTube returns a 5xx mid-download.
+    Promise.resolve(downloader).catch(() => {});
 
     // Parse progress information from stdout
     downloader.stdout.on("data", (data: Buffer) => {

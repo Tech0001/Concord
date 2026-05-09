@@ -66,8 +66,20 @@ interface Config {
   checkIntervalMinutes: number;
   skipShorts: boolean;
   videoQuality: string;
+  videoCodec: string;
   transcription: { model: string; language: string; device: string };
   processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean };
+}
+
+const CODEC_OPTIONS: { value: string; label: string }[] = [
+  { value: "any",  label: "Auto (largest available)" },
+  { value: "av01", label: "AV1 (smallest, modern)" },
+  { value: "vp9",  label: "VP9 (small, broad support)" },
+  { value: "avc1", label: "H.264 (universal, largest)" },
+];
+
+function codecLabel(value: string): string {
+  return CODEC_OPTIONS.find(o => o.value === value)?.label || value;
 }
 
 interface QueueData {
@@ -88,6 +100,8 @@ export default function PipelineStatus() {
   const [videoSaveDir, setVideoSaveDir] = useState("");
   const [transcriptDir, setTranscriptDir] = useState("");
   const [videoQuality, setVideoQuality] = useState("1080");
+  const [videoCodec, setVideoCodec] = useState("any");
+  const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
 
   // Download state (same pattern as main page)
   const [videoData, setVideoData] = useState<VideoInfo | null>(null);
@@ -148,6 +162,8 @@ export default function PipelineStatus() {
       setVideoSaveDir(c.videoSaveDir || "");
       setTranscriptDir(c.transcriptDir || "");
       setVideoQuality(c.videoQuality || "1080");
+      setVideoCodec(c.videoCodec || "any");
+      setTranscriptionModel(c.transcription?.model || "large-v3");
     } catch {}
   };
 
@@ -243,10 +259,15 @@ export default function PipelineStatus() {
       videoSaveDir,
       transcriptDir,
       videoQuality,
+      videoCodec,
+      transcription: {
+        ...config.transcription,
+        model: transcriptionModel,
+      },
     });
     setEditDir(false);
     fetchConfig();
-    toast({ title: "Directories updated" });
+    toast({ title: "Pipeline settings updated" });
   };
 
   const statusBadge = (status: string) => {
@@ -355,6 +376,35 @@ export default function PipelineStatus() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <label className="text-muted-foreground">Video codec</label>
+                <Select value={videoCodec} onValueChange={setVideoCodec}>
+                  <SelectTrigger className="h-8">
+                    <SelectValue placeholder="Codec" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CODEC_OPTIONS.map(option => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <label className="text-muted-foreground">Transcription model</label>
+                <Select value={transcriptionModel} onValueChange={setTranscriptionModel}>
+                  <SelectTrigger className="h-8">
+                    <SelectValue placeholder="Model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="nvidia/parakeet-tdt-0.6b-v3">parakeet-v3 (multilingual, fastest)</SelectItem>
+                    <SelectItem value="large-v3">whisper large-v3 (multilingual)</SelectItem>
+                    <SelectItem value="large-v3-turbo">whisper turbo</SelectItem>
+                    <SelectItem value="medium">whisper medium</SelectItem>
+                    <SelectItem value="small">whisper small</SelectItem>
+                    <SelectItem value="tiny">whisper tiny</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <Button size="sm" onClick={saveDirs}>Save</Button>
             </>
           ) : (
@@ -367,6 +417,10 @@ export default function PipelineStatus() {
               <code className="font-mono text-foreground">{config?.transcriptDir}</code>
               <span className="text-muted-foreground">Download quality</span>
               <code className="font-mono text-foreground">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code>
+              <span className="text-muted-foreground">Video codec</span>
+              <code className="font-mono text-foreground">{codecLabel(config?.videoCodec || "any")}</code>
+              <span className="text-muted-foreground">Transcription model</span>
+              <code className="font-mono text-foreground">{config?.transcription?.model || "large-v3"}</code>
             </div>
           )}
         </CardContent>

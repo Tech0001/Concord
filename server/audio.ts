@@ -148,3 +148,73 @@ export function getMediaDuration(filePath: string): Promise<number> {
     });
   });
 }
+
+export interface VideoStreamInfo {
+  codec: string | null;       // e.g. "av1", "vp9", "h264"
+  codecLong: string | null;   // friendlier name from ffprobe
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  container: string | null;   // file extension
+  fileSizeMb: number | null;
+}
+
+/**
+ * Probe a media file for its primary video stream codec, resolution, fps,
+ * container, and on-disk size.
+ */
+export async function getVideoStreamInfo(filePath: string): Promise<VideoStreamInfo> {
+  const ext = filePath.split(".").pop()?.toLowerCase() ?? null;
+  let fileSizeMb: number | null = null;
+  try {
+    const stat = (await import("fs")).statSync(filePath);
+    fileSizeMb = Math.round((stat.size / (1024 * 1024)) * 10) / 10;
+  } catch {}
+
+  return new Promise((resolve, reject) => {
+    const args = [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=codec_name,codec_long_name,width,height,r_frame_rate",
+      "-of", "json",
+      filePath,
+    ];
+    const proc = spawn("ffprobe", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    proc.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        // ffprobe failed: still return container + file size so the drawer
+        // can show something useful.
+        return resolve({ codec: null, codecLong: null, width: null, height: null, fps: null, container: ext, fileSizeMb });
+      }
+      try {
+        const parsed = JSON.parse(stdout);
+        const stream = (parsed.streams && parsed.streams[0]) || {};
+        const fpsRaw = String(stream.r_frame_rate || "");
+        let fps: number | null = null;
+        if (fpsRaw.includes("/")) {
+          const [num, den] = fpsRaw.split("/").map(Number);
+          if (Number.isFinite(num) && Number.isFinite(den) && den > 0) {
+            fps = Math.round((num / den) * 100) / 100;
+          }
+        } else if (fpsRaw) {
+          const n = Number(fpsRaw);
+          if (Number.isFinite(n)) fps = n;
+        }
+        resolve({
+          codec: stream.codec_name || null,
+          codecLong: stream.codec_long_name || null,
+          width: stream.width ?? null,
+          height: stream.height ?? null,
+          fps,
+          container: ext,
+          fileSizeMb,
+        });
+      } catch (err) {
+        reject(new Error(`Failed to parse ffprobe output: ${(err as Error).message}`));
+      }
+    });
+    proc.on("error", (err) => reject(new Error(`Failed to start ffprobe: ${err.message}`)));
+  });
+}
