@@ -16,7 +16,7 @@ import {
   Play, Square, RefreshCw, Plus, Trash2, Activity,
   CheckCircle, XCircle, Clock, AlertCircle, Radio,
   FileText, Download, Mic, FileDown, Loader2, Archive, List,
-  HardDrive, RotateCcw, ChevronDown, FileAudio
+  HardDrive, RotateCcw, ChevronDown, FileAudio, FolderOpen, Globe
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -92,6 +92,7 @@ export default function PipelineStatus() {
   const [config, setConfig] = useState<Config | null>(null);
   const [newChannelName, setNewChannelName] = useState("");
   const [newChannelUrl, setNewChannelUrl] = useState("");
+  const [newChannelKind, setNewChannelKind] = useState<"youtube" | "folder">("youtube");
   const [archiving, setArchiving] = useState<Record<string, boolean>>({});
   const [retransModel, setRetransModel] = useState("large-v3");
   const [retranscribing, setRetranscribing] = useState<Record<string, boolean>>({});
@@ -178,8 +179,17 @@ export default function PipelineStatus() {
 
   const addChannel = async () => {
     if (!newChannelName || !newChannelUrl) return;
+    let url = newChannelUrl.trim();
+    if (newChannelKind === "folder" && !url.startsWith("file://")) {
+      // Normalize backslashes (Windows paths or pasted-from-doc text) to
+      // forward slashes, and add the leading "/" before a drive letter so
+      // "C:\Users\foo" becomes a valid file:///C:/Users/foo URL on every OS.
+      let p = url.replace(/\\/g, "/");
+      if (/^[A-Za-z]:/.test(p)) p = `/${p}`;
+      url = `file://${p}`;
+    }
     try {
-      await apiRequest("POST", "/api/pipeline/channels", { name: newChannelName, url: newChannelUrl });
+      await apiRequest("POST", "/api/pipeline/channels", { name: newChannelName, url });
       setNewChannelName(""); setNewChannelUrl("");
       fetchConfig(); fetchState();
       toast({ title: "Channel added" });
@@ -430,37 +440,92 @@ export default function PipelineStatus() {
       <Card>
         <CardHeader><CardTitle>Channels</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          {config?.channels.map(ch => (
-            <div key={ch.id} className="rounded-md border bg-muted/30 px-2 py-2 space-y-1">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <Switch checked={ch.enabled} onCheckedChange={v => toggleChannel(ch.id, v)}/>
-                  <span className="font-medium text-sm truncate">{ch.name}</span>
+          {config?.channels.map(ch => {
+            const isLocal = ch.url.startsWith("file://");
+            const displayUrl = isLocal
+              ? decodeURIComponent(ch.url.replace(/^file:\/\//, ""))
+              : ch.url;
+            return (
+              <div key={ch.id} className="rounded-md border bg-muted/30 px-2 py-2 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Switch checked={ch.enabled} onCheckedChange={v => toggleChannel(ch.id, v)}/>
+                    {isLocal
+                      ? <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" aria-label="Local folder channel" />
+                      : <Globe className="h-3.5 w-3.5 text-muted-foreground" aria-label="YouTube channel" />}
+                    <span className="font-medium text-sm truncate">{ch.name}</span>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm" variant="outline"
+                      onClick={() => archiveChannel(ch.id)}
+                      disabled={archiving[ch.id]}
+                    >
+                      {archiving[ch.id] ? <Loader2 className="h-3 w-3 animate-spin"/> : <Archive className="h-3 w-3"/>}
+                      {isLocal ? "Rescan" : "Full Scan"}
+                    </Button>
+                    <Button size="icon" variant="ghost" onClick={() => removeChannel(ch.id)} aria-label="Remove channel">
+                      <Trash2 className="h-4 w-4 text-destructive"/>
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex gap-1">
-                  <Button
-                    size="sm" variant="outline"
-                    onClick={() => archiveChannel(ch.id)}
-                    disabled={archiving[ch.id]}
-                  >
-                    {archiving[ch.id] ? <Loader2 className="h-3 w-3 animate-spin"/> : <Archive className="h-3 w-3"/>}
-                    Full Scan
-                  </Button>
-                  <Button size="icon" variant="ghost" onClick={() => removeChannel(ch.id)} aria-label="Remove channel">
-                    <Trash2 className="h-4 w-4 text-destructive"/>
-                  </Button>
-                </div>
+                <div className="text-xs text-muted-foreground truncate font-mono">{displayUrl}</div>
+                {archiveMsg[ch.id] && <div className="text-xs text-muted-foreground">{archiveMsg[ch.id]}</div>}
               </div>
-              <div className="text-xs text-muted-foreground truncate font-mono">{ch.url}</div>
-              {archiveMsg[ch.id] && <div className="text-xs text-muted-foreground">{archiveMsg[ch.id]}</div>}
-            </div>
-          ))}
+            );
+          })}
           {(!config?.channels.length) && <p className="text-xs text-muted-foreground">No channels.</p>}
 
-          <div className="flex gap-2 pt-2">
-            <Input placeholder="Name" value={newChannelName} onChange={e => setNewChannelName(e.target.value)} className="flex-1"/>
-            <Input placeholder="Channel URL" value={newChannelUrl} onChange={e => setNewChannelUrl(e.target.value)} className="flex-[2] font-mono text-xs"/>
-            <Button size="sm" onClick={addChannel} disabled={!newChannelName || !newChannelUrl}><Plus className="h-4 w-4"/>Add</Button>
+          <div className="space-y-2 pt-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Source</span>
+              <div className="inline-flex overflow-hidden rounded-md border">
+                <button
+                  type="button"
+                  onClick={() => setNewChannelKind("youtube")}
+                  className={`px-2.5 py-1 transition-colors ${
+                    newChannelKind === "youtube"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  YouTube channel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewChannelKind("folder")}
+                  className={`border-l px-2.5 py-1 transition-colors ${
+                    newChannelKind === "folder"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Local folder
+                </button>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Name"
+                value={newChannelName}
+                onChange={e => setNewChannelName(e.target.value)}
+                className="flex-1"
+              />
+              <Input
+                placeholder={newChannelKind === "folder" ? "/absolute/path/to/folder" : "https://www.youtube.com/@channel"}
+                value={newChannelUrl}
+                onChange={e => setNewChannelUrl(e.target.value)}
+                className="flex-[2] font-mono text-xs"
+              />
+              <Button size="sm" onClick={addChannel} disabled={!newChannelName || !newChannelUrl}>
+                <Plus className="h-4 w-4"/>Add
+              </Button>
+            </div>
+            {newChannelKind === "folder" && (
+              <p className="text-[11px] text-muted-foreground">
+                Paste an absolute path. The pipeline will scan it recursively for video and audio files. New files are picked up on the next check.
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>

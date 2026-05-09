@@ -65,7 +65,8 @@ interface ConfigResponse {
   transcription?: { model?: string };
 }
 
-const LIBRARY_SETTINGS_KEY = "youtube-ripper-library-settings-v1";
+const LIBRARY_SETTINGS_KEY = "concord-library-settings-v1";
+const LEGACY_LIBRARY_SETTINGS_KEY = "youtube-ripper-library-settings-v1";
 
 interface LibrarySettings {
   model?: string;
@@ -82,7 +83,9 @@ interface LibrarySettings {
 function loadLibrarySettings(): LibrarySettings {
   if (typeof window === "undefined") return {};
   try {
-    return JSON.parse(window.localStorage.getItem(LIBRARY_SETTINGS_KEY) || "{}") as LibrarySettings;
+    const raw = window.localStorage.getItem(LIBRARY_SETTINGS_KEY)
+      ?? window.localStorage.getItem(LEGACY_LIBRARY_SETTINGS_KEY);
+    return JSON.parse(raw || "{}") as LibrarySettings;
   } catch {
     return {};
   }
