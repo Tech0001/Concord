@@ -34,7 +34,7 @@ import {
   setVideoNotes,
   updateQueueStatus,
 } from "./db";
-import { copyAudioTrack } from "./audio";
+import { copyAudioTrack, getVideoStreamInfo } from "./audio";
 import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
 import path from "path";
 import fs from "fs";
@@ -985,7 +985,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(getTranscriptSearchIndexStats());
   });
 
-  app.get("/api/videos/library/:channelId/:videoId/transcript", (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
+  app.get("/api/videos/library/:channelId/:videoId/transcript", async (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
     try {
       res.setHeader("Cache-Control", "no-store");
       const entry = getQueueEntry(req.params.videoId, req.params.channelId);
@@ -993,11 +993,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Video not found" });
       }
 
+      // Probe the actual file for codec / resolution / size so the drawer
+      // can show a "Decoder" badge. Best-effort — if probing fails for any
+      // reason (file moved, codec unknown), the drawer just hides the badges.
+      let video = null;
+      if (entry.video_path && fs.existsSync(entry.video_path)) {
+        try {
+          video = await getVideoStreamInfo(entry.video_path);
+        } catch {}
+      }
+
       res.json({
         videoId: entry.video_id,
         channelId: entry.channel_id,
         segments: getTranscriptSegmentsForVideo(entry.video_id, entry.channel_id),
         notes: entry.notes ?? "",
+        video,
       });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Transcript load failed" });

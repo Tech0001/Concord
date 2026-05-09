@@ -51,6 +51,8 @@ export interface PipelineConfig {
   skipShorts: boolean;
   /** Video quality: "1080", "720", "480", "best" */
   videoQuality: string;
+  /** Preferred video codec: "av01" | "vp9" | "avc1" | "any" */
+  videoCodec: string;
   transcription: {
     model: string;
     language: string;
@@ -139,6 +141,7 @@ export class Pipeline extends EventEmitter {
       checkIntervalMinutes: 15,
       skipShorts: true,
       videoQuality: "1080",
+      videoCodec: "any",
       transcription: {
         model: "large-v3",
         language: "en",
@@ -168,6 +171,7 @@ export class Pipeline extends EventEmitter {
       checkIntervalMinutes: parseConfigNumber(stored.checkIntervalMinutes, defaults.checkIntervalMinutes),
       skipShorts: parseConfigBoolean(stored.skipShorts, defaults.skipShorts),
       videoQuality: stored.videoQuality || defaults.videoQuality,
+      videoCodec: stored.videoCodec || defaults.videoCodec,
       transcription: {
         model: stored["transcription.model"] || defaults.transcription.model,
         language: stored["transcription.language"] || defaults.transcription.language,
@@ -227,6 +231,7 @@ export class Pipeline extends EventEmitter {
       checkIntervalMinutes: config.checkIntervalMinutes,
       skipShorts: config.skipShorts,
       videoQuality: config.videoQuality,
+      videoCodec: config.videoCodec,
       "transcription.model": config.transcription.model,
       "transcription.language": config.transcription.language,
       "transcription.device": config.transcription.device,
@@ -648,25 +653,40 @@ export class Pipeline extends EventEmitter {
     }
   }
 
-  /** Build yt-dlp format string from config. */
+  /** Build a yt-dlp format string from the configured resolution + codec.
+   *  Falls back through other codecs/containers so we always get something
+   *  even if the chosen codec isn't published for a given video. */
   private buildFormatString(): string {
     const q = this.config.videoQuality;
-    if (q === "best") {
-      return [
-        "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]",
-        "best[ext=mp4][vcodec^=avc1]",
-        "bestvideo[ext=mp4]+bestaudio[ext=m4a]",
-        "best",
-      ].join("/");
+    const codec = this.config.videoCodec || "any";
+    const heightCap = q === "best" ? "" : `[height<=${parseInt(q) || 1080}]`;
+
+    // Per-codec selectors. AV1/VP9 ship in WebM, H.264 in MP4.
+    const av1   = `bestvideo${heightCap}[vcodec^=av01]+bestaudio[ext=m4a]/bestvideo${heightCap}[vcodec^=av01]+bestaudio`;
+    const vp9   = `bestvideo${heightCap}[vcodec^=vp9]+bestaudio[ext=m4a]/bestvideo${heightCap}[vcodec^=vp9]+bestaudio`;
+    const avc1  = `bestvideo${heightCap}[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best${heightCap}[ext=mp4][vcodec^=avc1]`;
+    const anyMp4 = `bestvideo${heightCap}[ext=mp4]+bestaudio[ext=m4a]`;
+    const anyAny = `best${heightCap}/best`;
+
+    let order: string[];
+    switch (codec) {
+      case "av01":
+        order = [av1, vp9, avc1, anyMp4, anyAny];
+        break;
+      case "vp9":
+        order = [vp9, av1, avc1, anyMp4, anyAny];
+        break;
+      case "avc1":
+        order = [avc1, anyMp4, vp9, av1, anyAny];
+        break;
+      default: // "any" — let yt-dlp pick the best by size/bitrate
+        order = [
+          `bestvideo${heightCap}+bestaudio[ext=m4a]/bestvideo${heightCap}+bestaudio`,
+          anyMp4,
+          anyAny,
+        ];
     }
-    const height = parseInt(q) || 1080;
-    return [
-      `bestvideo[height<=${height}][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]`,
-      `best[height<=${height}][ext=mp4][vcodec^=avc1]`,
-      `bestvideo[height<=${height}][ext=mp4]+bestaudio[ext=m4a]`,
-      `best[height<=${height}]`,
-      "best",
-    ].join("/");
+    return order.join("/");
   }
 
   // ---- Helper: Download video ----
@@ -687,7 +707,15 @@ export class Pipeline extends EventEmitter {
         limitRate: "3M",
         retries: 10,
         noWarnings: true,
-      });
+        // See youtube-dl.ts — unlocks AV1/VP9 streams via Node JS runtime.
+        jsRuntimes: "node",
+      } as Parameters<typeof youtubedl>[1]);
+
+      // youtube-dl-exec returns a Promise that auto-rejects on non-zero
+      // exit. We already handle the exit via the "close" event below, so
+      // swallow the promise rejection here to avoid an unhandled rejection
+      // crashing the dev server when YouTube returns a 5xx mid-download.
+      Promise.resolve(dl).catch(() => {});
 
       const parsePct = (text: string) => {
         const m = text.match(/(\d+\.\d+)%/);
