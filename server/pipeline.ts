@@ -654,11 +654,13 @@ export class Pipeline extends EventEmitter {
   }
 
   /** Build a yt-dlp format string from the configured resolution + codec.
-   *  Falls back through other codecs/containers so we always get something
-   *  even if the chosen codec isn't published for a given video. */
-  private buildFormatString(): string {
+   *  `codecOverride` lets the auto-fallback retry logic force a different
+   *  codec without mutating the user's saved preference. Falls back through
+   *  other codecs/containers so we always get something even if the chosen
+   *  codec isn't published for a given video. */
+  private buildFormatString(codecOverride?: string): string {
     const q = this.config.videoQuality;
-    const codec = this.config.videoCodec || "any";
+    const codec = codecOverride || this.config.videoCodec || "any";
     const heightCap = q === "best" ? "" : `[height<=${parseInt(q) || 1080}]`;
 
     // Per-codec selectors. AV1/VP9 ship in WebM, H.264 in MP4.
@@ -691,17 +693,52 @@ export class Pipeline extends EventEmitter {
 
   // ---- Helper: Download video ----
 
-  private downloadVideo(
+  private async downloadVideo(
     videoId: string,
     outputPath: string,
     onProgress: (pct: number) => void,
   ): Promise<void> {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
 
+    // If the user's preferred codec hits HTTP 5xx mid-download (a known
+    // YouTube CDN issue on specific AV1 transcodes), automatically retry
+    // with the next codec down. Audio works in those failures, only the
+    // video fragment URLs are bad — so a different codec usually succeeds.
+    const chain = this.codecFallbackChain();
+    let lastErr: Error | null = null;
+    for (let i = 0; i < chain.length; i++) {
+      const codec = chain[i];
+      if (i > 0) {
+        this.cleanPartialFiles(outputPath);
+        console.log(
+          `[pipeline] Retrying ${videoId} with codec="${codec}" after CDN 5xx`,
+        );
+      }
+      try {
+        await this.runYtdlp(videoId, outputPath, onProgress, codec);
+        return;
+      } catch (err) {
+        lastErr = err as Error;
+        const cdn5xx = (err as { cdn5xx?: boolean }).cdn5xx === true;
+        if (!cdn5xx || i === chain.length - 1) throw err;
+      }
+    }
+    if (lastErr) throw lastErr;
+  }
+
+  /** Single yt-dlp invocation with one specific codec preference. */
+  private runYtdlp(
+    videoId: string,
+    outputPath: string,
+    onProgress: (pct: number) => void,
+    codec: string,
+  ): Promise<void> {
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+
     return new Promise((resolve, reject) => {
       const dl = youtubedl.exec(url, {
         output: outputPath,
-        format: this.buildFormatString(),
+        format: this.buildFormatString(codec),
         mergeOutputFormat: "mp4",
         cacheDir: "./youtube-dl-cache",
         limitRate: "3M",
@@ -722,29 +759,75 @@ export class Pipeline extends EventEmitter {
         if (m) onProgress(Math.min(parseFloat(m[1]), 100));
       };
 
+      let combinedOutput = "";
+
       dl.stdout?.on("data", (d: Buffer) => {
         const text = d.toString();
+        combinedOutput += text;
         console.log(`yt-dlp stdout: ${text.trimEnd()}`);
         parsePct(text);
       });
       dl.stderr?.on("data", (d: Buffer) => {
         const text = d.toString();
+        combinedOutput += text;
         console.error(`yt-dlp stderr: ${text.trimEnd()}`);
         parsePct(text);
       });
 
       dl.on("close", (code) => {
-        console.log(`[pipeline] yt-dlp exited with code ${code} for ${videoId}`);
+        console.log(`[pipeline] yt-dlp exited with code ${code} for ${videoId} (codec=${codec})`);
         if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
           onProgress(100);
           resolve();
         } else {
-          reject(new Error(`Download failed (exit ${code})`));
+          // Detect the YouTube-CDN-mid-download failure mode so the outer
+          // retry loop knows whether a different codec is worth trying.
+          const cdn5xx = /HTTP Error 5\d\d/.test(combinedOutput)
+            || /Giving up after \d+ retries/.test(combinedOutput);
+          const err = new Error(`Download failed (exit ${code})`) as Error & { cdn5xx?: boolean };
+          err.cdn5xx = cdn5xx;
+          reject(err);
         }
       });
 
       dl.on("error", reject);
     });
+  }
+
+  /** Order of codecs to try when the user's choice fails with HTTP 5xx.
+   *  Always starts with the user's pick, then steps down to broader
+   *  alternatives. If the user explicitly chose H.264 or "any", there's
+   *  no useful alternative — return just that one. */
+  private codecFallbackChain(): string[] {
+    const codec = this.config.videoCodec || "any";
+    switch (codec) {
+      case "av01": return ["av01", "vp9", "avc1"];
+      case "vp9":  return ["vp9", "avc1"];
+      case "avc1": return ["avc1"];
+      default:     return ["any"];
+    }
+  }
+
+  /** yt-dlp writes per-format intermediate files like `name.f398.mp4`,
+   *  `name.f140.m4a`, and `*.part` next to the merged output. After a
+   *  failed attempt, these stick around and yt-dlp's `--continue` logic
+   *  will try to resume the broken AV1 URL on the next invocation. Wipe
+   *  them so the codec swap actually takes effect. */
+  private cleanPartialFiles(outputPath: string): void {
+    const dir = path.dirname(outputPath);
+    const base = path.basename(outputPath, path.extname(outputPath));
+    if (!fs.existsSync(dir)) return;
+    try {
+      for (const file of fs.readdirSync(dir)) {
+        if (file === path.basename(outputPath)) continue;
+        if (file.startsWith(`${base}.f`) || file.startsWith(`${base}.`) && file.endsWith(".part")) {
+          try {
+            fs.unlinkSync(path.join(dir, file));
+            console.log(`[pipeline] Cleaned partial: ${file}`);
+          } catch {}
+        }
+      }
+    } catch {}
   }
 
   /** Re-transcribe a previously processed video with a different model. */
