@@ -78,6 +78,14 @@ const CODEC_OPTIONS: { value: string; label: string }[] = [
   { value: "avc1", label: "H.264 (universal, largest)" },
 ];
 
+function transcribingLabel(model: string | undefined): string {
+  if (!model) return "Transcribing…";
+  const m = model.toLowerCase();
+  if (m.includes("parakeet")) return `Transcribing with Parakeet (${model.split("/").pop()}) on CUDA…`;
+  if (m.startsWith("fluid-") || m.includes("fluidaudio")) return "Transcribing with FluidAudio on Apple Neural Engine…";
+  return `Transcribing with faster-whisper (${model}) on CUDA…`;
+}
+
 function codecLabel(value: string): string {
   return CODEC_OPTIONS.find(o => o.value === value)?.label || value;
 }
@@ -546,7 +554,7 @@ export default function PipelineStatus() {
                 )}
                 {job.status === "downloading" && <p className="text-xs text-muted-foreground mt-1">Downloading video with yt-dlp…</p>}
                 {job.status === "extracting_audio" && <p className="text-xs text-muted-foreground mt-1">Extracting audio with ffmpeg (16kHz mono WAV)…</p>}
-                {job.status === "transcribing" && <p className="text-xs text-muted-foreground mt-1">Transcribing with faster-whisper on CUDA…</p>}
+                {job.status === "transcribing" && <p className="text-xs text-muted-foreground mt-1">{transcribingLabel(config?.transcription?.model)}</p>}
                 {job.status === "saving_md" && <p className="text-xs text-muted-foreground mt-1">Saving transcript as markdown…</p>}
               </div>
             ))}

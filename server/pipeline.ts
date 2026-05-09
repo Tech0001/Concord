@@ -236,6 +236,30 @@ export class Pipeline extends EventEmitter {
     super();
     this.config = this.loadConfig();
     this.persistConfig(this.config);
+    this.recoverStuckJobs();
+  }
+
+  /** Reset any rows left in an in-flight status (downloading, transcribing,
+   *  etc.) back to "pending" so they get re-picked-up on the next scan.
+   *  Runs once on pipeline boot. Safe because the pipeline is the only
+   *  process that drives those statuses — if we just booted, nothing else
+   *  is in the middle of anything. Without this, rows stay stuck forever
+   *  any time the server crashes or the user closes the app mid-job. */
+  private recoverStuckJobs(): void {
+    const stuck = ["downloading", "extracting_audio", "transcribing", "saving_md"];
+    const placeholders = stuck.map(() => "?").join(",");
+    const result = getDb()
+      .prepare(`
+        UPDATE video_queue
+        SET status = 'pending', updated_at = datetime('now')
+        WHERE status IN (${placeholders})
+      `)
+      .run(...stuck);
+    if (result.changes > 0) {
+      console.log(
+        `[pipeline] Recovered ${result.changes} stuck job${result.changes === 1 ? "" : "s"} from a previous run`,
+      );
+    }
   }
 
   // ---- Config ----
