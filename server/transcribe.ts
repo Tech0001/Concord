@@ -74,7 +74,13 @@ export function transcribeAudio(
   } = options;
 
   const parakeet = isParakeetModel(model);
-  const resolvedPythonPath = pythonPath || defaultPythonPath(parakeet);
+  // The pipeline config stores a single `pythonVenv` (the whisper venv).
+  // Parakeet needs a separate Python with NeMo installed, so when the model
+  // is parakeet we always route to the parakeet venv and ignore the
+  // whisper-flavored override. PARAKEET_PYTHON env var can still customize.
+  const resolvedPythonPath = parakeet
+    ? defaultPythonPath(true)
+    : (pythonPath || defaultPythonPath(false));
   const scriptPath = path.join(
     process.cwd(),
     "server",

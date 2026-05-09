@@ -88,6 +88,7 @@ export default function PipelineStatus() {
   const [videoSaveDir, setVideoSaveDir] = useState("");
   const [transcriptDir, setTranscriptDir] = useState("");
   const [videoQuality, setVideoQuality] = useState("1080");
+  const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
 
   // Download state (same pattern as main page)
   const [videoData, setVideoData] = useState<VideoInfo | null>(null);
@@ -148,6 +149,7 @@ export default function PipelineStatus() {
       setVideoSaveDir(c.videoSaveDir || "");
       setTranscriptDir(c.transcriptDir || "");
       setVideoQuality(c.videoQuality || "1080");
+      setTranscriptionModel(c.transcription?.model || "large-v3");
     } catch {}
   };
 
@@ -243,10 +245,14 @@ export default function PipelineStatus() {
       videoSaveDir,
       transcriptDir,
       videoQuality,
+      transcription: {
+        ...config.transcription,
+        model: transcriptionModel,
+      },
     });
     setEditDir(false);
     fetchConfig();
-    toast({ title: "Directories updated" });
+    toast({ title: "Pipeline settings updated" });
   };
 
   const statusBadge = (status: string) => {
@@ -355,6 +361,22 @@ export default function PipelineStatus() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <label className="text-muted-foreground">Transcription model</label>
+                <Select value={transcriptionModel} onValueChange={setTranscriptionModel}>
+                  <SelectTrigger className="h-8">
+                    <SelectValue placeholder="Model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="nvidia/parakeet-tdt-0.6b-v3">parakeet-v3 (multilingual, fastest)</SelectItem>
+                    <SelectItem value="large-v3">whisper large-v3 (multilingual)</SelectItem>
+                    <SelectItem value="large-v3-turbo">whisper turbo</SelectItem>
+                    <SelectItem value="medium">whisper medium</SelectItem>
+                    <SelectItem value="small">whisper small</SelectItem>
+                    <SelectItem value="tiny">whisper tiny</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <Button size="sm" onClick={saveDirs}>Save</Button>
             </>
           ) : (
@@ -367,6 +389,8 @@ export default function PipelineStatus() {
               <code className="font-mono text-foreground">{config?.transcriptDir}</code>
               <span className="text-muted-foreground">Download quality</span>
               <code className="font-mono text-foreground">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code>
+              <span className="text-muted-foreground">Transcription model</span>
+              <code className="font-mono text-foreground">{config?.transcription?.model || "large-v3"}</code>
             </div>
           )}
         </CardContent>

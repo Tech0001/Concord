@@ -13,6 +13,9 @@ import {
   deleteTranscriptClip,
   enqueueVideo,
   getChannelQueue,
+  getClipGraph,
+  getClipMapLayout,
+  type GraphEdgeType,
   getClipLinks,
   getQueueEntry,
   getQueueEntryByVideoId,
@@ -26,6 +29,7 @@ import {
   removeClipLink,
   renameClipTag,
   searchTranscriptSegments,
+  saveClipMapLayout,
   setClipTags,
   setVideoNotes,
   updateQueueStatus,
@@ -1137,6 +1141,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed to list clips" });
+    }
+  });
+
+  app.get("/api/clips/graph", (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const tagsParam = typeof req.query.tags === "string" ? req.query.tags : "";
+      const edgeTypesParam = typeof req.query.edgeTypes === "string" ? req.query.edgeTypes : "";
+      const tags = tagsParam.split(",").map(t => t.trim()).filter(Boolean);
+      const knownEdgeTypes = new Set<GraphEdgeType>(["manual", "shared_tag", "same_video"]);
+      const edgeTypes = edgeTypesParam
+        .split(",")
+        .map(t => t.trim())
+        .filter((t): t is GraphEdgeType => knownEdgeTypes.has(t as GraphEdgeType));
+      const requestedLimit = Number(req.query.limit);
+      res.json(getClipGraph({
+        q: req.query.q ? String(req.query.q) : undefined,
+        channelId: req.query.channelId ? String(req.query.channelId) : undefined,
+        tags,
+        edgeTypes: edgeTypes.length ? edgeTypes : undefined,
+        limit: Number.isFinite(requestedLimit) ? requestedLimit : undefined,
+      }));
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to build graph" });
+    }
+  });
+
+  app.get("/api/clips/graph/layout", (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const mapKey = typeof req.query.mapKey === "string" ? req.query.mapKey.trim() : "";
+      if (!mapKey) return res.status(400).json({ error: "mapKey is required" });
+      res.json({ nodes: getClipMapLayout(mapKey) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to load graph layout" });
+    }
+  });
+
+  app.put("/api/clips/graph/layout", (req, res) => {
+    try {
+      const mapKey = String(req.body?.mapKey || "").trim();
+      const nodes = Array.isArray(req.body?.nodes) ? req.body.nodes : [];
+      if (!mapKey) return res.status(400).json({ error: "mapKey is required" });
+      const result = saveClipMapLayout(mapKey, nodes.map((node: any) => ({
+        nodeId: String(node.nodeId || ""),
+        x: Number(node.x),
+        y: Number(node.y),
+        width: Number(node.width),
+        height: Number(node.height),
+      })));
+      res.json({ success: true, ...result });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to save graph layout" });
     }
   });
 

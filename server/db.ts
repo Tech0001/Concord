@@ -101,6 +101,17 @@ const SCHEMA = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_clip_links_to ON clip_links(to_clip_id);
+
+  CREATE TABLE IF NOT EXISTS clip_map_layouts (
+    map_key    TEXT NOT NULL,
+    node_id    TEXT NOT NULL,
+    x          REAL NOT NULL,
+    y          REAL NOT NULL,
+    width      REAL NOT NULL,
+    height     REAL NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (map_key, node_id)
+  );
 `;
 
 export interface QueueEntry {
@@ -1183,6 +1194,345 @@ export function getClipLinks(clipId: string): ClipLinkWithClip[] {
     if (other) result.push({ ...link, direction: "incoming", other });
   }
   return result;
+}
+
+// ---- Clip graph (for /map) ----
+
+export type GraphEdgeType = "manual" | "shared_tag" | "same_video";
+
+export interface GraphNode {
+  id: string;
+  clipId: string;
+  videoId: string;
+  channelId: string;
+  channelName: string | null;
+  title: string;
+  uploadDate: string | null;
+  startSeconds: number;
+  endSeconds: number;
+  quote: string;
+  note: string | null;
+  tags: string[];
+  videoPath: string | null;
+  mdPath: string | null;
+  status: string;
+  isLive: number;
+  duration: number | null;
+  degree: number;
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: GraphEdgeType;
+  label: string;
+  weight: number;
+  tags?: string[];
+  manualKind?: ClipLinkKind;
+  note?: string | null;
+}
+
+export interface ClipGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  stats: {
+    nodeCount: number;
+    edgeCount: number;
+    tagCount: number;
+    manualEdgeCount: number;
+    sharedTagEdgeCount: number;
+    sameVideoEdgeCount: number;
+  };
+}
+
+export interface ClipMapLayoutNode {
+  nodeId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const ALL_GRAPH_EDGE_TYPES: GraphEdgeType[] = ["manual", "shared_tag", "same_video"];
+
+/** Tags whose membership exceeds this many candidate clips are skipped for
+ *  shared-tag edges so dense tags don't produce O(N²) noise. */
+const SHARED_TAG_DENSE_THRESHOLD = 20;
+/** Hard cap on total shared-tag edges in a single response. */
+const SHARED_TAG_MAX_EDGES = 1000;
+
+/**
+ * Layout-agnostic graph view of clips, tags, and links. Candidate clips are
+ * the first `limit` clips matching the same filter set as the Clips page
+ * (q, channelId, intersect tags with hierarchy). Edges are derived from:
+ *
+ *   - clip_links (manual, with kind label)
+ *   - clip_tags  (shared-tag pairs, dense tags skipped, deduped by pair)
+ *   - clip start_seconds within the same video (consecutive only)
+ */
+export function getClipGraph(filters: {
+  q?: string;
+  channelId?: string;
+  tags?: string[];
+  edgeTypes?: GraphEdgeType[];
+  limit?: number;
+} = {}): ClipGraph {
+  const limit = Math.min(Math.max(Math.floor(filters.limit ?? 150), 1), 500);
+  const requestedTypes = filters.edgeTypes && filters.edgeTypes.length
+    ? filters.edgeTypes.filter((t): t is GraphEdgeType => ALL_GRAPH_EDGE_TYPES.includes(t))
+    : ALL_GRAPH_EDGE_TYPES;
+  const edgeTypes = new Set<GraphEdgeType>(requestedTypes);
+
+  const { rows: clips } = listTranscriptClips({
+    q: filters.q,
+    channelId: filters.channelId,
+    tags: filters.tags,
+    limit,
+    offset: 0,
+  });
+
+  if (!clips.length) {
+    return {
+      nodes: [],
+      edges: [],
+      stats: {
+        nodeCount: 0,
+        edgeCount: 0,
+        tagCount: 0,
+        manualEdgeCount: 0,
+        sharedTagEdgeCount: 0,
+        sameVideoEdgeCount: 0,
+      },
+    };
+  }
+
+  const clipIds = clips.map(c => c.id);
+  const placeholders = clipIds.map(() => "?").join(",");
+  const db = getDb();
+  const edges: GraphEdge[] = [];
+  let manualEdgeCount = 0;
+  let sharedTagEdgeCount = 0;
+  let sameVideoEdgeCount = 0;
+
+  // Manual edges from clip_links. Symmetric kinds were stored as mirrored
+  // rows on insert, so we dedupe to one undirected edge per (pair, kind).
+  // Asymmetric kinds (follow_up, context) keep their direction.
+  if (edgeTypes.has("manual")) {
+    const links = db.prepare(`
+      SELECT * FROM clip_links
+      WHERE from_clip_id IN (${placeholders})
+        AND to_clip_id IN (${placeholders})
+    `).all(...clipIds, ...clipIds) as ClipLink[];
+
+    const seenSymmetric = new Set<string>();
+    for (const link of links) {
+      if (SYMMETRIC_LINK_KINDS.has(link.kind)) {
+        const [a, b] = link.from_clip_id < link.to_clip_id
+          ? [link.from_clip_id, link.to_clip_id]
+          : [link.to_clip_id, link.from_clip_id];
+        const key = `${a}|${b}|${link.kind}`;
+        if (seenSymmetric.has(key)) continue;
+        seenSymmetric.add(key);
+        edges.push({
+          id: `manual:${a}:${b}:${link.kind}`,
+          source: a,
+          target: b,
+          kind: "manual",
+          label: link.kind,
+          weight: 1,
+          manualKind: link.kind,
+          note: link.note,
+        });
+      } else {
+        edges.push({
+          id: `manual:${link.from_clip_id}:${link.to_clip_id}:${link.kind}`,
+          source: link.from_clip_id,
+          target: link.to_clip_id,
+          kind: "manual",
+          label: link.kind,
+          weight: 1,
+          manualKind: link.kind,
+          note: link.note,
+        });
+      }
+      manualEdgeCount += 1;
+    }
+  }
+
+  // Shared-tag edges. Group candidates by tag, generate undirected pairs,
+  // skip tags that match too many candidates (dense → O(N²) explosion),
+  // dedupe pairs across tags by accumulating tag set + weight.
+  if (edgeTypes.has("shared_tag")) {
+    const tagRows = db.prepare(`
+      SELECT clip_id, tag FROM clip_tags WHERE clip_id IN (${placeholders})
+    `).all(...clipIds) as { clip_id: string; tag: string }[];
+
+    const clipsByTag = new Map<string, string[]>();
+    for (const row of tagRows) {
+      const list = clipsByTag.get(row.tag);
+      if (list) list.push(row.clip_id);
+      else clipsByTag.set(row.tag, [row.clip_id]);
+    }
+
+    const sharedByPair = new Map<string, { weight: number; tags: Set<string> }>();
+    Array.from(clipsByTag.entries()).forEach(([tag, ids]) => {
+      if (ids.length > SHARED_TAG_DENSE_THRESHOLD) return;
+      for (let i = 0; i < ids.length; i += 1) {
+        for (let j = i + 1; j < ids.length; j += 1) {
+          const [a, b] = ids[i] < ids[j] ? [ids[i], ids[j]] : [ids[j], ids[i]];
+          const key = `${a}|${b}`;
+          const acc = sharedByPair.get(key);
+          if (acc) {
+            acc.weight += 1;
+            acc.tags.add(tag);
+          } else {
+            sharedByPair.set(key, { weight: 1, tags: new Set([tag]) });
+          }
+        }
+      }
+    });
+
+    const ranked = Array.from(sharedByPair.entries())
+      .sort((a, b) => b[1].weight - a[1].weight)
+      .slice(0, SHARED_TAG_MAX_EDGES);
+
+    for (const [key, acc] of ranked) {
+      const [source, target] = key.split("|");
+      const tagList = Array.from(acc.tags).sort();
+      const label = tagList.length === 1 ? tagList[0] : `${tagList.length} shared tags`;
+      edges.push({
+        id: `shared_tag:${source}:${target}`,
+        source,
+        target,
+        kind: "shared_tag",
+        label,
+        weight: acc.weight,
+        tags: tagList,
+      });
+      sharedTagEdgeCount += 1;
+    }
+  }
+
+  // Same-video adjacency. Within each (channel_id, video_id) bucket of
+  // candidate clips, sort by start time and connect consecutive pairs.
+  if (edgeTypes.has("same_video")) {
+    const byVideo = new Map<string, TranscriptClip[]>();
+    for (const clip of clips) {
+      const key = `${clip.channel_id}|${clip.video_id}`;
+      const list = byVideo.get(key);
+      if (list) list.push(clip);
+      else byVideo.set(key, [clip]);
+    }
+    Array.from(byVideo.values()).forEach(list => {
+      if (list.length < 2) return;
+      list.sort((a, b) => a.start_seconds - b.start_seconds);
+      for (let i = 0; i < list.length - 1; i += 1) {
+        const a = list[i];
+        const b = list[i + 1];
+        edges.push({
+          id: `same_video:${a.id}:${b.id}`,
+          source: a.id,
+          target: b.id,
+          kind: "same_video",
+          label: "same video",
+          weight: 1,
+        });
+        sameVideoEdgeCount += 1;
+      }
+    });
+  }
+
+  const degreeByClip = new Map<string, number>();
+  for (const edge of edges) {
+    degreeByClip.set(edge.source, (degreeByClip.get(edge.source) ?? 0) + 1);
+    degreeByClip.set(edge.target, (degreeByClip.get(edge.target) ?? 0) + 1);
+  }
+
+  const nodes: GraphNode[] = clips.map(c => ({
+    id: c.id,
+    clipId: c.id,
+    videoId: c.video_id,
+    channelId: c.channel_id,
+    channelName: c.channel_name,
+    title: c.title,
+    uploadDate: c.upload_date,
+    startSeconds: c.start_seconds,
+    endSeconds: c.end_seconds,
+    quote: c.quote,
+    note: c.note,
+    tags: c.tags,
+    videoPath: c.video_path,
+    mdPath: c.md_path,
+    status: c.status,
+    isLive: c.is_live,
+    duration: c.duration,
+    degree: degreeByClip.get(c.id) ?? 0,
+  }));
+
+  const tagSet = new Set<string>();
+  for (const node of nodes) {
+    for (const tag of node.tags) tagSet.add(tag);
+  }
+
+  return {
+    nodes,
+    edges,
+    stats: {
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+      tagCount: tagSet.size,
+      manualEdgeCount,
+      sharedTagEdgeCount,
+      sameVideoEdgeCount,
+    },
+  };
+}
+
+export function getClipMapLayout(mapKey: string): ClipMapLayoutNode[] {
+  const rows = getDb().prepare(`
+    SELECT node_id, x, y, width, height
+    FROM clip_map_layouts
+    WHERE map_key = ?
+  `).all(mapKey) as { node_id: string; x: number; y: number; width: number; height: number }[];
+
+  return rows.map(row => ({
+    nodeId: row.node_id,
+    x: row.x,
+    y: row.y,
+    width: row.width,
+    height: row.height,
+  }));
+}
+
+export function saveClipMapLayout(mapKey: string, nodes: ClipMapLayoutNode[]): { saved: number } {
+  const cleaned = nodes.filter(node =>
+    node.nodeId &&
+    Number.isFinite(node.x) &&
+    Number.isFinite(node.y) &&
+    Number.isFinite(node.width) &&
+    Number.isFinite(node.height),
+  );
+
+  const db = getDb();
+  const upsert = db.prepare(`
+    INSERT INTO clip_map_layouts (map_key, node_id, x, y, width, height, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(map_key, node_id) DO UPDATE SET
+      x = excluded.x,
+      y = excluded.y,
+      width = excluded.width,
+      height = excluded.height,
+      updated_at = datetime('now')
+  `);
+
+  db.transaction(() => {
+    for (const node of cleaned) {
+      upsert.run(mapKey, node.nodeId, node.x, node.y, node.width, node.height);
+    }
+  })();
+
+  return { saved: cleaned.length };
 }
 
 function parseTranscriptSegments(mdPath: string): TranscriptSegment[] {

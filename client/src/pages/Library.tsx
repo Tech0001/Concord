@@ -353,7 +353,28 @@ export default function Library() {
             <div className="text-sm text-muted-foreground">
               Showing {startRow}-{endRow} of {total} matching records.
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                Page {Math.min(page + 1, pageCount)} of {pageCount}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={page === 0 || loading}
+                onClick={() => setPage(value => Math.max(0, value - 1))}
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                Previous
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={page + 1 >= pageCount || loading}
+                onClick={() => setPage(value => value + 1)}
+              >
+                Next
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
               <span className="text-xs text-muted-foreground">Rows</span>
               <Select value={String(pageSize)} onValueChange={value => setPageSize(Number(value))}>
                 <SelectTrigger className="h-8 text-xs w-[90px]">
