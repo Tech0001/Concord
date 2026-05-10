@@ -97,6 +97,11 @@ export interface PipelineConfig {
     waitForLiveToFinish: boolean;
     maxRetries: number;
     retryDelayMinutes: number;
+    /** Master switch for speaker diarization. When false, no diarization
+     *  runs regardless of per-channel settings — saves the GPU time and
+     *  produces transcripts with `speaker: null` everywhere. UI greys out
+     *  per-channel diarize toggles when this is false. */
+    diarizationEnabled: boolean;
   };
 }
 
@@ -209,6 +214,23 @@ function localStableId(absPath: string): string {
   return `local-${hash.substring(0, 11)}`;
 }
 
+/** YouTube sometimes leaves `is_live: true` on the metadata of old
+ *  streams (especially archived premieres). A video uploaded more than
+ *  24 hours ago physically can't still be broadcasting, so the flag is
+ *  stale and we should proceed with a normal download instead of parking
+ *  the row in `waiting_live` forever. */
+function isLiveFlagStale(uploadDate: string | null): boolean {
+  if (!uploadDate) return false;
+  const m = uploadDate.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (!m) return false;
+  const uploadMs = Date.UTC(
+    parseInt(m[1], 10),
+    parseInt(m[2], 10) - 1,
+    parseInt(m[3], 10),
+  );
+  return Date.now() - uploadMs > 24 * 60 * 60 * 1000;
+}
+
 function mtimeToYYYYMMDD(mtimeMs: number): string {
   const d = new Date(mtimeMs);
   const y = d.getFullYear();
@@ -282,6 +304,7 @@ export class Pipeline extends EventEmitter {
     this.config = this.loadConfig();
     this.persistConfig(this.config);
     this.recoverStuckJobs();
+    this.resumeWaitingLive();
   }
 
   /** Reset any rows left in an in-flight status (downloading, transcribing,
@@ -337,6 +360,59 @@ export class Pipeline extends EventEmitter {
     }
   }
 
+  /** Re-establish 5-minute live-recheck timers for any rows left in
+   *  `waiting_live` from a previous session. The original timers were
+   *  in-memory setTimeouts and lost on every restart, leaving rows
+   *  orphaned forever. Staggered with jitter across a 30-minute window
+   *  so a hundred resumed rows don't all fire yt-dlp calls at the same
+   *  moment on boot. Skips channels that are disabled — re-checking
+   *  there would consume YouTube quota for nothing. */
+  private resumeWaitingLive(): void {
+    interface Row {
+      video_id: string; channel_id: string; title: string; url: string;
+      upload_date: string | null; is_live: number;
+      c_id: string; c_name: string; c_url: string;
+      c_enabled: number; c_diarize: number;
+    }
+    const rows = getDb().prepare(`
+      SELECT q.video_id, q.channel_id, q.title, q.url, q.upload_date, q.is_live,
+             c.id AS c_id, c.name AS c_name, c.url AS c_url,
+             c.enabled AS c_enabled, c.diarize AS c_diarize
+      FROM video_queue q
+      JOIN channels c ON c.id = q.channel_id
+      WHERE q.status = 'waiting_live' AND c.enabled = 1
+    `).all() as Row[];
+
+    if (rows.length === 0) return;
+
+    const windowMs = 30 * 60 * 1000;
+    console.log(
+      `[pipeline] Resuming ${rows.length} live-stream recheck${rows.length === 1 ? "" : "s"} from previous run (staggered over 30min)`,
+    );
+
+    for (const row of rows) {
+      const video: ChannelVideo = {
+        id: row.video_id,
+        title: row.title,
+        url: row.url,
+        duration: null,
+        isLive: !!row.is_live,
+        isShorts: false,
+        uploadDate: row.upload_date,
+        thumbnail: null,
+      };
+      const channel: ChannelConfig = {
+        id: row.c_id,
+        name: row.c_name,
+        url: row.c_url,
+        enabled: !!row.c_enabled,
+        diarize: !!row.c_diarize,
+      };
+      const jitterMs = Math.random() * windowMs;
+      setTimeout(() => this.recheckLive(video, channel), jitterMs);
+    }
+  }
+
   // ---- Config ----
 
   private loadConfig(): PipelineConfig {
@@ -371,6 +447,7 @@ export class Pipeline extends EventEmitter {
         keepVideo: true,
         keepAudio: false,
         waitForLiveToFinish: true,
+        diarizationEnabled: true,
         maxRetries: 3,
         retryDelayMinutes: 5,
       },
@@ -410,6 +487,7 @@ export class Pipeline extends EventEmitter {
         keepVideo: parseConfigBoolean(stored["processing.keepVideo"], defaults.processing.keepVideo),
         keepAudio: parseConfigBoolean(stored["processing.keepAudio"], defaults.processing.keepAudio),
         waitForLiveToFinish: parseConfigBoolean(stored["processing.waitForLiveToFinish"], defaults.processing.waitForLiveToFinish),
+        diarizationEnabled: parseConfigBoolean(stored["processing.diarizationEnabled"], defaults.processing.diarizationEnabled),
         maxRetries: parseConfigNumber(stored["processing.maxRetries"], defaults.processing.maxRetries),
         retryDelayMinutes: parseConfigNumber(stored["processing.retryDelayMinutes"], defaults.processing.retryDelayMinutes),
       },
@@ -477,6 +555,7 @@ export class Pipeline extends EventEmitter {
       "processing.keepVideo": config.processing.keepVideo,
       "processing.keepAudio": config.processing.keepAudio,
       "processing.waitForLiveToFinish": config.processing.waitForLiveToFinish,
+      "processing.diarizationEnabled": config.processing.diarizationEnabled,
       "processing.maxRetries": config.processing.maxRetries,
       "processing.retryDelayMinutes": config.processing.retryDelayMinutes,
     });
@@ -712,8 +791,12 @@ export class Pipeline extends EventEmitter {
     this.emit("jobStarted", job);
 
     try {
-      // Step 1: Check if live
-      if (video.isLive && this.config.processing.waitForLiveToFinish) {
+      // Step 1: Check if live (ignoring stale is_live flags on old uploads)
+      if (
+        video.isLive
+        && this.config.processing.waitForLiveToFinish
+        && !isLiveFlagStale(video.uploadDate)
+      ) {
         job.status = "waiting_live";
         updateQueueStatus(video.id, channel.id, { status: "waiting_live" });
         this.emit("jobUpdated", job);
@@ -826,7 +909,9 @@ export class Pipeline extends EventEmitter {
         computeType: this.config.transcription.computeType,
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
-        diarize: channel.diarize !== false,
+        diarize: this.config.processing.diarizationEnabled !== false && channel.diarize !== false,
+        videoId: video.id,
+        channelId: channel.id,
       });
 
       job.mdPath = mdPath;
@@ -1226,7 +1311,9 @@ export class Pipeline extends EventEmitter {
         computeType: this.config.transcription.computeType,
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
-        diarize: channel.diarize !== false,
+        diarize: this.config.processing.diarizationEnabled !== false && channel.diarize !== false,
+        videoId,
+        channelId,
       });
 
       job.mdPath = mdPath;
@@ -1366,7 +1453,9 @@ export class Pipeline extends EventEmitter {
         computeType: this.config.transcription.computeType,
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
-        diarize: channel.diarize !== false,
+        diarize: this.config.processing.diarizationEnabled !== false && channel.diarize !== false,
+        videoId: realVideoId,
+        channelId: channel.id,
       });
 
       job.mdPath = mdPath;

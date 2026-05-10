@@ -11,6 +11,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { TagChip, TagPicker } from "@/components/TagPicker";
+import { SpeakerLabelDialog } from "@/components/SpeakerLabelDialog";
 import { apiRequest } from "@/lib/queryClient";
 import { Bookmark, BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, Download, FileText, Loader2, Play, Radio, RefreshCw, Scissors, Search, Sparkles, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -138,6 +139,9 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
   const transcriptListRef = useRef<HTMLDivElement | null>(null);
   const segmentRefs = useRef<Record<number, HTMLButtonElement | null>>({});
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  /** Per-video map: local label "S0" → { id, name, color } when assigned. */
+  const [speakerMap, setSpeakerMap] = useState<Record<string, { id: string; name: string; color: string | null }>>({});
+  const [labelDialog, setLabelDialog] = useState<{ localSpeaker: string; currentSpeakerId: string | null } | null>(null);
   const [videoInfo, setVideoInfo] = useState<VideoStreamInfo | null>(null);
   const [loadingSegments, setLoadingSegments] = useState(false);
   const [segmentError, setSegmentError] = useState("");
@@ -202,6 +206,24 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     setExportOpen(false);
   }, [initialSeconds, initialSegmentIndex, videoKey(video)]);
 
+  // Per-video speaker mapping. Refreshes on drawer open and after each
+  // assign/unassign so the chip labels update in place.
+  const loadSpeakerMap = async () => {
+    if (!video) return;
+    try {
+      const r = await apiRequest(
+        "GET",
+        `/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/speakers?t=${Date.now()}`,
+      );
+      const data = await r.json() as { speakers?: { local_speaker: string; speaker_id: string; name: string; display_color: string | null }[] };
+      const map: Record<string, { id: string; name: string; color: string | null }> = {};
+      for (const s of data.speakers || []) {
+        map[s.local_speaker] = { id: s.speaker_id, name: s.name, color: s.display_color };
+      }
+      setSpeakerMap(map);
+    } catch { setSpeakerMap({}); }
+  };
+
   useEffect(() => {
     if (!open || !video) return;
 
@@ -235,6 +257,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     };
 
     loadSegments();
+    loadSpeakerMap();
   }, [open, videoKey(video)]);
 
   // Debounced notes save: 600ms after last keystroke.
@@ -915,11 +938,32 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                           <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
                             <Play className="h-3 w-3" />
                             {formatTimestamp(segment.start)} - {formatTimestamp(segment.end)}
-                            {segment.speaker && (
-                              <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] font-semibold text-foreground">
-                                {segment.speaker}
-                              </span>
-                            )}
+                            {segment.speaker && (() => {
+                              const known = speakerMap[segment.speaker];
+                              const open = (e: React.SyntheticEvent) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setLabelDialog({ localSpeaker: segment.speaker!, currentSpeakerId: known?.id ?? null });
+                              };
+                              // span (not button) because the parent is a button — nested
+                              // buttons are illegal HTML and break event handling. role +
+                              // keyboard handlers preserve a11y semantics.
+                              return (
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={open}
+                                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") open(e); }}
+                                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold cursor-pointer hover:ring-2 hover:ring-foreground/30"
+                                  style={known?.color
+                                    ? { background: known.color, color: "white" }
+                                    : { background: "var(--secondary, #e5e7eb)", color: "inherit", fontFamily: "ui-monospace, monospace" }}
+                                  title={known ? `Speaker: ${known.name} (click to change)` : "Click to label this speaker"}
+                                >
+                                  {known?.name || segment.speaker}
+                                </span>
+                              );
+                            })()}
                             {highlighted && <Badge variant="secondary" className="h-5">match</Badge>}
                             {searchMatch && <Badge variant="outline" className="h-5">search</Badge>}
                             {clipped && (
@@ -1070,6 +1114,18 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
           <div className="p-4 text-sm text-muted-foreground">No video selected.</div>
         )}
       </SheetContent>
+      {labelDialog && video && (
+        <SpeakerLabelDialog
+          open={true}
+          onOpenChange={(o) => { if (!o) setLabelDialog(null); }}
+          localSpeaker={labelDialog.localSpeaker}
+          contextLabel={video.title}
+          videoId={video.video_id}
+          channelId={video.channel_id}
+          currentSpeakerId={labelDialog.currentSpeakerId}
+          onSaved={loadSpeakerMap}
+        />
+      )}
     </Sheet>
   );
 }

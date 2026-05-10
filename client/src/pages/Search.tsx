@@ -93,6 +93,8 @@ export default function TranscriptSearch() {
   const [indexStats, setIndexStats] = useState<IndexStats>({ files: 0, segments: 0 });
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [tagOptions, setTagOptions] = useState<TagOption[]>([]);
+  const [speakerFilter, setSpeakerFilter] = useState("all");
+  const [speakerOptions, setSpeakerOptions] = useState<{ id: string; name: string }[]>([]);
   // Search mode: "words" hits the FTS5 index (exact tokens, fast).
   // "meaning" embeds the query and cosine-ranks against the embedding store
   // (semantic — finds conceptually-related segments without literal overlap).
@@ -127,6 +129,11 @@ export default function TranscriptSearch() {
         const statsResponse = await apiRequest("GET", `/api/transcripts/search/stats?t=${Date.now()}`);
         setIndexStats(await statsResponse.json() as IndexStats);
         await loadTagOptions();
+        try {
+          const sres = await apiRequest("GET", "/api/speakers");
+          const sdata = await sres.json();
+          setSpeakerOptions((sdata.speakers || []).map((s: any) => ({ id: s.id, name: s.name })));
+        } catch { setSpeakerOptions([]); }
         // Embedding stats — used by the Mode toggle to warn when Meaning
         // mode is selected but nothing has been embedded yet.
         try {
@@ -163,6 +170,7 @@ export default function TranscriptSearch() {
             dateFrom: dateFrom ? dateFrom.replaceAll("-", "") : undefined,
             dateTo: dateTo ? dateTo.replaceAll("-", "") : undefined,
             tags: tagFilter,
+            speakerId: speakerFilter === "all" ? undefined : speakerFilter,
           },
         });
         const data = await response.json() as { results: TranscriptSearchResult[] };
@@ -176,6 +184,7 @@ export default function TranscriptSearch() {
           dateFrom: dateFrom.replaceAll("-", ""),
           dateTo: dateTo.replaceAll("-", ""),
           tags: tagFilter.join(","),
+          speakerId: speakerFilter === "all" ? "" : speakerFilter,
           limit: "200",
           t: String(Date.now()),
         }));
@@ -323,6 +332,20 @@ export default function TranscriptSearch() {
                 <span className="text-xs text-muted-foreground">
                   Restricting to videos that have at least one clip with every selected tag.
                 </span>
+              </>
+            )}
+            {speakerOptions.length > 0 && (
+              <>
+                <span className="text-xs font-medium text-muted-foreground ml-2">Speaker:</span>
+                <Select value={speakerFilter} onValueChange={setSpeakerFilter}>
+                  <SelectTrigger className="h-7 text-xs w-auto min-w-[140px]"><SelectValue/></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Anyone</SelectItem>
+                    {speakerOptions.map(s => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </>
             )}
           </div>

@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
 import { transcribeWithFluidAudio } from "./transcribe-fluidaudio";
+import { transcribeWithParakeet } from "./transcribe-parakeet";
 
 export interface TranscriptionOptions {
   model?: string;
@@ -14,6 +15,11 @@ export interface TranscriptionOptions {
    *  currently FluidAudio). Default true. Set false for known
    *  single-speaker channels to skip the diarization wall-time cost. */
   diarize?: boolean;
+  /** Video + channel IDs are passed through to engines that persist
+   *  cross-video speaker identity. Optional because manual one-shot
+   *  transcribe calls (e.g. CLI testing) don't always have these. */
+  videoId?: string;
+  channelId?: string;
 }
 
 export interface TranscriptionResult {
@@ -81,6 +87,8 @@ export function transcribeAudio(
     beamSize = 5,
     pythonPath,
     diarize,
+    videoId,
+    channelId,
   } = options;
 
   if (isFluidModel(model)) {
@@ -90,6 +98,27 @@ export function transcribeAudio(
   }
 
   const parakeet = isParakeetModel(model);
+  if (parakeet) {
+    // Parakeet (transcription) + Sortformer (diarization) run in parallel
+    // through the TS wrapper so segment+speaker merge happens via the
+    // shared diarize-merge module. Same flow as Mac's FluidAudio path.
+    //
+    // ALWAYS use the parakeet venv — the pipeline config stores a single
+    // pythonVenv (the whisper venv) which doesn't have NeMo. Ignore the
+    // whisper override here; PARAKEET_PYTHON env var can still customize
+    // (handled inside defaultPythonPath).
+    return withTranscriptionLock(() =>
+      transcribeWithParakeet(audioPath, outputMdPath, {
+        model,
+        device,
+        pythonPath: defaultPythonPath(true),
+        diarize,
+        videoId,
+        channelId,
+      }),
+    );
+  }
+
   // The pipeline config stores a single `pythonVenv` (the whisper venv).
   // Parakeet needs a separate Python with NeMo installed, so when the model
   // is parakeet we always route to the parakeet venv and ignore the
