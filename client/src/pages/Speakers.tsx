@@ -98,6 +98,23 @@ export default function Speakers() {
     }
   }, [toast]);
 
+  // First-mount: run a one-shot backfill if any speakers have appearance_count>0
+  // but airtime=0 (the pre-Phase-1 stub-row case). The backfill is cheap
+  // (just transcript file reads) and idempotent. After it completes, refetch
+  // to get the populated values.
+  const [didBackfill, setDidBackfill] = useState(false);
+  useEffect(() => {
+    if (didBackfill) return;
+    if (loading) return;
+    const needsBackfill = speakers.some(s => s.appearance_count > 0 && s.total_airtime_seconds === 0);
+    if (!needsBackfill) return;
+    setDidBackfill(true);
+    apiRequest("POST", "/api/speakers/backfill-stats")
+      .then(r => r.json())
+      .then(({ backfilled }) => { if (backfilled > 0) fetchAll(); })
+      .catch(() => { /* silent — non-critical */ });
+  }, [loading, speakers, didBackfill, fetchAll]);
+
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   const fetchAppearances = useCallback(async (speakerId: string) => {

@@ -19,6 +19,7 @@ import {
   getSpeakersWithStats, getSpeakerById, createSpeaker, updateSpeaker, deleteSpeaker,
   getUnidentifiedAssignments, getSpeakerAppearances, assignVideoSpeakerToGlobal,
   getVideoSpeakerSummary, getVideoSpeakerSummariesBatch,
+  backfillVideoSpeakerMetadata, backfillAllZeroAirtimeAssignments,
 } from "./db";
 import {
   addClipLink,
@@ -1271,6 +1272,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // One-shot fix-up: scans every video_speaker_assignments row with
+  // airtime_seconds = 0 (the stub-row case from labeling on pre-Phase-1
+  // transcripts) and recomputes airtime + sample timestamps from each
+  // transcript file. Idempotent — calling twice does no extra work the
+  // second time.
+  app.post("/api/speakers/backfill-stats", (_req, res) => {
+    try {
+      res.json(backfillAllZeroAirtimeAssignments());
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
+    }
+  });
+
   app.get("/api/speakers/unidentified", (req, res) => {
     try {
       const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 1000);
@@ -1344,6 +1358,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Provide speakerId, newName, or speakerId=null" });
       }
       assignVideoSpeakerToGlobal({ videoId, channelId, localSpeaker, speakerId });
+      // Backfill airtime + sample timestamps from the transcript file
+      // (idempotent; safe to call after every assign — pre-Phase-1
+      // transcripts get real numbers instead of zeros, post-Phase-1
+      // ones get refreshed to match the transcript's view).
+      backfillVideoSpeakerMetadata(videoId, channelId, localSpeaker);
       res.json({ success: true, speakerId, createdSpeaker });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });

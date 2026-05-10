@@ -2450,6 +2450,63 @@ export function assignVideoSpeakerToGlobal(args: {
   setSpeakerEmbedding(args.speakerId, merged, n + 1);
 }
 
+/** Compute airtime + longest-turn sample for a video-local speaker by
+ *  reading the transcript markdown's per-segment data, then UPDATE the
+ *  matching video_speaker_assignments row in place.
+ *
+ *  Used to populate stats for assignments on transcripts that were
+ *  diarized BEFORE Phase 1 (where we don't have the original centroid).
+ *  The transcript file is the user-visible source of truth for "how
+ *  much did this speaker talk in this video," so reading it back is
+ *  the most consistent answer.
+ *
+ *  Returns null if the queue entry has no md_path or the file lacks
+ *  any segments matching `localSpeaker`. */
+export function backfillVideoSpeakerMetadata(
+  videoId: string, channelId: string, localSpeaker: string,
+): { airtime: number; sampleStart: number | null; sampleEnd: number | null } | null {
+  const entry = getQueueEntry(videoId, channelId);
+  if (!entry?.md_path) return null;
+  const segments = parseTranscriptSegments(entry.md_path);
+  const matching = segments.filter(s => s.speaker === localSpeaker);
+  if (matching.length === 0) return null;
+
+  let airtime = 0;
+  let longest = matching[0];
+  for (const s of matching) {
+    const dur = s.end - s.start;
+    airtime += dur;
+    if (dur > (longest.end - longest.start)) longest = s;
+  }
+
+  getDb().prepare(`
+    UPDATE video_speaker_assignments
+    SET airtime_seconds = ?, sample_start = ?, sample_end = ?, updated_at = datetime('now')
+    WHERE video_id = ? AND channel_id = ? AND local_speaker = ?
+  `).run(airtime, longest.start, longest.end, videoId, channelId, localSpeaker);
+
+  return { airtime, sampleStart: longest.start, sampleEnd: longest.end };
+}
+
+/** Bulk variant — walks every video_speaker_assignments row whose
+ *  airtime_seconds is 0 (i.e. inserted as a stub by an assign action
+ *  on a pre-Phase-1 transcript) and runs backfillVideoSpeakerMetadata.
+ *  Cheap: just file reads + a markdown parse per row. Returns counts
+ *  for the UI to surface. */
+export function backfillAllZeroAirtimeAssignments(): { backfilled: number; skipped: number } {
+  const rows = getDb().prepare(`
+    SELECT video_id, channel_id, local_speaker
+    FROM video_speaker_assignments
+    WHERE airtime_seconds = 0
+  `).all() as Array<{ video_id: string; channel_id: string; local_speaker: string }>;
+  let backfilled = 0, skipped = 0;
+  for (const row of rows) {
+    const r = backfillVideoSpeakerMetadata(row.video_id, row.channel_id, row.local_speaker);
+    if (r && r.airtime > 0) backfilled++; else skipped++;
+  }
+  return { backfilled, skipped };
+}
+
 export function closeDb(): void {
   if (db) { db.close(); db = null; console.log("[db] SQLite closed"); }
 }
