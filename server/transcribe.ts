@@ -15,6 +15,11 @@ export interface TranscriptionOptions {
    *  currently FluidAudio). Default true. Set false for known
    *  single-speaker channels to skip the diarization wall-time cost. */
   diarize?: boolean;
+  /** Video + channel IDs are passed through to engines that persist
+   *  cross-video speaker identity. Optional because manual one-shot
+   *  transcribe calls (e.g. CLI testing) don't always have these. */
+  videoId?: string;
+  channelId?: string;
 }
 
 export interface TranscriptionResult {
@@ -82,6 +87,8 @@ export function transcribeAudio(
     beamSize = 5,
     pythonPath,
     diarize,
+    videoId,
+    channelId,
   } = options;
 
   if (isFluidModel(model)) {
@@ -106,6 +113,8 @@ export function transcribeAudio(
         device,
         pythonPath: defaultPythonPath(true),
         diarize,
+        videoId,
+        channelId,
       }),
     );
   }

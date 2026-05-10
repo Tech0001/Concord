@@ -153,6 +153,62 @@ def dedup_overlap_turns(chunks_segments, chunk_starts, overlap_sec):
     return out
 
 
+def build_speaker_rollup(turns, embeddings):
+    """Per-speaker rollup for cross-video identity. Each entry has the
+    averaged centroid, total airtime, and the longest single turn (used
+    as the audio sample on the Speakers UI).
+
+    Centroid is normalized so cosine distance comparisons across videos
+    are meaningful — TS-side findClosestSpeaker assumes normalized.
+    """
+    import numpy as np
+
+    by_speaker = {}  # local_id -> {"emb_sum", "emb_count", "airtime", "longest_turn"}
+    for turn, emb in zip(turns, embeddings):
+        sid = turn["global_speaker"]
+        airtime = turn["end"] - turn["start"]
+        if sid not in by_speaker:
+            by_speaker[sid] = {
+                "emb_sum": None,
+                "emb_count": 0,
+                "airtime": 0.0,
+                "longest_turn": None,
+                "longest_dur": 0.0,
+            }
+        s = by_speaker[sid]
+        s["airtime"] += airtime
+        if airtime > s["longest_dur"]:
+            s["longest_dur"] = airtime
+            s["longest_turn"] = (turn["start"], turn["end"])
+        if emb is not None:
+            arr = emb.astype(np.float32)
+            if s["emb_sum"] is None:
+                s["emb_sum"] = arr.copy()
+            else:
+                s["emb_sum"] += arr
+            s["emb_count"] += 1
+
+    rollup = []
+    for sid, s in sorted(by_speaker.items(), key=lambda kv: -kv[1]["airtime"]):
+        if s["emb_count"] == 0:
+            # All turns for this speaker were too short to embed; skip —
+            # we have no fingerprint to save.
+            continue
+        centroid = s["emb_sum"] / s["emb_count"]
+        norm = float(np.linalg.norm(centroid))
+        if norm > 0:
+            centroid = centroid / norm
+        sample_start, sample_end = s["longest_turn"] or (None, None)
+        rollup.append({
+            "localSpeaker": f"S{sid}",  # matches the "S0", "S1" labels in the merged transcript JSON
+            "centroid": centroid.astype(np.float32).tolist(),
+            "airtimeSeconds": round(s["airtime"], 2),
+            "sampleStart": round(sample_start, 2) if sample_start is not None else None,
+            "sampleEnd": round(sample_end, 2) if sample_end is not None else None,
+        })
+    return rollup
+
+
 def merge_minor_speakers(turns, embeddings, min_airtime_sec: float = 5.0):
     """Post-process pass to merge low-airtime "speakers" into the major
     speakers they're acoustically closest to. Sortformer + TitaNet on long
@@ -461,6 +517,12 @@ def diarize(audio_path: str, output_path: str, model_name: str, device: str,
             "endTimeSeconds": t["end"],
             "qualityScore": 1.0,
         } for t in turns]
+
+        # Per-speaker rollup for cross-video identity. Emit centroid, total
+        # airtime, and the longest turn (used as the audio sample on the
+        # Speakers UI). The TS wrapper consumes this to populate the
+        # video_speaker_assignments table + attempt cross-video matching.
+        speaker_rollup = build_speaker_rollup(turns, embeddings)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -469,6 +531,9 @@ def diarize(audio_path: str, output_path: str, model_name: str, device: str,
 
     duration = max((s["endTimeSeconds"] for s in spans), default=audio_duration)
     speaker_count = len({s["speakerId"] for s in spans})
+    # Add cross-video identity payload to the JSON output. TS wrapper
+    # picks this up to populate video_speaker_assignments.
+    output_extras = {"speakerProfiles": speaker_rollup}
 
     output = {
         "audioFile": audio_path,
@@ -476,6 +541,7 @@ def diarize(audio_path: str, output_path: str, model_name: str, device: str,
         "processingTimeSeconds": round(t_inf, 2),
         "speakerCount": speaker_count,
         "segments": spans,
+        **output_extras,
     }
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)

@@ -7,6 +7,7 @@ import {
   spansFromFluidAudio,
   type SpeakerSpan,
 } from "./diarize-merge";
+import { findClosestSpeaker, upsertVideoSpeakerAssignment, SPEAKER_AUTOMATCH_THRESHOLD } from "./db";
 
 // ---- JSON shapes on disk ----
 
@@ -41,6 +42,16 @@ interface SortformerJSON {
     endTimeSeconds: number;
     qualityScore: number;
   }[];
+  /** Per-local-speaker rollup with normalized centroid + sample turn.
+   *  Optional — older runs and the CPU/CUDA pre-rollup versions of the
+   *  Python script don't include it. */
+  speakerProfiles?: {
+    localSpeaker: string;     // e.g. "S0", matches the merged transcript labels
+    centroid: number[];        // 192-dim Float, L2-normalized
+    airtimeSeconds: number;
+    sampleStart: number | null;
+    sampleEnd: number | null;
+  }[];
 }
 
 export interface ParakeetOptions {
@@ -53,6 +64,11 @@ export interface ParakeetOptions {
   /** Sortformer NeMo model id. The 4spk variant covers our archive
    *  workload (solo speakers + small panel discussions). */
   diarizeModel?: string;
+  /** Used to persist cross-video speaker identity. When both are provided,
+   *  the wrapper saves per-video centroids to video_speaker_assignments
+   *  and attempts auto-matching against existing global speakers. */
+  videoId?: string;
+  channelId?: string;
 }
 
 const PARAKEET_SCRIPT = path.join(process.cwd(), "server", "transcribe-parakeet.py");
@@ -104,7 +120,10 @@ export async function transcribeWithParakeet(
     await runPython(pythonPath, diarizeArgs, "sortformer");
   }
 
-  return postProcess({ jsonPath, diarPath, outputMdPath, audioPath, model, diarize });
+  return postProcess({
+    jsonPath, diarPath, outputMdPath, audioPath, model, diarize,
+    videoId: options.videoId, channelId: options.channelId,
+  });
 }
 
 function runPython(pythonPath: string, args: string[], tag: string): Promise<void> {
@@ -144,17 +163,21 @@ function postProcess(args: {
   audioPath: string;
   model: string;
   diarize: boolean;
+  videoId?: string;
+  channelId?: string;
 }): TranscriptionResult {
-  const { jsonPath, diarPath, outputMdPath, audioPath, model, diarize } = args;
+  const { jsonPath, diarPath, outputMdPath, audioPath, model, diarize, videoId, channelId } = args;
   const raw = JSON.parse(fs.readFileSync(jsonPath, "utf-8")) as ParakeetJSON;
 
   // Load diarization spans if it ran. Sortformer emits FluidAudio-shape
   // JSON so we can reuse the same normalizer + merge as the Mac side.
   let speakerSpans: SpeakerSpan[] = [];
+  let speakerProfiles: SortformerJSON["speakerProfiles"] = undefined;
   if (diarize && fs.existsSync(diarPath)) {
     try {
       const diar = JSON.parse(fs.readFileSync(diarPath, "utf-8")) as SortformerJSON;
       speakerSpans = spansFromFluidAudio(diar.segments || []);
+      speakerProfiles = diar.speakerProfiles;
     } catch (err) {
       console.warn(
         `[parakeet] Diarization JSON malformed, continuing without speakers: ${(err as Error).message}`,
@@ -183,6 +206,14 @@ function postProcess(args: {
     speakerCount,
   }));
 
+  // Persist per-video speaker centroids + auto-match against the global
+  // speakers table for cross-video identity. Skipped silently if we
+  // weren't given video/channel IDs (e.g. CLI smoke tests) or if the
+  // Python side didn't include a profiles rollup (older versions).
+  if (diarize && videoId && channelId && speakerProfiles && speakerProfiles.length > 0) {
+    persistSpeakerProfiles(speakerProfiles, videoId, channelId);
+  }
+
   // The .diar.json is fully merged into the main JSON now. Drop it so we
   // don't accumulate stale per-segment Sortformer scores alongside every
   // transcript.
@@ -206,6 +237,38 @@ function postProcess(args: {
     word_count: updated.word_count,
   };
 }
+
+function persistSpeakerProfiles(
+  profiles: NonNullable<SortformerJSON["speakerProfiles"]>,
+  videoId: string,
+  channelId: string,
+): void {
+  let matched = 0;
+  let unidentified = 0;
+  for (const p of profiles) {
+    const centroid = new Float32Array(p.centroid);
+    const match = findClosestSpeaker(centroid, SPEAKER_AUTOMATCH_THRESHOLD);
+    upsertVideoSpeakerAssignment({
+      videoId,
+      channelId,
+      localSpeaker: p.localSpeaker,
+      speakerId: match ? match.speaker_id : null,
+      centroid,
+      confidence: match ? 1.0 - match.distance : null,
+      sampleStart: p.sampleStart,
+      sampleEnd: p.sampleEnd,
+      airtimeSeconds: p.airtimeSeconds,
+    });
+    if (match) matched++;
+    else unidentified++;
+  }
+  if (matched > 0 || unidentified > 0) {
+    console.log(
+      `[parakeet] Speaker profiles persisted: ${matched} auto-matched, ${unidentified} unidentified`,
+    );
+  }
+}
+
 
 function formatTimestamp(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds));

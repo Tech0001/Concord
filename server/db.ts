@@ -155,6 +155,55 @@ const SCHEMA = `
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (map_key, node_id)
   );
+
+  -- ---- Voice profiles (cross-video speaker identity) ----
+  --
+  -- Each row = one named voice (e.g. "Joe Rogan"). Stays stable across
+  -- the entire archive; per-video local labels (S0, S1, ...) get mapped
+  -- to these via video_speaker_assignments below.
+  CREATE TABLE IF NOT EXISTS speakers (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    display_color TEXT,
+    notes         TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Aggregated voice fingerprint per speaker. Updated incrementally each
+  -- time the user labels a new video-local centroid as this speaker —
+  -- count-weighted moving average so the centroid converges as more
+  -- samples come in.
+  CREATE TABLE IF NOT EXISTS speaker_embeddings (
+    speaker_id   TEXT PRIMARY KEY,
+    embedding    BLOB NOT NULL,
+    sample_count INTEGER NOT NULL DEFAULT 1,
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (speaker_id) REFERENCES speakers(id) ON DELETE CASCADE
+  );
+
+  -- For each (video, local_speaker) pair, the per-video centroid embedding
+  -- + reference to a global speaker (if matched/labeled). speaker_id NULL
+  -- means "unidentified — needs labeling." sample_start/end point to the
+  -- longest turn for this local speaker in this video, used for the
+  -- "play sample" UX.
+  CREATE TABLE IF NOT EXISTS video_speaker_assignments (
+    video_id        TEXT NOT NULL,
+    channel_id      TEXT NOT NULL,
+    local_speaker   TEXT NOT NULL,
+    speaker_id      TEXT,
+    centroid        BLOB NOT NULL,
+    confidence      REAL,
+    sample_start    REAL,
+    sample_end      REAL,
+    airtime_seconds REAL NOT NULL DEFAULT 0,
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (video_id, channel_id, local_speaker),
+    FOREIGN KEY (speaker_id) REFERENCES speakers(id) ON DELETE SET NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_vsa_speaker_id ON video_speaker_assignments(speaker_id);
+  CREATE INDEX IF NOT EXISTS idx_vsa_video ON video_speaker_assignments(video_id, channel_id);
 `;
 
 export interface QueueEntry {
@@ -1981,6 +2030,248 @@ function buildFtsQuery(query: string): string {
   }
 
   return tokens.join(" AND ");
+}
+
+// ---- Voice profiles (cross-video speaker identity) ----
+
+/** Cosine distance threshold for auto-matching a video's speaker centroid
+ *  against an existing global speaker. Tighter than the within-video
+ *  threshold (0.65) because cross-video false-merges are more confusing
+ *  for the user than leaving an unidentified speaker for manual labeling.
+ *  Matches that exceed this threshold leave speaker_id = NULL so the
+ *  user can decide. */
+export const SPEAKER_AUTOMATCH_THRESHOLD = 0.55;
+
+export interface Speaker {
+  id: string;
+  name: string;
+  display_color: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SpeakerEmbedding {
+  speaker_id: string;
+  embedding: Float32Array;
+  sample_count: number;
+  updated_at: string;
+}
+
+export interface VideoSpeakerAssignment {
+  video_id: string;
+  channel_id: string;
+  local_speaker: string;
+  speaker_id: string | null;
+  centroid: Float32Array;
+  confidence: number | null;
+  sample_start: number | null;
+  sample_end: number | null;
+  airtime_seconds: number;
+}
+
+function f32ToBuffer(arr: Float32Array): Buffer {
+  return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+
+function bufferToF32(buf: Buffer | Uint8Array): Float32Array {
+  return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+}
+
+function cosineDistance(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length) return 2.0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  if (denom === 0) return 2.0;
+  return 1.0 - dot / denom;
+}
+
+export function getAllSpeakers(): Speaker[] {
+  return getDb().prepare(`
+    SELECT id, name, display_color, notes, created_at, updated_at
+    FROM speakers ORDER BY name COLLATE NOCASE
+  `).all() as Speaker[];
+}
+
+export function getSpeakerById(id: string): Speaker | undefined {
+  return getDb().prepare(`
+    SELECT id, name, display_color, notes, created_at, updated_at
+    FROM speakers WHERE id = ?
+  `).get(id) as Speaker | undefined;
+}
+
+export function createSpeaker(args: { id: string; name: string; displayColor?: string | null; notes?: string | null }): Speaker {
+  const { id, name, displayColor = null, notes = null } = args;
+  getDb().prepare(`
+    INSERT INTO speakers (id, name, display_color, notes)
+    VALUES (?, ?, ?, ?)
+  `).run(id, name, displayColor, notes);
+  return getSpeakerById(id)!;
+}
+
+export function updateSpeaker(id: string, fields: { name?: string; displayColor?: string | null; notes?: string | null }): Speaker | undefined {
+  const sets: string[] = [];
+  const params: any[] = [];
+  if (fields.name !== undefined) { sets.push("name = ?"); params.push(fields.name); }
+  if (fields.displayColor !== undefined) { sets.push("display_color = ?"); params.push(fields.displayColor); }
+  if (fields.notes !== undefined) { sets.push("notes = ?"); params.push(fields.notes); }
+  if (sets.length === 0) return getSpeakerById(id);
+  sets.push("updated_at = datetime('now')");
+  params.push(id);
+  getDb().prepare(`UPDATE speakers SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+  return getSpeakerById(id);
+}
+
+export function deleteSpeaker(id: string): boolean {
+  // ON DELETE CASCADE on speaker_embeddings; ON DELETE SET NULL on
+  // video_speaker_assignments.speaker_id (so the video-local assignments
+  // become unidentified again instead of disappearing).
+  const r = getDb().prepare("DELETE FROM speakers WHERE id = ?").run(id);
+  return r.changes > 0;
+}
+
+export function getSpeakerEmbedding(speakerId: string): SpeakerEmbedding | undefined {
+  const row = getDb().prepare(`
+    SELECT speaker_id, embedding, sample_count, updated_at
+    FROM speaker_embeddings WHERE speaker_id = ?
+  `).get(speakerId) as { speaker_id: string; embedding: Buffer; sample_count: number; updated_at: string } | undefined;
+  if (!row) return undefined;
+  return { ...row, embedding: bufferToF32(row.embedding) };
+}
+
+export function getAllSpeakerEmbeddings(): SpeakerEmbedding[] {
+  const rows = getDb().prepare(`
+    SELECT speaker_id, embedding, sample_count, updated_at FROM speaker_embeddings
+  `).all() as { speaker_id: string; embedding: Buffer; sample_count: number; updated_at: string }[];
+  return rows.map(r => ({ ...r, embedding: bufferToF32(r.embedding) }));
+}
+
+/** Insert OR update the global centroid for a speaker. Caller decides
+ *  whether to compute a fresh centroid (first label) or merge in a new
+ *  sample (count-weighted average) — this just stores whatever it's given. */
+export function setSpeakerEmbedding(speakerId: string, embedding: Float32Array, sampleCount: number): void {
+  getDb().prepare(`
+    INSERT INTO speaker_embeddings (speaker_id, embedding, sample_count, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(speaker_id) DO UPDATE SET
+      embedding = excluded.embedding,
+      sample_count = excluded.sample_count,
+      updated_at = excluded.updated_at
+  `).run(speakerId, f32ToBuffer(embedding), sampleCount);
+}
+
+/** Find the closest existing speaker by cosine distance to `embedding`.
+ *  Returns null if no speaker exists OR closest is past the threshold.
+ *  Threshold defaults to SPEAKER_AUTOMATCH_THRESHOLD; pass a tighter
+ *  value for stricter manual matching. */
+export function findClosestSpeaker(embedding: Float32Array, threshold = SPEAKER_AUTOMATCH_THRESHOLD): { speaker_id: string; distance: number } | null {
+  const all = getAllSpeakerEmbeddings();
+  if (all.length === 0) return null;
+  let best: { speaker_id: string; distance: number } | null = null;
+  for (const e of all) {
+    const dist = cosineDistance(embedding, e.embedding);
+    if (best === null || dist < best.distance) {
+      best = { speaker_id: e.speaker_id, distance: dist };
+    }
+  }
+  if (best && best.distance <= threshold) return best;
+  return null;
+}
+
+/** Idempotent upsert. Used during transcription to record one video's
+ *  per-local-speaker centroids + auto-match attempt. */
+export function upsertVideoSpeakerAssignment(args: {
+  videoId: string;
+  channelId: string;
+  localSpeaker: string;
+  speakerId: string | null;
+  centroid: Float32Array;
+  confidence: number | null;
+  sampleStart: number | null;
+  sampleEnd: number | null;
+  airtimeSeconds: number;
+}): void {
+  getDb().prepare(`
+    INSERT INTO video_speaker_assignments
+      (video_id, channel_id, local_speaker, speaker_id, centroid, confidence,
+       sample_start, sample_end, airtime_seconds, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(video_id, channel_id, local_speaker) DO UPDATE SET
+      speaker_id = excluded.speaker_id,
+      centroid = excluded.centroid,
+      confidence = excluded.confidence,
+      sample_start = excluded.sample_start,
+      sample_end = excluded.sample_end,
+      airtime_seconds = excluded.airtime_seconds,
+      updated_at = excluded.updated_at
+  `).run(
+    args.videoId, args.channelId, args.localSpeaker, args.speakerId,
+    f32ToBuffer(args.centroid), args.confidence,
+    args.sampleStart, args.sampleEnd, args.airtimeSeconds,
+  );
+}
+
+export function getVideoSpeakerAssignments(videoId: string, channelId: string): VideoSpeakerAssignment[] {
+  const rows = getDb().prepare(`
+    SELECT video_id, channel_id, local_speaker, speaker_id, centroid, confidence,
+           sample_start, sample_end, airtime_seconds
+    FROM video_speaker_assignments
+    WHERE video_id = ? AND channel_id = ?
+    ORDER BY airtime_seconds DESC
+  `).all(videoId, channelId) as Array<Omit<VideoSpeakerAssignment, "centroid"> & { centroid: Buffer }>;
+  return rows.map(r => ({ ...r, centroid: bufferToF32(r.centroid) }));
+}
+
+/** Manually link (or unlink) a video-local speaker to a global speaker.
+ *  When linking, also folds this video's centroid into the speaker's
+ *  global centroid as a count-weighted moving average — improves match
+ *  quality for future videos. Pass speakerId = null to unlink. */
+export function assignVideoSpeakerToGlobal(args: {
+  videoId: string;
+  channelId: string;
+  localSpeaker: string;
+  speakerId: string | null;
+}): void {
+  const d = getDb();
+  d.prepare(`
+    UPDATE video_speaker_assignments
+    SET speaker_id = ?, confidence = NULL, updated_at = datetime('now')
+    WHERE video_id = ? AND channel_id = ? AND local_speaker = ?
+  `).run(args.speakerId, args.videoId, args.channelId, args.localSpeaker);
+
+  // If linking to a real speaker, fold the video's centroid into the
+  // speaker's global centroid (count-weighted moving average).
+  if (args.speakerId === null) return;
+  const va = d.prepare(`
+    SELECT centroid FROM video_speaker_assignments
+    WHERE video_id = ? AND channel_id = ? AND local_speaker = ?
+  `).get(args.videoId, args.channelId, args.localSpeaker) as { centroid: Buffer } | undefined;
+  if (!va) return;
+  const newCentroid = bufferToF32(va.centroid);
+
+  const existing = getSpeakerEmbedding(args.speakerId);
+  if (!existing) {
+    setSpeakerEmbedding(args.speakerId, newCentroid, 1);
+    return;
+  }
+  // Weighted average + renormalize (centroids are stored normalized).
+  const merged = new Float32Array(existing.embedding.length);
+  const n = existing.sample_count;
+  let normSq = 0;
+  for (let i = 0; i < merged.length; i++) {
+    merged[i] = (existing.embedding[i] * n + newCentroid[i]) / (n + 1);
+    normSq += merged[i] * merged[i];
+  }
+  const norm = Math.sqrt(normSq);
+  if (norm > 0) {
+    for (let i = 0; i < merged.length; i++) merged[i] = merged[i] / norm;
+  }
+  setSpeakerEmbedding(args.speakerId, merged, n + 1);
 }
 
 export function closeDb(): void {

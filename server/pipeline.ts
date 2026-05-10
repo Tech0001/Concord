@@ -852,6 +852,8 @@ export class Pipeline extends EventEmitter {
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
         diarize: this.config.processing.diarizationEnabled !== false && channel.diarize !== false,
+        videoId: video.id,
+        channelId: channel.id,
       });
 
       job.mdPath = mdPath;
@@ -1226,6 +1228,8 @@ export class Pipeline extends EventEmitter {
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
         diarize: this.config.processing.diarizationEnabled !== false && channel.diarize !== false,
+        videoId,
+        channelId,
       });
 
       job.mdPath = mdPath;
@@ -1366,6 +1370,8 @@ export class Pipeline extends EventEmitter {
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
         diarize: this.config.processing.diarizationEnabled !== false && channel.diarize !== false,
+        videoId: realVideoId,
+        channelId: channel.id,
       });
 
       job.mdPath = mdPath;
