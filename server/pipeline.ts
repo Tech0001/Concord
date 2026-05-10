@@ -176,6 +176,23 @@ function localStableId(absPath: string): string {
   return `local-${hash.substring(0, 11)}`;
 }
 
+/** YouTube sometimes leaves `is_live: true` on the metadata of old
+ *  streams (especially archived premieres). A video uploaded more than
+ *  24 hours ago physically can't still be broadcasting, so the flag is
+ *  stale and we should proceed with a normal download instead of parking
+ *  the row in `waiting_live` forever. */
+function isLiveFlagStale(uploadDate: string | null): boolean {
+  if (!uploadDate) return false;
+  const m = uploadDate.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (!m) return false;
+  const uploadMs = Date.UTC(
+    parseInt(m[1], 10),
+    parseInt(m[2], 10) - 1,
+    parseInt(m[3], 10),
+  );
+  return Date.now() - uploadMs > 24 * 60 * 60 * 1000;
+}
+
 function mtimeToYYYYMMDD(mtimeMs: number): string {
   const d = new Date(mtimeMs);
   const y = d.getFullYear();
@@ -722,8 +739,12 @@ export class Pipeline extends EventEmitter {
     this.emit("jobStarted", job);
 
     try {
-      // Step 1: Check if live
-      if (video.isLive && this.config.processing.waitForLiveToFinish) {
+      // Step 1: Check if live (ignoring stale is_live flags on old uploads)
+      if (
+        video.isLive
+        && this.config.processing.waitForLiveToFinish
+        && !isLiveFlagStale(video.uploadDate)
+      ) {
         job.status = "waiting_live";
         updateQueueStatus(video.id, channel.id, { status: "waiting_live" });
         this.emit("jobUpdated", job);
