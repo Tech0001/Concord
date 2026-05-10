@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
 import { transcribeWithFluidAudio } from "./transcribe-fluidaudio";
+import { transcribeWithParakeet } from "./transcribe-parakeet";
 
 export interface TranscriptionOptions {
   model?: string;
@@ -90,6 +91,21 @@ export function transcribeAudio(
   }
 
   const parakeet = isParakeetModel(model);
+  if (parakeet) {
+    // Parakeet (transcription) + Sortformer (diarization) run in parallel
+    // through the TS wrapper so segment+speaker merge happens via the
+    // shared diarize-merge module. Same flow as Mac's FluidAudio path.
+    const resolvedPythonPath = pythonPath || defaultPythonPath(true);
+    return withTranscriptionLock(() =>
+      transcribeWithParakeet(audioPath, outputMdPath, {
+        model,
+        device,
+        pythonPath: resolvedPythonPath,
+        diarize,
+      }),
+    );
+  }
+
   // The pipeline config stores a single `pythonVenv` (the whisper venv).
   // Parakeet needs a separate Python with NeMo installed, so when the model
   // is parakeet we always route to the parakeet venv and ignore the
