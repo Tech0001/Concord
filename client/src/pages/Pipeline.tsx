@@ -74,6 +74,7 @@ interface Config {
   videoQuality: string;
   videoCodec: string;
   youtubeCookiesFromBrowser: string;
+  youtubeCookiesFile: string;
   youtubeSpeedPreset: "fast" | "balanced" | "conservative";
   dailyDownloadCap: number;
   transcription: { model: string; language: string; device: string };
@@ -121,6 +122,7 @@ export default function PipelineStatus() {
   const [videoQuality, setVideoQuality] = useState("1080");
   const [videoCodec, setVideoCodec] = useState("any");
   const [youtubeCookies, setYoutubeCookies] = useState("");
+  const [youtubeCookiesFile, setYoutubeCookiesFile] = useState("");
   const [youtubeSpeed, setYoutubeSpeed] = useState<"fast" | "balanced" | "conservative">("conservative");
   const [dailyCap, setDailyCap] = useState(200);
   const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
@@ -201,6 +203,7 @@ export default function PipelineStatus() {
       setVideoQuality(c.videoQuality || "1080");
       setVideoCodec(c.videoCodec || "any");
       setYoutubeCookies(c.youtubeCookiesFromBrowser || "");
+      setYoutubeCookiesFile(c.youtubeCookiesFile || "");
       setYoutubeSpeed(c.youtubeSpeedPreset || "conservative");
       setDailyCap(typeof c.dailyDownloadCap === "number" ? c.dailyDownloadCap : 200);
       setTranscriptionModel(c.transcription?.model || "large-v3");
@@ -330,6 +333,7 @@ export default function PipelineStatus() {
       videoQuality,
       videoCodec,
       youtubeCookiesFromBrowser: youtubeCookies,
+      youtubeCookiesFile: youtubeCookiesFile.trim(),
       youtubeSpeedPreset: youtubeSpeed,
       dailyDownloadCap: dailyCap,
       transcription: {
@@ -555,6 +559,23 @@ export default function PipelineStatus() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="grid grid-cols-[140px_1fr] items-start gap-2">
+                <label className="text-muted-foreground pt-1.5" htmlFor="cookiesFile">Cookies file</label>
+                <div className="space-y-1">
+                  <Input
+                    id="cookiesFile"
+                    value={youtubeCookiesFile}
+                    onChange={e => setYoutubeCookiesFile(e.target.value)}
+                    className="h-8 font-mono"
+                    placeholder="/path/to/cookies.txt (overrides browser dropdown when set)"
+                  />
+                  <p className="text-[10px] text-muted-foreground leading-tight">
+                    Netscape-format cookies.txt. Export via a browser extension
+                    like "Get cookies.txt LOCALLY". Overrides the browser dropdown
+                    above. Skips Keychain prompts.
+                  </p>
+                </div>
+              </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <label className="text-muted-foreground">Transcription model</label>
                 <Select value={transcriptionModel} onValueChange={setTranscriptionModel}>
@@ -587,7 +608,11 @@ export default function PipelineStatus() {
               <span className="text-muted-foreground">Download speed</span>
               <code className="font-mono text-foreground">{config?.youtubeSpeedPreset || "conservative"}</code>
               <span className="text-muted-foreground">YouTube cookies</span>
-              <code className="font-mono text-foreground">{config?.youtubeCookiesFromBrowser || "none"}</code>
+              <code className="font-mono text-foreground">
+                {config?.youtubeCookiesFile
+                  ? `file: ${config.youtubeCookiesFile}`
+                  : (config?.youtubeCookiesFromBrowser || "none")}
+              </code>
               <span className="text-muted-foreground">Transcription model</span>
               <code className="font-mono text-foreground">{config?.transcription?.model || "large-v3"}</code>
             </div>

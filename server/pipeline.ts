@@ -64,6 +64,12 @@ export interface PipelineConfig {
    *  you're not a bot" eventually). Pass through to yt-dlp's
    *  `--cookies-from-browser <browser>` flag. */
   youtubeCookiesFromBrowser: string;
+  /** Path to a Netscape-format cookies.txt file. Takes precedence over
+   *  youtubeCookiesFromBrowser when set — pass through to yt-dlp's
+   *  `--cookies <file>` flag. Use this when the browser DB is locked
+   *  (Chromium-based browsers running) or you'd rather not grant
+   *  Keychain access. */
+  youtubeCookiesFile: string;
   /** Politeness preset for yt-dlp's --sleep-interval / --max-sleep-interval.
    *  Conservative is the safe default for new installs — fewer rate-limit
    *  hits at the cost of slower downloads. Fast trades safety for speed
@@ -427,6 +433,7 @@ export class Pipeline extends EventEmitter {
       videoQuality: "1080",
       videoCodec: "any",
       youtubeCookiesFromBrowser: "",
+      youtubeCookiesFile: "",
       youtubeSpeedPreset: "conservative",
       dailyDownloadCap: 200,
       transcription: {
@@ -467,6 +474,7 @@ export class Pipeline extends EventEmitter {
       videoQuality: stored.videoQuality || defaults.videoQuality,
       videoCodec: stored.videoCodec || defaults.videoCodec,
       youtubeCookiesFromBrowser: stored.youtubeCookiesFromBrowser || defaults.youtubeCookiesFromBrowser,
+      youtubeCookiesFile: stored.youtubeCookiesFile || defaults.youtubeCookiesFile,
       youtubeSpeedPreset: parseSpeedPreset(stored.youtubeSpeedPreset, defaults.youtubeSpeedPreset),
       dailyDownloadCap: parseConfigNumber(stored.dailyDownloadCap, defaults.dailyDownloadCap),
       transcription: {
@@ -540,6 +548,7 @@ export class Pipeline extends EventEmitter {
       videoQuality: config.videoQuality,
       videoCodec: config.videoCodec,
       youtubeCookiesFromBrowser: config.youtubeCookiesFromBrowser,
+      youtubeCookiesFile: config.youtubeCookiesFile,
       youtubeSpeedPreset: config.youtubeSpeedPreset,
       dailyDownloadCap: config.dailyDownloadCap,
       "transcription.model": config.transcription.model,
@@ -1134,6 +1143,7 @@ export class Pipeline extends EventEmitter {
   ): Promise<void> {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     const cookiesBrowser = (this.config.youtubeCookiesFromBrowser || "").trim();
+    const cookiesFile = (this.config.youtubeCookiesFile || "").trim();
     const sleep = speedPresetToSleepInterval(this.config.youtubeSpeedPreset);
 
     return new Promise((resolve, reject) => {
@@ -1147,10 +1157,15 @@ export class Pipeline extends EventEmitter {
         noWarnings: true,
         // See youtube-dl.ts — unlocks AV1/VP9 streams via Node JS runtime.
         jsRuntimes: "node",
-        // Pass through to yt-dlp's --cookies-from-browser flag so we
-        // inherit the user's logged-in YouTube session (defeats the
-        // "Sign in to confirm you're not a bot" gate).
-        ...(cookiesBrowser ? { cookiesFromBrowser: cookiesBrowser } : {}),
+        // Auth cookies: prefer a Netscape cookies.txt file when set
+        // (skips Keychain prompts and works while the browser is open);
+        // fall back to --cookies-from-browser otherwise. Either defeats
+        // the "Sign in to confirm you're not a bot" gate.
+        ...(cookiesFile
+          ? { cookies: cookiesFile }
+          : cookiesBrowser
+            ? { cookiesFromBrowser: cookiesBrowser }
+            : {}),
         // Politeness: random sleep between requests reduces rate-limit
         // and bot-detection hits. Maps the user's speed preset.
         sleepInterval: sleep.min,

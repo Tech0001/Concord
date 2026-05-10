@@ -10,6 +10,23 @@ function youtubeCookiesFromBrowser(): string {
   return (getConfigValues().youtubeCookiesFromBrowser || "").trim();
 }
 
+/** Path to a Netscape cookies.txt file. Takes precedence over the
+ *  browser source when both are set. Empty string = unset. */
+function youtubeCookiesFile(): string {
+  return (getConfigValues().youtubeCookiesFile || "").trim();
+}
+
+/** Build the auth-cookie subset of yt-dlp options.
+ *  Prefers --cookies <file> when configured; falls back to
+ *  --cookies-from-browser; otherwise no cookies at all. */
+function youtubeCookieOpts(): Record<string, string> {
+  const file = youtubeCookiesFile();
+  if (file) return { cookies: file };
+  const browser = youtubeCookiesFromBrowser();
+  if (browser) return { cookiesFromBrowser: browser };
+  return {};
+}
+
 /** Read the user's speed preset (fast / balanced / conservative) and
  *  return the corresponding yt-dlp sleep-interval pair. */
 function youtubeSleep(): { min: number; max: number } {
@@ -50,7 +67,7 @@ interface ProgressCallback {
 
 export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoInfo> {
   try {
-    const cookiesBrowser = youtubeCookiesFromBrowser();
+    const cookieOpts = youtubeCookieOpts();
     const sleep = youtubeSleep();
     // Get video info with available formats
     const result = await youtubedl(url, {
@@ -64,10 +81,9 @@ export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoIn
       // back to the android_vr API, which only exposes H.264. Pointing it
       // at the local node binary unlocks the full AV1/VP9 format list.
       jsRuntimes: 'node',
-      // Pass through to yt-dlp's --cookies-from-browser when configured.
-      // Without it, anonymous metadata fetches eventually hit YouTube's
-      // bot-detection gate.
-      ...(cookiesBrowser ? { cookiesFromBrowser: cookiesBrowser } : {}),
+      // Auth cookies — defeats the "Sign in to confirm you're not a bot"
+      // gate. Prefers cookies.txt file over browser extraction.
+      ...cookieOpts,
       sleepInterval: sleep.min,
       maxSleepInterval: sleep.max,
     } as Parameters<typeof youtubedl>[1]);
@@ -101,7 +117,7 @@ export async function downloadYouTubeVideo(
       console.error("Error ensuring temp directory exists:", error);
     }
 
-    const cookiesBrowser = youtubeCookiesFromBrowser();
+    const cookieOpts = youtubeCookieOpts();
     const sleep = youtubeSleep();
 
     // When downloading, we need to specify that we want both video and audio
@@ -128,8 +144,8 @@ export async function downloadYouTubeVideo(
       // Use Node as the JS runtime so yt-dlp can decode YouTube's player
       // and see AV1/VP9 streams (otherwise falls back to H.264-only API).
       jsRuntimes: 'node',
-      // Pass through to yt-dlp's --cookies-from-browser when configured.
-      ...(cookiesBrowser ? { cookiesFromBrowser: cookiesBrowser } : {}),
+      // Auth cookies — same priority as the metadata path above.
+      ...cookieOpts,
       sleepInterval: sleep.min,
       maxSleepInterval: sleep.max,
     } as Parameters<typeof youtubedl>[1]);
