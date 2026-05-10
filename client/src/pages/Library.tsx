@@ -99,6 +99,15 @@ function formatDate(uploadDate: string | null): string {
   return uploadDate;
 }
 
+const AUDIO_EXTS = new Set([".mp3", ".m4a", ".wav", ".flac", ".aac", ".opus", ".ogg"]);
+
+function isAudioPath(filePath?: string | null): boolean {
+  if (!filePath) return false;
+  const lastDot = filePath.lastIndexOf(".");
+  if (lastDot < 0) return false;
+  return AUDIO_EXTS.has(filePath.slice(lastDot).toLowerCase());
+}
+
 function formatDuration(seconds: number | null): string {
   if (!seconds || seconds <= 0) return "";
   const safe = Math.floor(seconds);
@@ -430,7 +439,13 @@ export default function Library() {
                       <TableCell className="py-2 text-sm">{entry.word_count || ""}</TableCell>
                       <TableCell className="py-2">
                         <div className="flex flex-wrap gap-1">
-                          {entry.video_path && <Badge variant="outline">video</Badge>}
+                          {entry.video_path && (
+                            <Badge variant="outline" className="gap-1">
+                              {isAudioPath(entry.video_path)
+                                ? <><Mic className="h-3 w-3" />audio</>
+                                : <>video</>}
+                            </Badge>
+                          )}
                           {entry.md_path && <Badge variant="outline">md</Badge>}
                           {!entry.video_path && !entry.md_path && <span className="text-xs text-muted-foreground">none</span>}
                         </div>

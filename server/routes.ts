@@ -1318,6 +1318,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ext === ".webm" ? "video/webm" :
         ext === ".mkv" ? "video/x-matroska" :
         ext === ".m4v" ? "video/x-m4v" :
+        ext === ".mp3" ? "audio/mpeg" :
+        ext === ".m4a" ? "audio/mp4" :
+        ext === ".wav" ? "audio/wav" :
+        ext === ".flac" ? "audio/flac" :
+        ext === ".aac" ? "audio/aac" :
+        ext === ".opus" ? "audio/ogg" :
+        ext === ".ogg" ? "audio/ogg" :
         "video/mp4";
       const range = req.headers.range;
 

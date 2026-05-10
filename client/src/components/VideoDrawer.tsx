@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -124,8 +124,17 @@ function videoKey(video: VideoDrawerEntry | null): string {
   return video ? `${video.channel_id}:${video.video_id}` : "";
 }
 
+const AUDIO_EXTS = new Set([".mp3", ".m4a", ".wav", ".flac", ".aac", ".opus", ".ogg"]);
+
+function isAudioPath(filePath?: string | null): boolean {
+  if (!filePath) return false;
+  const lastDot = filePath.lastIndexOf(".");
+  if (lastDot < 0) return false;
+  return AUDIO_EXTS.has(filePath.slice(lastDot).toLowerCase());
+}
+
 export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentIndex, onOpenChange }: VideoDrawerProps) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   const transcriptListRef = useRef<HTMLDivElement | null>(null);
   const segmentRefs = useRef<Record<number, HTMLButtonElement | null>>({});
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
@@ -564,16 +573,29 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
 
             <div className="space-y-4 p-4">
               {streamUrl ? (
-                <video
-                  key={streamUrl}
-                  ref={videoRef}
-                  controls
-                  preload="metadata"
-                  onLoadedMetadata={onLoadedMetadata}
-                  onTimeUpdate={event => setActiveSeconds(event.currentTarget.currentTime)}
-                  className="aspect-video w-full rounded-md border bg-black"
-                  src={streamUrl}
-                />
+                isAudioPath(video.video_path) ? (
+                  <audio
+                    key={streamUrl}
+                    ref={videoRef as RefObject<HTMLAudioElement>}
+                    controls
+                    preload="metadata"
+                    onLoadedMetadata={onLoadedMetadata}
+                    onTimeUpdate={event => setActiveSeconds(event.currentTarget.currentTime)}
+                    className="w-full rounded-md border bg-muted"
+                    src={streamUrl}
+                  />
+                ) : (
+                  <video
+                    key={streamUrl}
+                    ref={videoRef as RefObject<HTMLVideoElement>}
+                    controls
+                    preload="metadata"
+                    onLoadedMetadata={onLoadedMetadata}
+                    onTimeUpdate={event => setActiveSeconds(event.currentTarget.currentTime)}
+                    className="aspect-video w-full rounded-md border bg-black"
+                    src={streamUrl}
+                  />
+                )
               ) : (
                 <div className="flex aspect-video items-center justify-center rounded-md border bg-muted text-sm text-muted-foreground">
                   No saved video file for this record.
@@ -592,7 +614,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
               <div className="flex flex-wrap gap-2">
                 {video.status && <Badge variant="outline">{video.status}</Badge>}
                 {!!video.word_count && <Badge variant="outline">{video.word_count} words</Badge>}
-                {video.video_path && <Badge variant="outline">video</Badge>}
+                {video.video_path && <Badge variant="outline">{isAudioPath(video.video_path) ? "audio" : "video"}</Badge>}
                 {video.md_path && <Badge variant="outline">transcript</Badge>}
                 {videoInfo?.codec && (
                   <Badge
