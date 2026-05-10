@@ -37,10 +37,14 @@ youtube-dl-cache/
 *.mkv
 *.tar.gz
 
-# SQLite transient files — pipeline.db itself IS tracked (backup)
+# SQLite — never track live DBs in git (they corrupt across pulls).
+# Use scripts/backup-db.sh or `sqlite3 src.db ".backup dest.db"` for snapshots.
+*.db
 *.db-shm
 *.db-wal
 *.db-journal
+*.sqlite
+*.sqlite3
 
 # Logs
 *.log
