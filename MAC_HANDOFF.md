@@ -158,9 +158,30 @@ Alternative invocation (no env var): `xcrun --toolchain swift swift build`.
 Build the CLI:
 
 ```bash
+<<<<<<< Updated upstream
 git clone https://github.com/FluidInference/FluidAudio ~/code/FluidAudio
 cd ~/code/FluidAudio
 swift build -c release      # ~2 minutes; downloads SPM deps + compiles
+=======
+# Prerequisite: a swift.org standalone toolchain (~1 GB .pkg).
+# `xcode-select --install` (CLT) alone is NOT enough — its
+# PackageDescription library can't link FluidAudio's
+# `swift-tools-version: 6.0` manifest, which fails with
+# "Undefined symbols ... PackageDescription.Package.__allocating_init(...)".
+# Full Xcode also works but is overkill: codesign, notarytool, and hdiutil
+# all live in CLT (not in the Xcode .app), so the standalone toolchain is
+# sufficient end-to-end through .dmg signing.
+#
+# Download the latest 6.0+ release `.pkg` from https://www.swift.org/install/macos/
+# Install it, then:
+export TOOLCHAINS=swift     # resolves to the newest installed swift.org toolchain
+                            # add to ~/.zshrc to make persistent
+                            # pin a specific one with e.g. TOOLCHAINS=org.swift.6.0-release
+
+git clone https://github.com/FluidInference/FluidAudio ~/GitHub/FluidAudio
+cd ~/GitHub/FluidAudio
+swift build -c release
+>>>>>>> Stashed changes
 ```
 
 Resulting binary is at `~/code/FluidAudio/.build/release/fluidaudiocli`.
@@ -168,6 +189,7 @@ Copy it somewhere on PATH so the pipeline can spawn it without an
 absolute path:
 
 ```bash
+<<<<<<< Updated upstream
 sudo cp .build/release/fluidaudiocli /usr/local/bin/
 fluidaudiocli --help        # should print usage; no Swift required at runtime
 ```
@@ -191,6 +213,38 @@ Confirm it:
 - Doesn't crash on a 60+ minute file (FluidAudio handles long-form
   internally via cache-aware streaming, unlike the Linux NeMo path
   which we had to chunk manually)
+=======
+.build/release/fluidaudiocli transcribe /path/to/test.wav --word-timestamps --output-json /tmp/out.json
+```
+
+**Real CLI shape** (verified by reading the source — README is
+incomplete): the transcribe subcommand is `transcribe <audio>
+[--word-timestamps] [--output-json <path>] [--model-version v2|v3]
+[--language <code>]`. Default model version is `v3` (multilingual);
+`v2` is English-only with higher recall.
+
+**JSON output schema FluidAudio emits** (camelCase):
+```
+{ audioFile, mode, modelVersion, text, durationSeconds,
+  processingTimeSeconds, rtfx, confidence,
+  wordTimings: [{word, startTime, endTime, confidence}],
+  timingsConfirmed }
+```
+
+**Gaps vs the existing Python contract** (see
+`server/transcribe-parakeet.py` for the canonical shape) that the
+TS wrapper must fill:
+- No `segments` — synthesize using the same algorithm as
+  `group_words_into_segments(words, max_gap=1.2, max_duration=30.0)`
+  in `transcribe-parakeet.py:144`. Same numbers, same UX.
+- No `language` — emit `"auto"` (v3 detects internally).
+- No `word_count` — derive from `text.split()` length.
+- No `realtime_factor` — alias `rtfx`.
+- No `transcription_time_seconds` — alias `processingTimeSeconds`.
+- Missing convenience fields (`schema_version: 2`,
+  `duration_formatted`, `segment_count`, `language_probability: 1`,
+  `load_time_seconds: 0`) — fill with constants/derived values.
+>>>>>>> Stashed changes
 
 **Verify the output schema** — the pipeline expects a JSON file alongside
 the .md transcript with `text`, `segments` (start/end/text), `words`
