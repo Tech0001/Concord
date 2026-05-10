@@ -95,12 +95,16 @@ export function transcribeAudio(
     // Parakeet (transcription) + Sortformer (diarization) run in parallel
     // through the TS wrapper so segment+speaker merge happens via the
     // shared diarize-merge module. Same flow as Mac's FluidAudio path.
-    const resolvedPythonPath = pythonPath || defaultPythonPath(true);
+    //
+    // ALWAYS use the parakeet venv — the pipeline config stores a single
+    // pythonVenv (the whisper venv) which doesn't have NeMo. Ignore the
+    // whisper override here; PARAKEET_PYTHON env var can still customize
+    // (handled inside defaultPythonPath).
     return withTranscriptionLock(() =>
       transcribeWithParakeet(audioPath, outputMdPath, {
         model,
         device,
-        pythonPath: resolvedPythonPath,
+        pythonPath: defaultPythonPath(true),
         diarize,
       }),
     );
