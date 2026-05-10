@@ -128,104 +128,159 @@ def parse_chunk_segments(segment_lines, time_offset: float):
     return parsed
 
 
-def link_chunks(chunks_segments, overlap_sec: float):
-    """Given per-chunk segments with local speaker IDs, build a global
-    speaker mapping by matching speakers in the overlap region between
-    consecutive chunks. Chunk N's local speaker that dominates the
-    overlap region in chunk N+1 inherits N+1's matching local speaker's
-    global ID — so the same person stays as the same global ID across
-    chunk boundaries.
+def build_global_speaker_maps(chunks_segments, chunk_starts, overlap_sec):
+    """Per-chunk local_to_global speaker ID maps, using overlap-region
+    co-occurrence to link the same person across consecutive chunks.
 
-    Greedy and not perfect (won't handle a speaker only in N+2 that
-    didn't appear in the overlap), but works for the common case of
-    a small number of speakers carrying through the audio.
+    The overlap region between chunk i-1 and chunk i is the SAME
+    physical audio window: [chunk_starts[i], chunk_starts[i] + overlap_sec].
+    Within that window, both chunks heard the same voices — so if the
+    model labeled person A as "speaker_2" in chunk i-1 and "speaker_0"
+    in chunk i, those two labels should map to the same global ID.
+
+    Algorithm:
+      1. For each (prev_local, curr_local) pair, sum the time both were
+         simultaneously the active speaker inside the overlap region.
+      2. Greedy match: order curr's overlap-region speakers by total
+         time-talked, assign each to the prev speaker with the highest
+         co-occurrence (each prev speaker claimed at most once).
+      3. Curr speakers who don't appear in the overlap region (= new
+         speakers introduced after the overlap) get fresh global IDs.
+
+    Won't catch a speaker who briefly disappears across a chunk boundary
+    and reappears later — that's a hard problem requiring speaker
+    embeddings. Acceptable for the common case where speakers carry
+    through the audio with at least some overlap-region presence.
     """
     if not chunks_segments:
         return []
 
-    # First chunk: each local id becomes a global id
     global_map_per_chunk = []
     next_global = 0
 
-    first_local_to_global = {}
+    # First chunk: each local id becomes a global id, in order of first appearance.
+    first_map = {}
     for seg in chunks_segments[0]:
-        if seg["local_speaker"] not in first_local_to_global:
-            first_local_to_global[seg["local_speaker"]] = next_global
+        if seg["local_speaker"] not in first_map:
+            first_map[seg["local_speaker"]] = next_global
             next_global += 1
-    global_map_per_chunk.append(first_local_to_global)
+    global_map_per_chunk.append(first_map)
 
     for i in range(1, len(chunks_segments)):
         prev = chunks_segments[i - 1]
         curr = chunks_segments[i]
+        local_to_global = {}
+
         if not curr:
             global_map_per_chunk.append({})
             continue
 
-        # Find overlap region: [curr_start, curr_start + overlap_sec]
-        # in absolute time. (curr's segments are already in absolute time.)
-        overlap_start = curr[0]["start"] if curr else 0
+        # Real overlap region using actual chunk start, NOT first-segment start.
+        # If the model detected silence at the start of the chunk, first-segment
+        # start would be later than the chunk boundary and shift our window
+        # past the actual shared-audio region.
+        overlap_start = chunk_starts[i]
         overlap_end = overlap_start + overlap_sec
 
-        # For each local speaker in curr, find the speaker in prev who
-        # overlaps it most in the overlap region.
-        prev_in_window = [s for s in prev if s["end"] > overlap_start and s["start"] < overlap_end]
+        # Co-occurrence matrix: how many seconds did each (prev_local, curr_local)
+        # pair simultaneously hold the floor inside the overlap region?
+        co_occurrence = {}
+        for ps in prev:
+            ps_a = max(ps["start"], overlap_start)
+            ps_b = min(ps["end"], overlap_end)
+            if ps_b <= ps_a:
+                continue  # ps doesn't intersect overlap region
+            for cs in curr:
+                cs_a = max(cs["start"], overlap_start)
+                cs_b = min(cs["end"], overlap_end)
+                if cs_b <= cs_a:
+                    continue
+                joint = max(0.0, min(ps_b, cs_b) - max(ps_a, cs_a))
+                if joint > 0:
+                    key = (ps["local_speaker"], cs["local_speaker"])
+                    co_occurrence[key] = co_occurrence.get(key, 0.0) + joint
 
-        local_to_global = {}
-        for seg in curr:
-            local = seg["local_speaker"]
-            if local in local_to_global:
-                continue
-            # Find prev segments that overlap this segment's window
-            best_overlap = 0.0
-            best_prev_local = None
-            for ps in prev_in_window:
-                ovl = max(0.0, min(seg["end"], ps["end"]) - max(seg["start"], ps["start"]))
-                if ovl > best_overlap:
-                    best_overlap = ovl
-                    best_prev_local = ps["local_speaker"]
-            if best_prev_local is not None and best_prev_local in global_map_per_chunk[i - 1]:
-                local_to_global[local] = global_map_per_chunk[i - 1][best_prev_local]
+        # Total floor time each curr local speaker held in the overlap region
+        # (used to order matching — dominant speakers get first pick).
+        curr_time_in_overlap = {}
+        for cs in curr:
+            cs_a = max(cs["start"], overlap_start)
+            cs_b = min(cs["end"], overlap_end)
+            t = max(0.0, cs_b - cs_a)
+            if t > 0:
+                local = cs["local_speaker"]
+                curr_time_in_overlap[local] = curr_time_in_overlap.get(local, 0.0) + t
+
+        # Greedy assignment: dominant curr speakers claim their best prev match first.
+        # Each prev local can only be claimed once — different curr speakers in
+        # the overlap MUST be different people, so they can't both inherit the
+        # same prev global ID.
+        used_prev = set()
+        for curr_local in sorted(curr_time_in_overlap, key=curr_time_in_overlap.get, reverse=True):
+            best_prev = None
+            best_joint = 0.0
+            for (pl, cl), joint in co_occurrence.items():
+                if cl == curr_local and pl not in used_prev and joint > best_joint:
+                    best_joint = joint
+                    best_prev = pl
+            if best_prev is not None and best_prev in global_map_per_chunk[i - 1]:
+                local_to_global[curr_local] = global_map_per_chunk[i - 1][best_prev]
+                used_prev.add(best_prev)
             else:
-                # No match — assign a new global id
-                local_to_global[local] = next_global
+                local_to_global[curr_local] = next_global
                 next_global += 1
+
+        # Curr speakers who don't appear in the overlap region — introduced
+        # only later in this chunk — get fresh global IDs (no signal to
+        # link them to anyone).
+        for cs in curr:
+            if cs["local_speaker"] not in local_to_global:
+                local_to_global[cs["local_speaker"]] = next_global
+                next_global += 1
+
         global_map_per_chunk.append(local_to_global)
 
-    # Apply the global mapping
-    all_spans = []
+    return global_map_per_chunk
+
+
+def merge_chunked_spans(chunks_segments, chunk_starts, global_maps, overlap_sec):
+    """Apply per-chunk global mappings, then dedupe overlap regions by
+    keeping prev's view of the overlap and dropping curr's duplicate.
+
+    Each chunk's segments are already in absolute time. For chunk i (i>0),
+    drop any segments that fall entirely inside the overlap region with
+    chunk i-1; clip segments that straddle the overlap boundary so they
+    start at overlap_end. Result: no duplicate coverage, no gaps.
+    """
+    out = []
     for i, segs in enumerate(chunks_segments):
-        mapping = global_map_per_chunk[i]
-        for seg in segs:
-            global_id = mapping.get(seg["local_speaker"], 0)
-            all_spans.append({
-                "start": seg["start"],
-                "end": seg["end"],
-                "global_speaker": global_id,
-            })
-    return all_spans
-
-
-def merge_overlapping_spans(spans, overlap_sec: float):
-    """Deduplicate the overlap region. After linking, consecutive chunks
-    have duplicate spans in their shared overlap. Drop later-chunk spans
-    whose start falls before the previous chunk's end - overlap/2 (the
-    midpoint of the overlap region)."""
-    if not spans:
-        return []
-    spans.sort(key=lambda s: s["start"])
-    out = [spans[0]]
-    for s in spans[1:]:
-        prev = out[-1]
-        # If the new span starts well before the previous one ended (by
-        # more than overlap_sec/2), it's a duplicate from the overlap.
-        if s["start"] < prev["end"] - overlap_sec / 2 and s["global_speaker"] == prev["global_speaker"]:
-            # Same speaker continuing — extend prev
-            prev["end"] = max(prev["end"], s["end"])
-        elif s["start"] < prev["end"]:
-            # Different speaker overlap — keep the longer one's end, advance
-            out.append(s)
+        mapping = global_maps[i]
+        if i == 0:
+            for seg in segs:
+                out.append({
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "global_speaker": mapping.get(seg["local_speaker"], 0),
+                })
         else:
-            out.append(s)
+            overlap_end = chunk_starts[i] + overlap_sec
+            for seg in segs:
+                if seg["start"] >= overlap_end:
+                    # Fully past the overlap — keep as-is
+                    out.append({
+                        "start": seg["start"],
+                        "end": seg["end"],
+                        "global_speaker": mapping.get(seg["local_speaker"], 0),
+                    })
+                elif seg["end"] > overlap_end:
+                    # Straddles the overlap boundary — clip start to overlap_end
+                    out.append({
+                        "start": overlap_end,
+                        "end": seg["end"],
+                        "global_speaker": mapping.get(seg["local_speaker"], 0),
+                    })
+                # else: fully inside overlap — drop (prev chunk has it)
+    out.sort(key=lambda s: s["start"])
     return out
 
 
@@ -256,6 +311,7 @@ def diarize(audio_path: str, output_path: str, model_name: str, device: str,
     t_inf_start = time.time()
     try:
         chunks, audio_duration = split_wav(audio_path, chunk_sec, overlap_sec, tmpdir)
+        chunk_starts = [start for _, start in chunks]
         print(f"[diarize-sortformer] Audio: {audio_duration:.1f}s split into {len(chunks)} chunks "
               f"({chunk_sec}s each, {overlap_sec}s overlap)")
 
@@ -271,8 +327,8 @@ def diarize(audio_path: str, output_path: str, model_name: str, device: str,
                 import torch
                 torch.cuda.empty_cache()
 
-        global_spans = link_chunks(chunks_segments, overlap_sec)
-        merged_spans = merge_overlapping_spans(global_spans, overlap_sec)
+        global_maps = build_global_speaker_maps(chunks_segments, chunk_starts, overlap_sec)
+        merged_spans = merge_chunked_spans(chunks_segments, chunk_starts, global_maps, overlap_sec)
 
         # Convert to FluidAudio shape (1-indexed string speaker IDs).
         spans = [{
