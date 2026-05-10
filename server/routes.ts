@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getYouTubeVideoInfo, downloadYouTubeVideo, formatDuration } from "./youtube-dl";
+import { probeYtdlpHealth } from "./yt-dlp-bin";
 import { getPipeline, Pipeline } from "./pipeline";
 import {
   listModels as llmListModels,
@@ -737,6 +738,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : "Invalid config" });
     }
+  });
+
+  // yt-dlp health indicator. We deliberately do NOT auto-update yt-dlp anywhere;
+  // this endpoint just probes `yt-dlp --version` so the UI can show whether the
+  // binary is reachable and what version is installed. The result is cached for
+  // 60s — version doesn't change between user-initiated package upgrades.
+  let ytdlpHealthCache: { at: number; data: Awaited<ReturnType<typeof probeYtdlpHealth>> } | null = null;
+  app.get("/api/pipeline/ytdlp-health", async (req, res) => {
+    const force = req.query.force === "1" || req.query.force === "true";
+    if (!force && ytdlpHealthCache && Date.now() - ytdlpHealthCache.at < 60_000) {
+      return res.json({ ...ytdlpHealthCache.data, cached: true });
+    }
+    const data = await probeYtdlpHealth();
+    ytdlpHealthCache = { at: Date.now(), data };
+    res.json({ ...data, cached: false });
   });
 
   // ---- System info (for client-side platform-aware UI filtering) ----

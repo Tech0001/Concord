@@ -146,6 +146,8 @@ export default function PipelineStatus() {
   const [youtubeSpeed, setYoutubeSpeed] = useState<"fast" | "balanced" | "conservative">("conservative");
   const [dailyCap, setDailyCap] = useState(200);
   const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
+  const [ytdlpHealth, setYtdlpHealth] = useState<{ ok: boolean; version: string | null; kind: "native" | "bundled"; path: string; error?: string } | null>(null);
+  const [ytdlpHealthChecking, setYtdlpHealthChecking] = useState(false);
 
   // Download state (same pattern as main page)
   const [videoData, setVideoData] = useState<VideoInfo | null>(null);
@@ -159,9 +161,22 @@ export default function PipelineStatus() {
   const [manualTranscribeId, setManualTranscribeId] = useState<string | null>(null);
   const { toast } = useToast();
 
+  const fetchYtdlpHealth = async (force = false) => {
+    setYtdlpHealthChecking(true);
+    try {
+      const r = await apiRequest("GET", `/api/pipeline/ytdlp-health${force ? "?force=1" : ""}`);
+      setYtdlpHealth(await r.json());
+    } catch {
+      setYtdlpHealth({ ok: false, version: null, kind: "bundled", path: "", error: "Probe failed" });
+    } finally {
+      setYtdlpHealthChecking(false);
+    }
+  };
+
   useEffect(() => {
     fetchState();
     fetchConfig();
+    fetchYtdlpHealth();
     apiRequest("GET", "/api/system/info")
       .then((r) => r.json())
       .then((d: { platform: NodeJS.Platform }) => setPlatform(d.platform))
@@ -383,6 +398,38 @@ export default function PipelineStatus() {
                 {state.dailyDownloadCount ?? 0} / {state.dailyDownloadCap} today
               </span>
             )}
+            <span
+              className={
+                "inline-flex items-center gap-1 " +
+                (ytdlpHealth === null
+                  ? ""
+                  : ytdlpHealth.ok
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "font-medium text-red-600 dark:text-red-400")
+              }
+              title={
+                ytdlpHealth
+                  ? `${ytdlpHealth.kind} • ${ytdlpHealth.path}${ytdlpHealth.error ? ` • ${ytdlpHealth.error}` : ""}`
+                  : "Probing yt-dlp..."
+              }
+            >
+              <span className={"inline-block h-2 w-2 rounded-full " + (
+                ytdlpHealth === null
+                  ? "bg-muted-foreground/40"
+                  : ytdlpHealth.ok
+                    ? "bg-emerald-500"
+                    : "bg-red-500"
+              )} />
+              yt-dlp {ytdlpHealth?.version || (ytdlpHealthChecking ? "…" : "unreachable")}
+              <button
+                type="button"
+                className="ml-1 underline-offset-2 hover:underline disabled:opacity-50"
+                onClick={() => fetchYtdlpHealth(true)}
+                disabled={ytdlpHealthChecking}
+              >
+                {ytdlpHealthChecking ? "checking…" : "recheck"}
+              </button>
+            </span>
             {state?.lastCheck && <span>Last check: {new Date(state.lastCheck).toLocaleTimeString()}</span>}
           </div>
         </CardHeader>
