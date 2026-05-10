@@ -6,6 +6,7 @@ import type { TranscriptionResult } from "./transcribe";
 import {
   mergeSpeakers,
   spansFromFluidAudio,
+  normalizeFluidAudioSpeakerId,
   type SpeakerSpan,
 } from "./diarize-merge";
 import {
@@ -13,6 +14,11 @@ import {
   type Word as SplitWord,
   type Segment as SplitSegment,
 } from "./segment-split";
+import {
+  findClosestSpeaker,
+  upsertVideoSpeakerAssignment,
+  SPEAKER_AUTOMATCH_THRESHOLD,
+} from "./db";
 
 interface FluidAudioJSON {
   audioFile: string;
@@ -51,6 +57,12 @@ export interface FluidAudioOptions {
   binaryPath?: string;
   /** Skip diarization (single-speaker audio, faster). Default: enabled. */
   diarize?: boolean;
+  /** Used to persist cross-video speaker identity. When both are provided,
+   *  the wrapper aggregates per-local-speaker centroids from FluidAudio's
+   *  per-segment embeddings, then auto-matches against existing global
+   *  speakers via findClosestSpeaker. */
+  videoId?: string;
+  channelId?: string;
 }
 
 function defaultBinaryPath(): string {
@@ -79,7 +91,7 @@ export async function transcribeWithFluidAudio(
   outputMdPath: string,
   options: FluidAudioOptions = {},
 ): Promise<TranscriptionResult> {
-  const { model = "fluid-parakeet-tdt-v3", binaryPath, diarize = true } = options;
+  const { model = "fluid-parakeet-tdt-v3", binaryPath, diarize = true, videoId, channelId } = options;
   const bin = binaryPath || defaultBinaryPath();
 
   if (!fs.existsSync(bin)) {
@@ -112,7 +124,7 @@ export async function transcribeWithFluidAudio(
 
   await Promise.all(tasks);
 
-  const result = postProcess({ jsonPath, diarPath, outputMdPath, audioPath, model, diarize });
+  const result = postProcess({ jsonPath, diarPath, outputMdPath, audioPath, model, diarize, videoId, channelId });
   console.log(`[fluidaudio] Saved transcript: ${outputMdPath}`);
   return result;
 }
@@ -154,18 +166,24 @@ function postProcess(args: {
   audioPath: string;
   model: string;
   diarize: boolean;
+  videoId?: string;
+  channelId?: string;
 }): TranscriptionResult {
-  const { jsonPath, diarPath, outputMdPath, audioPath, model, diarize } = args;
+  const { jsonPath, diarPath, outputMdPath, audioPath, model, diarize, videoId, channelId } = args;
   const raw = JSON.parse(fs.readFileSync(jsonPath, "utf-8")) as FluidAudioJSON;
 
   // Load diarization spans if it ran. spansFromFluidAudio strips embeddings
   // and normalizes "1"/"2" → "S0"/"S1" so the merge module can stay
   // engine-agnostic.
   let speakerSpans: SpeakerSpan[] = [];
+  // Raw diarization segments — kept around so we can aggregate per-local-speaker
+  // centroids from the per-segment embeddings before discarding diarPath.
+  let diarSegments: DiarizationJSON["segments"] = [];
   if (diarize && fs.existsSync(diarPath)) {
     try {
       const diar = JSON.parse(fs.readFileSync(diarPath, "utf-8")) as DiarizationJSON;
-      speakerSpans = spansFromFluidAudio(diar.segments || []);
+      diarSegments = diar.segments || [];
+      speakerSpans = spansFromFluidAudio(diarSegments);
     } catch (err) {
       console.warn(`[fluidaudio] Diarization JSON malformed, continuing without speakers: ${(err as Error).message}`);
     }
@@ -215,12 +233,108 @@ function postProcess(args: {
     audioPath, model, language, duration, segments, words, fullText, speakerCount,
   }));
 
+  // Persist per-video speaker centroids + auto-match against the global
+  // speakers table for cross-video identity. Mirrors transcribe-parakeet's
+  // postProcess but does the aggregation in TS because FluidAudio's CLI
+  // emits per-segment embeddings rather than a per-speaker rollup.
+  // Skipped silently if videoId/channelId weren't plumbed through (CLI
+  // smoke tests) or if no segments had embeddings (older fluidaudiocli).
+  if (diarize && videoId && channelId && diarSegments.length > 0) {
+    persistFluidAudioSpeakers(diarSegments, videoId, channelId);
+  }
+
   // The .diar.json holds embeddings (large) and is fully merged into the
   // main JSON now. Drop it to avoid leaving hundreds of KB of unused
   // float arrays alongside every transcript.
   try { fs.unlinkSync(diarPath); } catch { /* ignore */ }
 
   return metadata;
+}
+
+interface SpeakerAggregate {
+  airtimeSeconds: number;
+  // Airtime-weighted sum (not yet normalized) of segment embeddings.
+  centroidSum: Float32Array | null;
+  // Longest single turn — used as the sample clip for the "play sample" UX.
+  longestTurnDuration: number;
+  sampleStart: number | null;
+  sampleEnd: number | null;
+}
+
+function persistFluidAudioSpeakers(
+  segments: DiarizationJSON["segments"],
+  videoId: string,
+  channelId: string,
+): void {
+  // Bucket by normalized local speaker label ("S0", "S1", ...).
+  const buckets = new Map<string, SpeakerAggregate>();
+  for (const seg of segments) {
+    if (!seg.embedding || seg.embedding.length === 0) continue;
+    const localSpeaker = normalizeFluidAudioSpeakerId(seg.speakerId);
+    const duration = Math.max(0, seg.endTimeSeconds - seg.startTimeSeconds);
+    if (duration <= 0) continue;
+
+    let bucket = buckets.get(localSpeaker);
+    if (!bucket) {
+      bucket = {
+        airtimeSeconds: 0,
+        centroidSum: new Float32Array(seg.embedding.length),
+        longestTurnDuration: 0,
+        sampleStart: null,
+        sampleEnd: null,
+      };
+      buckets.set(localSpeaker, bucket);
+    }
+    if (bucket.centroidSum && bucket.centroidSum.length === seg.embedding.length) {
+      for (let i = 0; i < seg.embedding.length; i++) {
+        bucket.centroidSum[i] += seg.embedding[i] * duration;
+      }
+    }
+    bucket.airtimeSeconds += duration;
+    if (duration > bucket.longestTurnDuration) {
+      bucket.longestTurnDuration = duration;
+      bucket.sampleStart = seg.startTimeSeconds;
+      bucket.sampleEnd = seg.endTimeSeconds;
+    }
+  }
+
+  let matched = 0;
+  let unidentified = 0;
+  for (const [localSpeaker, bucket] of Array.from(buckets.entries())) {
+    if (!bucket.centroidSum || bucket.airtimeSeconds <= 0) continue;
+    // L2-normalize so cosine distance to the global speakers table is on
+    // the same footing as Sortformer's already-normalized centroids.
+    const centroid = new Float32Array(bucket.centroidSum.length);
+    let norm = 0;
+    for (let i = 0; i < bucket.centroidSum.length; i++) {
+      norm += bucket.centroidSum[i] * bucket.centroidSum[i];
+    }
+    norm = Math.sqrt(norm);
+    if (norm === 0) continue;
+    for (let i = 0; i < bucket.centroidSum.length; i++) {
+      centroid[i] = bucket.centroidSum[i] / norm;
+    }
+
+    const match = findClosestSpeaker(centroid, SPEAKER_AUTOMATCH_THRESHOLD);
+    upsertVideoSpeakerAssignment({
+      videoId,
+      channelId,
+      localSpeaker,
+      speakerId: match ? match.speaker_id : null,
+      centroid,
+      confidence: match ? 1.0 - match.distance : null,
+      sampleStart: bucket.sampleStart,
+      sampleEnd: bucket.sampleEnd,
+      airtimeSeconds: bucket.airtimeSeconds,
+    });
+    if (match) matched++;
+    else unidentified++;
+  }
+  if (matched > 0 || unidentified > 0) {
+    console.log(
+      `[fluidaudio] Speaker profiles persisted: ${matched} auto-matched, ${unidentified} unidentified`,
+    );
+  }
 }
 
 

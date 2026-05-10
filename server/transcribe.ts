@@ -93,7 +93,7 @@ export function transcribeAudio(
 
   if (isFluidModel(model)) {
     return withTranscriptionLock(() =>
-      transcribeWithFluidAudio(audioPath, outputMdPath, { model, diarize }),
+      transcribeWithFluidAudio(audioPath, outputMdPath, { model, diarize, videoId, channelId }),
     );
   }
 
