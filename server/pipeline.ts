@@ -57,6 +57,11 @@ export interface PipelineConfig {
   videoQuality: string;
   /** Preferred video codec: "av01" | "vp9" | "avc1" | "any" */
   videoCodec: string;
+  /** Source for the YouTube auth cookies that defeat bot-detection.
+   *  Empty string = no cookies (anonymous, will hit "Sign in to confirm
+   *  you're not a bot" eventually). Pass through to yt-dlp's
+   *  `--cookies-from-browser <browser>` flag. */
+  youtubeCookiesFromBrowser: string;
   transcription: {
     model: string;
     language: string;
@@ -317,6 +322,7 @@ export class Pipeline extends EventEmitter {
       skipShorts: true,
       videoQuality: "1080",
       videoCodec: "any",
+      youtubeCookiesFromBrowser: "",
       transcription: {
         model: "large-v3",
         language: "en",
@@ -353,6 +359,7 @@ export class Pipeline extends EventEmitter {
       skipShorts: parseConfigBoolean(stored.skipShorts, defaults.skipShorts),
       videoQuality: stored.videoQuality || defaults.videoQuality,
       videoCodec: stored.videoCodec || defaults.videoCodec,
+      youtubeCookiesFromBrowser: stored.youtubeCookiesFromBrowser || defaults.youtubeCookiesFromBrowser,
       transcription: {
         model: stored["transcription.model"] || defaults.transcription.model,
         language: stored["transcription.language"] || defaults.transcription.language,
@@ -420,6 +427,7 @@ export class Pipeline extends EventEmitter {
       skipShorts: config.skipShorts,
       videoQuality: config.videoQuality,
       videoCodec: config.videoCodec,
+      youtubeCookiesFromBrowser: config.youtubeCookiesFromBrowser,
       "transcription.model": config.transcription.model,
       "transcription.language": config.transcription.language,
       "transcription.device": config.transcription.device,
@@ -974,6 +982,7 @@ export class Pipeline extends EventEmitter {
     codec: string,
   ): Promise<void> {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const cookiesBrowser = (this.config.youtubeCookiesFromBrowser || "").trim();
 
     return new Promise((resolve, reject) => {
       const dl = youtubedl.exec(url, {
@@ -986,6 +995,10 @@ export class Pipeline extends EventEmitter {
         noWarnings: true,
         // See youtube-dl.ts — unlocks AV1/VP9 streams via Node JS runtime.
         jsRuntimes: "node",
+        // Pass through to yt-dlp's --cookies-from-browser flag so we
+        // inherit the user's logged-in YouTube session (defeats the
+        // "Sign in to confirm you're not a bot" gate).
+        ...(cookiesBrowser ? { cookiesFromBrowser: cookiesBrowser } : {}),
       } as Parameters<typeof youtubedl>[1]);
 
       // youtube-dl-exec returns a Promise that auto-rejects on non-zero

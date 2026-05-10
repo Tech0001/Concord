@@ -1,6 +1,13 @@
 import youtubedl from "./yt-dlp-bin";
 import fs from "fs";
 import path from "path";
+import { getConfigValues } from "./db";
+
+/** Read the user's "cookies from which browser?" pipeline setting and
+ *  return it normalized — empty string when unset (= no cookie auth). */
+function youtubeCookiesFromBrowser(): string {
+  return (getConfigValues().youtubeCookiesFromBrowser || "").trim();
+}
 
 interface YouTubeDlVideoInfo {
   id: string;
@@ -34,6 +41,7 @@ interface ProgressCallback {
 
 export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoInfo> {
   try {
+    const cookiesBrowser = youtubeCookiesFromBrowser();
     // Get video info with available formats
     const result = await youtubedl(url, {
       dumpSingleJson: true,
@@ -46,6 +54,10 @@ export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoIn
       // back to the android_vr API, which only exposes H.264. Pointing it
       // at the local node binary unlocks the full AV1/VP9 format list.
       jsRuntimes: 'node',
+      // Pass through to yt-dlp's --cookies-from-browser when configured.
+      // Without it, anonymous metadata fetches eventually hit YouTube's
+      // bot-detection gate.
+      ...(cookiesBrowser ? { cookiesFromBrowser: cookiesBrowser } : {}),
     } as Parameters<typeof youtubedl>[1]);
 
     return result as unknown as YouTubeDlVideoInfo;
@@ -76,7 +88,9 @@ export async function downloadYouTubeVideo(
     } catch (error) {
       console.error("Error ensuring temp directory exists:", error);
     }
-    
+
+    const cookiesBrowser = youtubeCookiesFromBrowser();
+
     // When downloading, we need to specify that we want both video and audio
     const downloader = youtubedl.exec(url, {
       output: outputPath,
@@ -101,6 +115,8 @@ export async function downloadYouTubeVideo(
       // Use Node as the JS runtime so yt-dlp can decode YouTube's player
       // and see AV1/VP9 streams (otherwise falls back to H.264-only API).
       jsRuntimes: 'node',
+      // Pass through to yt-dlp's --cookies-from-browser when configured.
+      ...(cookiesBrowser ? { cookiesFromBrowser: cookiesBrowser } : {}),
     } as Parameters<typeof youtubedl>[1]);
 
     if (!downloader.stdout || !downloader.stderr) {

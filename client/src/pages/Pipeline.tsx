@@ -70,6 +70,7 @@ interface Config {
   skipShorts: boolean;
   videoQuality: string;
   videoCodec: string;
+  youtubeCookiesFromBrowser: string;
   transcription: { model: string; language: string; device: string };
   processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean };
 }
@@ -137,6 +138,7 @@ export default function PipelineStatus() {
   const [transcriptDir, setTranscriptDir] = useState("");
   const [videoQuality, setVideoQuality] = useState("1080");
   const [videoCodec, setVideoCodec] = useState("any");
+  const [youtubeCookies, setYoutubeCookies] = useState("");
   const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
 
   // Download state (same pattern as main page)
@@ -199,6 +201,7 @@ export default function PipelineStatus() {
       setTranscriptDir(c.transcriptDir || "");
       setVideoQuality(c.videoQuality || "1080");
       setVideoCodec(c.videoCodec || "any");
+      setYoutubeCookies(c.youtubeCookiesFromBrowser || "");
       setTranscriptionModel(c.transcription?.model || "large-v3");
     } catch {}
   };
@@ -310,6 +313,7 @@ export default function PipelineStatus() {
       transcriptDir,
       videoQuality,
       videoCodec,
+      youtubeCookiesFromBrowser: youtubeCookies,
       transcription: {
         ...config.transcription,
         model: transcriptionModel,
@@ -449,6 +453,25 @@ export default function PipelineStatus() {
                 </Select>
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <label className="text-muted-foreground">YouTube cookies</label>
+                <Select value={youtubeCookies || "none"} onValueChange={v => setYoutubeCookies(v === "none" ? "" : v)}>
+                  <SelectTrigger className="h-8">
+                    <SelectValue placeholder="Cookies source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None (anonymous)</SelectItem>
+                    <SelectItem value="chrome">Chrome</SelectItem>
+                    <SelectItem value="firefox">Firefox</SelectItem>
+                    <SelectItem value="safari">Safari</SelectItem>
+                    <SelectItem value="brave">Brave</SelectItem>
+                    <SelectItem value="edge">Edge</SelectItem>
+                    <SelectItem value="chromium">Chromium</SelectItem>
+                    <SelectItem value="opera">Opera</SelectItem>
+                    <SelectItem value="vivaldi">Vivaldi</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <label className="text-muted-foreground">Transcription model</label>
                 <Select value={transcriptionModel} onValueChange={setTranscriptionModel}>
                   <SelectTrigger className="h-8">
@@ -475,6 +498,8 @@ export default function PipelineStatus() {
               <code className="font-mono text-foreground">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code>
               <span className="text-muted-foreground">Video codec</span>
               <code className="font-mono text-foreground">{codecLabel(config?.videoCodec || "any")}</code>
+              <span className="text-muted-foreground">YouTube cookies</span>
+              <code className="font-mono text-foreground">{config?.youtubeCookiesFromBrowser || "none"}</code>
               <span className="text-muted-foreground">Transcription model</span>
               <code className="font-mono text-foreground">{config?.transcription?.model || "large-v3"}</code>
             </div>
