@@ -414,6 +414,7 @@ export default function PipelineStatus() {
                     <SelectValue placeholder="Model" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="fluid-parakeet-tdt-v3">Parakeet v3 (Apple Neural Engine, fastest on Mac)</SelectItem>
                     <SelectItem value="nvidia/parakeet-tdt-0.6b-v3">parakeet-v3 (multilingual, fastest)</SelectItem>
                     <SelectItem value="large-v3">whisper large-v3 (multilingual)</SelectItem>
                     <SelectItem value="large-v3-turbo">whisper turbo</SelectItem>
@@ -591,6 +592,7 @@ export default function PipelineStatus() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value="fluid-parakeet-tdt-v3">fluid-v3 (ANE)</SelectItem>
                           <SelectItem value="large-v3">large-v3</SelectItem>
                           <SelectItem value="large-v3-turbo">turbo</SelectItem>
                           <SelectItem value="medium">medium</SelectItem>

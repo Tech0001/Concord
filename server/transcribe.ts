@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
+import { transcribeWithFluidAudio } from "./transcribe-fluidaudio";
 
 export interface TranscriptionOptions {
   model?: string;
@@ -26,6 +27,10 @@ export interface TranscriptionResult {
 
 function isParakeetModel(model: string): boolean {
   return model.toLowerCase().includes("parakeet");
+}
+
+function isFluidModel(model: string): boolean {
+  return model.toLowerCase().startsWith("fluid-");
 }
 
 function defaultPythonPath(parakeet: boolean): string {
@@ -72,6 +77,12 @@ export function transcribeAudio(
     beamSize = 5,
     pythonPath,
   } = options;
+
+  if (isFluidModel(model)) {
+    return withTranscriptionLock(() =>
+      transcribeWithFluidAudio(audioPath, outputMdPath, { model }),
+    );
+  }
 
   const parakeet = isParakeetModel(model);
   // The pipeline config stores a single `pythonVenv` (the whisper venv).
