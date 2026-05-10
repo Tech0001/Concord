@@ -93,15 +93,16 @@ export async function transcribeWithParakeet(
     "--device", device,
   ];
 
-  // Spawn both in parallel. Parakeet on CUDA is ~25x realtime, Sortformer
-  // is ~200x realtime — total wall time ≈ parakeet time. They share the
-  // GPU but neither saturates VRAM at this scale.
-  const tasks: Promise<void>[] = [
-    runPython(pythonPath, transcribeArgs, "parakeet"),
-  ];
-  if (diarize) tasks.push(runPython(pythonPath, diarizeArgs, "sortformer"));
-
-  await Promise.all(tasks);
+  // Run sequentially on Linux. Parallel CUDA processes fragment the
+  // allocator and Sortformer init OOMs even with plenty of "free" VRAM.
+  // Each Python process gets a fresh CUDA context this way; OS reclaims
+  // all GPU memory cleanly when the parakeet process exits before
+  // sortformer starts. Sortformer is ~200x realtime so the wall-time
+  // cost vs parallel is ~5-10s per video — negligible.
+  await runPython(pythonPath, transcribeArgs, "parakeet");
+  if (diarize) {
+    await runPython(pythonPath, diarizeArgs, "sortformer");
+  }
 
   return postProcess({ jsonPath, diarPath, outputMdPath, audioPath, model, diarize });
 }
