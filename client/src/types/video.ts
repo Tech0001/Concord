@@ -27,6 +27,3 @@ export interface DownloadProgress {
   total_bytes: number;
 }
 
-export interface DownloadSettings {
-  downloadLocation: string;
-}

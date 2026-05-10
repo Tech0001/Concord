@@ -3,7 +3,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath, pathToFileURL } from "url";
 import { EventEmitter } from "events";
-import youtubedl from "youtube-dl-exec";
+import youtubedl from "./yt-dlp-bin";
 import {
   getChannelVideosPage,
   getAllChannelVideos,
@@ -14,6 +14,7 @@ import {
 import { getYouTubeVideoInfo } from "./youtube-dl";
 import { extractAudio, copyAudioTrack } from "./audio";
 import { transcribeAudio, TranscriptionResult } from "./transcribe";
+import { embedSegmentsForVideo } from "./embed-segments";
 import {
   enqueueVideo,
   enqueueVideos,
@@ -62,6 +63,16 @@ export interface PipelineConfig {
     computeType: string;
     beamSize: number;
     pythonVenv: string;
+  };
+  llm: {
+    /** OpenAI-compatible base URL, e.g. http://localhost:8000/v1 (oMLX) or http://localhost:11434/v1 (Ollama) */
+    baseUrl: string;
+    /** Optional bearer token; sent as Authorization header iff non-empty */
+    apiKey: string;
+    /** Chat/instruct model id, e.g. qwen3-7b-instruct-4bit-mlx */
+    chatModel: string;
+    /** Embedding model id, e.g. bge-m3-mlx */
+    embeddingModel: string;
   };
   processing: {
     keepVideo: boolean;
@@ -245,6 +256,21 @@ export class Pipeline extends EventEmitter {
    *  process that drives those statuses — if we just booted, nothing else
    *  is in the middle of anything. Without this, rows stay stuck forever
    *  any time the server crashes or the user closes the app mid-job. */
+  /** Fire-and-forget embedding generation after a transcript completes.
+   *  Best-effort: skips silently if no embedding model is configured, and
+   *  logs (without throwing) when the LLM is unreachable. The transcribe
+   *  pipeline never waits on or fails because of embedding errors. */
+  private maybeEmbedSegments(videoId: string, channelId: string): void {
+    const model = this.config.llm.embeddingModel;
+    if (!model) return;
+    embedSegmentsForVideo(videoId, channelId, model)
+      .then((r) => {
+        if (r.skipped) console.log(`[embed] ${videoId}: ${r.skipped}`);
+        else console.log(`[embed] ${videoId}: indexed ${r.segmentCount} segments (${model})`);
+      })
+      .catch((err) => console.error(`[embed] ${videoId} failed:`, err));
+  }
+
   private recoverStuckJobs(): void {
     const stuck = ["downloading", "extracting_audio", "transcribing", "saving_md"];
     const placeholders = stuck.map(() => "?").join(",");
@@ -283,6 +309,12 @@ export class Pipeline extends EventEmitter {
         beamSize: 5,
         pythonVenv: "./venv/bin/python",
       },
+      llm: {
+        baseUrl: "http://localhost:8000/v1",
+        apiKey: "",
+        chatModel: "",
+        embeddingModel: "",
+      },
       processing: {
         keepVideo: true,
         keepAudio: false,
@@ -312,6 +344,12 @@ export class Pipeline extends EventEmitter {
         computeType: stored["transcription.computeType"] || defaults.transcription.computeType,
         beamSize: parseConfigNumber(stored["transcription.beamSize"], defaults.transcription.beamSize),
         pythonVenv: stored["transcription.pythonVenv"] || defaults.transcription.pythonVenv,
+      },
+      llm: {
+        baseUrl: stored["llm.baseUrl"] || defaults.llm.baseUrl,
+        apiKey: stored["llm.apiKey"] ?? defaults.llm.apiKey,
+        chatModel: stored["llm.chatModel"] ?? defaults.llm.chatModel,
+        embeddingModel: stored["llm.embeddingModel"] ?? defaults.llm.embeddingModel,
       },
       processing: {
         keepVideo: parseConfigBoolean(stored["processing.keepVideo"], defaults.processing.keepVideo),
@@ -348,6 +386,7 @@ export class Pipeline extends EventEmitter {
       ...this.config,
       ...updates,
       transcription: { ...this.config.transcription, ...(updates.transcription || {}) },
+      llm: { ...this.config.llm, ...(updates.llm || {}) },
       processing: { ...this.config.processing, ...(updates.processing || {}) },
       channels: updates.channels || this.config.channels,
     };
@@ -371,6 +410,10 @@ export class Pipeline extends EventEmitter {
       "transcription.computeType": config.transcription.computeType,
       "transcription.beamSize": config.transcription.beamSize,
       "transcription.pythonVenv": config.transcription.pythonVenv,
+      "llm.baseUrl": config.llm.baseUrl,
+      "llm.apiKey": config.llm.apiKey,
+      "llm.chatModel": config.llm.chatModel,
+      "llm.embeddingModel": config.llm.embeddingModel,
       "processing.keepVideo": config.processing.keepVideo,
       "processing.keepAudio": config.processing.keepAudio,
       "processing.waitForLiveToFinish": config.processing.waitForLiveToFinish,
@@ -709,6 +752,7 @@ export class Pipeline extends EventEmitter {
         computeType: this.config.transcription.computeType,
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
+        diarize: channel.diarize !== false,
       });
 
       job.mdPath = mdPath;
@@ -768,6 +812,7 @@ export class Pipeline extends EventEmitter {
       job.status = "complete";
       job.progress = 100;
       job.completedAt = new Date().toISOString();
+      this.maybeEmbedSegments(video.id, channel.id);
 
       updateQueueStatus(video.id, channel.id, {
         status: "complete",
@@ -1080,6 +1125,7 @@ export class Pipeline extends EventEmitter {
         computeType: this.config.transcription.computeType,
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
+        diarize: channel.diarize !== false,
       });
 
       job.mdPath = mdPath;
@@ -1087,6 +1133,7 @@ export class Pipeline extends EventEmitter {
       job.status = "complete";
       job.progress = 100;
       job.completedAt = new Date().toISOString();
+      this.maybeEmbedSegments(videoId, channelId);
 
       updateQueueStatus(videoId, channelId, { mdPath, wordCount: result.word_count, status: "complete" });
       if (audioPath) {
@@ -1217,6 +1264,7 @@ export class Pipeline extends EventEmitter {
         computeType: this.config.transcription.computeType,
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
+        diarize: channel.diarize !== false,
       });
 
       job.mdPath = mdPath;
@@ -1275,6 +1323,7 @@ export class Pipeline extends EventEmitter {
           wordCount: result.word_count,
           error: null,
         });
+        this.maybeEmbedSegments(realVideoId, dbCh);
       }
 
     } catch (error) {

@@ -33,6 +33,7 @@ interface TranscriptSegment {
   start: number;
   end: number;
   text: string;
+  speaker?: string | null;
 }
 
 interface VideoStreamInfo {
@@ -833,6 +834,11 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                           <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
                             <Play className="h-3 w-3" />
                             {formatTimestamp(segment.start)} - {formatTimestamp(segment.end)}
+                            {segment.speaker && (
+                              <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] font-semibold text-foreground">
+                                {segment.speaker}
+                              </span>
+                            )}
                             {highlighted && <Badge variant="secondary" className="h-5">match</Badge>}
                             {searchMatch && <Badge variant="outline" className="h-5">search</Badge>}
                             {clipped && <Badge variant="outline" className="h-5">clipped</Badge>}

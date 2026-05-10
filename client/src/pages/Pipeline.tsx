@@ -8,10 +8,9 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import UrlInput from "@/components/UrlInput";
 import VideoPreview from "@/components/VideoPreview";
-import DownloadSettings from "@/components/DownloadSettings";
 import ErrorMessage from "@/components/ErrorMessage";
 import LoadingIndicator from "@/components/LoadingIndicator";
-import { VideoInfo, DownloadSettings as Settings } from "@/types/video";
+import { VideoInfo } from "@/types/video";
 import {
   Play, Square, RefreshCw, Plus, Trash2, Activity,
   CheckCircle, XCircle, Clock, AlertCircle, Radio,
@@ -20,12 +19,16 @@ import {
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import FolderInput from "@/components/FolderInput";
 
 interface Channel {
   id: string;
   name: string;
   url: string;
   enabled: boolean;
+  /** Run speaker diarization for this channel. Undefined treated as true
+   *  (legacy channels created before the toggle existed default-on). */
+  diarize?: boolean;
 }
 
 interface Job {
@@ -95,9 +98,33 @@ interface QueueData {
   recent: any[];
 }
 
+// All supported transcription engines + which platforms they actually run on.
+// Filtering the dropdown saves users from picking a model that will fail at
+// transcribe time. `null` = available on all platforms.
+const TRANSCRIPTION_OPTIONS: { value: string; label: string; platforms: NodeJS.Platform[] | null }[] = [
+  { value: "fluid-parakeet-tdt-v3",        label: "Parakeet v3 (Apple Neural Engine, fastest on Mac)", platforms: ["darwin"] },
+  { value: "nvidia/parakeet-tdt-0.6b-v3",  label: "parakeet-v3 (multilingual, fastest on CUDA)",       platforms: ["linux"] },
+  { value: "large-v3",                     label: "whisper large-v3 (multilingual)",                   platforms: ["linux"] },
+  { value: "large-v3-turbo",               label: "whisper turbo",                                     platforms: ["linux"] },
+  { value: "medium",                       label: "whisper medium",                                    platforms: ["linux"] },
+  { value: "small",                        label: "whisper small",                                     platforms: ["linux"] },
+  { value: "tiny",                         label: "whisper tiny",                                      platforms: ["linux"] },
+];
+
+function visibleModels(platform: NodeJS.Platform | null, currentValue: string | undefined) {
+  // Hide engines that can't run here, but always keep the saved value visible
+  // so users can see what's set and change it (instead of it appearing blank).
+  return TRANSCRIPTION_OPTIONS.filter((o) => {
+    if (o.value === currentValue) return true;
+    if (!platform || !o.platforms) return true;
+    return o.platforms.includes(platform);
+  });
+}
+
 export default function PipelineStatus() {
   const [state, setState] = useState<PipelineState | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
+  const [platform, setPlatform] = useState<NodeJS.Platform | null>(null);
   const [newChannelName, setNewChannelName] = useState("");
   const [newChannelUrl, setNewChannelUrl] = useState("");
   const [newChannelKind, setNewChannelKind] = useState<"youtube" | "folder">("youtube");
@@ -118,19 +145,19 @@ export default function PipelineStatus() {
   const [videoError, setVideoError] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadSettings, setDownloadSettings] = useState<Settings>({ downloadLocation: "" });
+  // videoId currently being transcribed via the manual flow. Lets us pull
+  // the matching job from state.jobs and render its progress inside VideoPreview
+  // instead of forcing the user to scroll to the global job list.
+  const [manualTranscribeId, setManualTranscribeId] = useState<string | null>(null);
   const { toast } = useToast();
-
-  // When config loads, sync download location to pipeline's videoSaveDir
-  useEffect(() => {
-    if (config?.videoSaveDir) {
-      setDownloadSettings({ downloadLocation: config.videoSaveDir });
-    }
-  }, [config?.videoSaveDir]);
 
   useEffect(() => {
     fetchState();
     fetchConfig();
+    apiRequest("GET", "/api/system/info")
+      .then((r) => r.json())
+      .then((d: { platform: NodeJS.Platform }) => setPlatform(d.platform))
+      .catch(() => { /* leave null — dropdown shows all */ });
 
     const es = new EventSource("/api/pipeline/events");
     es.addEventListener("state", (e) => {
@@ -215,6 +242,11 @@ export default function PipelineStatus() {
     fetchConfig(); fetchState();
   };
 
+  const toggleChannelDiarize = async (id: string, diarize: boolean) => {
+    await apiRequest("PATCH", `/api/pipeline/channels/${id}`, { diarize });
+    fetchConfig();
+  };
+
   const archiveChannel = async (id: string) => {
     setArchiving(prev => ({ ...prev, [id]: true }));
     setArchiveMsg(prev => ({ ...prev, [id]: "Full scan running..." }));
@@ -249,6 +281,8 @@ export default function PipelineStatus() {
   const handleVideoFetched = (video: VideoInfo) => {
     setVideoData(video);
     setVideoError(null);
+    // Reset stale transcribe-progress state from a previous URL.
+    setManualTranscribeId(null);
   };
 
   const handleVideoError = (errorMessage: string) => {
@@ -256,14 +290,12 @@ export default function PipelineStatus() {
     setVideoData(null);
   };
 
-  const handleSettingsChange = (settings: Settings) => {
-    setDownloadSettings(settings);
-  };
-
   const handleTranscribe = async (filePath: string, videoTitle: string, uploadDate?: string | null, videoId?: string, channelId?: string | null, channelName?: string | null) => {
     try {
-      const r = await apiRequest("POST", "/api/pipeline/transcribe-file", { filePath, title: videoTitle, uploadDate, videoId, channelId, channelName });
+      await apiRequest("POST", "/api/pipeline/transcribe-file", { filePath, title: videoTitle, uploadDate, videoId, channelId, channelName });
       toast({ title: "Transcription started", description: videoTitle });
+      // Track this video so VideoPreview can show its progress until done.
+      if (videoId) setManualTranscribeId(videoId);
       fetchState();
     } catch (e: any) {
       toast({ variant: "destructive", title: "Transcribe failed", description: e.message });
@@ -333,8 +365,7 @@ export default function PipelineStatus() {
         </CardHeader>
       </Card>
 
-      {/* Manual download + transcribe (same UI as main page) */}
-      <DownloadSettings onSettingsChange={handleSettingsChange} />
+      {/* Manual download + transcribe — uses Video save from Settings below */}
       <UrlInput
         onVideoFetched={handleVideoFetched}
         onLoading={setIsVideoLoading}
@@ -344,18 +375,28 @@ export default function PipelineStatus() {
       {isVideoLoading && <LoadingIndicator />}
       {videoError && <ErrorMessage error={videoError} />}
 
-      {videoData && (
-        <VideoPreview
-          videoData={videoData}
-          downloadProgress={downloadProgress}
-          isDownloading={isDownloading}
-          setIsDownloading={setIsDownloading}
-          updateDownloadProgress={setDownloadProgress}
-          downloadSettings={downloadSettings}
-          showTranscribe
-          onTranscribe={handleTranscribe}
-        />
-      )}
+      {videoData && (() => {
+        const transcribeJob = manualTranscribeId
+          ? state?.jobs.find(j => j.videoId === manualTranscribeId) ?? null
+          : null;
+        return (
+          <VideoPreview
+            videoData={videoData}
+            downloadProgress={downloadProgress}
+            isDownloading={isDownloading}
+            setIsDownloading={setIsDownloading}
+            updateDownloadProgress={setDownloadProgress}
+            downloadLocation={config?.videoSaveDir || ""}
+            showTranscribe
+            onTranscribe={handleTranscribe}
+            transcribeJob={transcribeJob ? {
+              status: transcribeJob.status,
+              progress: transcribeJob.progress,
+              error: transcribeJob.error,
+            } : null}
+          />
+        );
+      })()}
 
       {/* Directories */}
       <Card>
@@ -374,11 +415,11 @@ export default function PipelineStatus() {
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <label className="text-muted-foreground" htmlFor="videoSaveDir">Video save</label>
-                <Input id="videoSaveDir" value={videoSaveDir} onChange={e => setVideoSaveDir(e.target.value)} className="h-8 font-mono"/>
+                <FolderInput id="videoSaveDir" value={videoSaveDir} onChange={setVideoSaveDir} prompt="Pick the parent folder — saved_videos will be created inside" appendSubfolder="saved_videos" className="h-8 font-mono"/>
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <label className="text-muted-foreground" htmlFor="transcriptDir">Transcripts</label>
-                <Input id="transcriptDir" value={transcriptDir} onChange={e => setTranscriptDir(e.target.value)} className="h-8 font-mono"/>
+                <FolderInput id="transcriptDir" value={transcriptDir} onChange={setTranscriptDir} prompt="Pick the parent folder — transcripts will be created inside" appendSubfolder="transcripts" className="h-8 font-mono"/>
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <label className="text-muted-foreground">Download quality</label>
@@ -414,13 +455,9 @@ export default function PipelineStatus() {
                     <SelectValue placeholder="Model" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="fluid-parakeet-tdt-v3">Parakeet v3 (Apple Neural Engine, fastest on Mac)</SelectItem>
-                    <SelectItem value="nvidia/parakeet-tdt-0.6b-v3">parakeet-v3 (multilingual, fastest)</SelectItem>
-                    <SelectItem value="large-v3">whisper large-v3 (multilingual)</SelectItem>
-                    <SelectItem value="large-v3-turbo">whisper turbo</SelectItem>
-                    <SelectItem value="medium">whisper medium</SelectItem>
-                    <SelectItem value="small">whisper small</SelectItem>
-                    <SelectItem value="tiny">whisper tiny</SelectItem>
+                    {visibleModels(platform, transcriptionModel).map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -479,6 +516,14 @@ export default function PipelineStatus() {
                   </div>
                 </div>
                 <div className="text-xs text-muted-foreground truncate font-mono">{displayUrl}</div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Switch
+                    checked={ch.diarize !== false}
+                    onCheckedChange={v => toggleChannelDiarize(ch.id, v)}
+                    aria-label="Diarize transcripts (identify speakers)"
+                  />
+                  <span>Identify speakers (turn off for single-speaker content — faster)</span>
+                </div>
                 {archiveMsg[ch.id] && <div className="text-xs text-muted-foreground">{archiveMsg[ch.id]}</div>}
               </div>
             );
@@ -592,13 +637,9 @@ export default function PipelineStatus() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="fluid-parakeet-tdt-v3">fluid-v3 (ANE)</SelectItem>
-                          <SelectItem value="large-v3">large-v3</SelectItem>
-                          <SelectItem value="large-v3-turbo">turbo</SelectItem>
-                          <SelectItem value="medium">medium</SelectItem>
-                          <SelectItem value="small">small</SelectItem>
-                          <SelectItem value="tiny">tiny</SelectItem>
-                          <SelectItem value="nvidia/parakeet-tdt-0.6b-v3">parakeet-v3</SelectItem>
+                          {visibleModels(platform, retransModel).map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value} className="text-xs">{opt.label}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                       <Button

@@ -10,6 +10,10 @@ export interface TranscriptionOptions {
   computeType?: string;
   beamSize?: number;
   pythonPath?: string;
+  /** Run speaker diarization (only honored by engines that support it,
+   *  currently FluidAudio). Default true. Set false for known
+   *  single-speaker channels to skip the diarization wall-time cost. */
+  diarize?: boolean;
 }
 
 export interface TranscriptionResult {
@@ -76,11 +80,12 @@ export function transcribeAudio(
     computeType = "float16",
     beamSize = 5,
     pythonPath,
+    diarize,
   } = options;
 
   if (isFluidModel(model)) {
     return withTranscriptionLock(() =>
-      transcribeWithFluidAudio(audioPath, outputMdPath, { model }),
+      transcribeWithFluidAudio(audioPath, outputMdPath, { model, diarize }),
     );
   }
 

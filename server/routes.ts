@@ -4,6 +4,16 @@ import { storage } from "./storage";
 import { getYouTubeVideoInfo, downloadYouTubeVideo, formatDuration } from "./youtube-dl";
 import { getPipeline, Pipeline } from "./pipeline";
 import {
+  listModels as llmListModels,
+  probeStatus as llmProbeStatus,
+  LlmConfigError,
+  LlmHttpError,
+  LlmUnreachableError,
+} from "./llm";
+import { searchSemantic } from "./semantic-search";
+import { embedSegmentsForVideo } from "./embed-segments";
+import { getEmbeddingStats, clearAllEmbeddings } from "./db";
+import {
   addClipLink,
   countByStatus,
   createTranscriptClip,
@@ -39,7 +49,10 @@ import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
 import path from "path";
 import fs from "fs";
 import { nanoid } from "nanoid";
-import { spawn } from "child_process";
+import { spawn, execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 // Track active downloads and their progress
 const activeDownloads = new Map<string, {
@@ -724,6 +737,191 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ---- System info (for client-side platform-aware UI filtering) ----
+  app.get("/api/system/info", (_req, res) => {
+    res.json({ platform: process.platform, arch: process.arch });
+  });
+
+  // ---- Native folder picker (macOS / future Electron) ----
+  // Spawns AppleScript's `choose folder` dialog so users can pick paths in
+  // Finder instead of typing them. Server-side because the app runs locally
+  // on the user's machine — the dialog appears on their desktop. When we
+  // package as Electron later, swap this for dialog.showOpenDialog.
+  app.post("/api/dialog/pick-folder", async (req, res) => {
+    if (process.platform !== "darwin") {
+      return res.status(501).json({
+        error: "Folder picker not supported on this platform yet",
+        platform: process.platform,
+      });
+    }
+    const { prompt = "Choose folder", defaultPath } = req.body || {};
+    const escape = (s: string) => String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    let script = `POSIX path of (choose folder with prompt "${escape(prompt)}"`;
+    if (defaultPath && fs.existsSync(defaultPath)) {
+      script += ` default location POSIX file "${escape(defaultPath)}"`;
+    }
+    script += `)`;
+    try {
+      const { stdout } = await execFileAsync("osascript", ["-e", script]);
+      res.json({ path: stdout.trim() });
+    } catch (err: unknown) {
+      const e = err as { stderr?: string; message?: string };
+      const stderr = String(e?.stderr || "");
+      // osascript exits 1 with "User canceled. (-128)" when the user dismisses.
+      if (stderr.includes("User canceled") || stderr.includes("(-128)")) {
+        return res.json({ cancelled: true });
+      }
+      res.status(500).json({ error: stderr || e?.message || "osascript failed" });
+    }
+  });
+
+  // ---- LLM (oMLX / Ollama / any OpenAI-compatible) ----
+
+  // Read current LLM config. Never returns the raw API key — only `hasApiKey`.
+  app.get("/api/llm/config", (_req, res) => {
+    const llm = pipeline.getConfig().llm;
+    res.json({
+      baseUrl: llm.baseUrl,
+      chatModel: llm.chatModel,
+      embeddingModel: llm.embeddingModel,
+      hasApiKey: Boolean(llm.apiKey),
+    });
+  });
+
+  // Update LLM config. Body may contain any subset of
+  // { baseUrl, apiKey, chatModel, embeddingModel }. Sending apiKey overwrites
+  // the stored value (including with "" to clear). Omit apiKey to leave it.
+  app.post("/api/llm/config", (req, res) => {
+    try {
+      const updates: Partial<{ baseUrl: string; apiKey: string; chatModel: string; embeddingModel: string }> = {};
+      const body = req.body || {};
+      if (typeof body.baseUrl === "string") updates.baseUrl = body.baseUrl.trim();
+      if (typeof body.apiKey === "string") updates.apiKey = body.apiKey;
+      if (typeof body.chatModel === "string") updates.chatModel = body.chatModel.trim();
+      if (typeof body.embeddingModel === "string") updates.embeddingModel = body.embeddingModel.trim();
+      pipeline.updateConfig({ llm: { ...pipeline.getConfig().llm, ...updates } });
+      const llm = pipeline.getConfig().llm;
+      res.json({
+        success: true,
+        config: {
+          baseUrl: llm.baseUrl,
+          chatModel: llm.chatModel,
+          embeddingModel: llm.embeddingModel,
+          hasApiKey: Boolean(llm.apiKey),
+        },
+      });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid config" });
+    }
+  });
+
+  // Quick reachability + identity probe. Always 200; the body says reachable=false on error.
+  app.get("/api/llm/status", async (_req, res) => {
+    res.json(await llmProbeStatus());
+  });
+
+  // ---- Semantic search & embedding management ----
+
+  // Stats: how many videos × segments are embedded, per model.
+  app.get("/api/llm/embeddings/stats", (_req, res) => {
+    res.json(getEmbeddingStats());
+  });
+
+  // Reindex everything. Walks every transcribed video and re-embeds. Slow
+  // for big libraries (hundreds of API calls of 50 segments each), so it
+  // streams progress over SSE rather than holding a long HTTP request.
+  app.post("/api/llm/embeddings/reindex", async (req, res) => {
+    const cfg = pipeline.getConfig().llm;
+    const model = (req.body?.model as string | undefined) || cfg.embeddingModel;
+    if (!model) {
+      return res.status(400).json({ error: "No embedding model configured (set on AI page first)" });
+    }
+
+    const wipe = req.body?.wipe === true;
+    if (wipe) clearAllEmbeddings(model);
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const videos = getQueueList({ status: "complete", limit: 100000 }).rows;
+    const sse = (event: string, data: unknown) => {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    sse("start", { total: videos.length, model });
+
+    let done = 0;
+    let totalSegments = 0;
+    let skipped = 0;
+    for (const v of videos) {
+      try {
+        const r = await embedSegmentsForVideo(v.video_id, v.channel_id, model);
+        if (r.skipped) skipped++;
+        else totalSegments += r.segmentCount;
+        sse("video", { ...r, done: ++done, total: videos.length });
+      } catch (err) {
+        sse("video", {
+          videoId: v.video_id, channelId: v.channel_id, model, segmentCount: 0,
+          error: err instanceof Error ? err.message : String(err),
+          done: ++done, total: videos.length,
+        });
+      }
+    }
+
+    sse("done", { total: videos.length, totalSegments, skipped, model });
+    res.end();
+  });
+
+  // Semantic search — embeds the query, cosines vs all stored vectors.
+  app.post("/api/transcripts/search-semantic", async (req, res) => {
+    try {
+      const query = String(req.body?.query || "").trim();
+      if (!query) return res.status(400).json({ error: "query required" });
+
+      const cfg = pipeline.getConfig().llm;
+      const model = cfg.embeddingModel;
+      if (!model) {
+        return res.status(400).json({ error: "No embedding model configured (set on AI page first)" });
+      }
+
+      const out = await searchSemantic({
+        query,
+        model,
+        limit: req.body?.limit,
+        minScore: typeof req.body?.minScore === "number" ? req.body.minScore : undefined,
+        filters: req.body?.filters,
+      });
+      res.json(out);
+    } catch (err) {
+      if (err instanceof LlmConfigError) return res.status(400).json({ error: err.message });
+      if (err instanceof LlmUnreachableError) return res.status(503).json({ error: err.message });
+      if (err instanceof LlmHttpError) return res.status(err.status).json({ error: err.message, body: err.body });
+      res.status(500).json({ error: err instanceof Error ? err.message : "Unknown" });
+    }
+  });
+
+  // Proxy to provider's /v1/models so the AI page can populate model dropdowns.
+  app.get("/api/llm/models", async (_req, res) => {
+    try {
+      const models = await llmListModels();
+      res.json({ models });
+    } catch (error) {
+      if (error instanceof LlmConfigError) {
+        return res.status(400).json({ error: error.message, kind: "config" });
+      }
+      if (error instanceof LlmUnreachableError) {
+        return res.status(503).json({ error: error.message, kind: "unreachable" });
+      }
+      if (error instanceof LlmHttpError) {
+        return res.status(error.status).json({ error: error.message, kind: "http", body: error.body });
+      }
+      res.status(500).json({ error: error instanceof Error ? error.message : "Unknown" });
+    }
+  });
+
   // Start pipeline
   app.post("/api/pipeline/start", (_req, res) => {
     pipeline.start();
@@ -853,7 +1051,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Add channel to monitor
   app.post("/api/pipeline/channels", (req, res) => {
     try {
-      const { name, url } = req.body;
+      const { name, url, diarize } = req.body;
       if (!name || !url) {
         return res.status(400).json({ error: "Name and URL are required" });
       }
@@ -864,6 +1062,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name,
         url,
         enabled: true,
+        diarize: diarize === false ? false : true,
       };
 
       config.channels.push(newChannel);
@@ -888,7 +1087,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ success: true });
   });
 
-  // Toggle channel enabled state
+  // Toggle channel enabled / diarize state
   app.patch("/api/pipeline/channels/:channelId", (req, res) => {
     const config = pipeline.getConfig();
     const channel = config.channels.find(c => c.id === req.params.channelId);
@@ -896,9 +1095,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(404).json({ error: "Channel not found" });
     }
 
-    if (req.body.enabled !== undefined) {
-      channel.enabled = req.body.enabled;
-    }
+    if (req.body.enabled !== undefined) channel.enabled = req.body.enabled;
+    if (req.body.diarize !== undefined) channel.diarize = !!req.body.diarize;
     pipeline.updateConfig(config);
     res.json({ success: true, channel });
   });

@@ -1,4 +1,4 @@
-import youtubedl from "youtube-dl-exec";
+import youtubedl from "./yt-dlp-bin";
 import fs from "fs";
 import path from "path";
 

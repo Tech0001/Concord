@@ -6,6 +6,38 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+// Endpoints polled on a timer or fired in tight UI loops. Logging every
+// hit floods the dev terminal and buries real signals (download progress,
+// transcription messages, errors). Logged only when their status is >=400
+// so failures still surface; otherwise silent. Toggle off via env var
+// LOG_QUIET=0 if you actually want the firehose back.
+const QUIET_PATHS = new Set([
+  "/api/llm/status",
+  "/api/llm/models",
+  "/api/llm/config",
+  "/api/pipeline/status",
+  "/api/pipeline/config",
+  "/api/pipeline/queue",
+  "/api/pipeline/transcripts",
+  "/api/transcripts/search/stats",
+  "/api/clips/tags",
+  "/api/system/info",
+]);
+const QUIET_PREFIXES = [
+  "/api/pipeline/events",                   // SSE — fires constantly
+  "/api/pipeline/queue/",                   // per-channel queue polls
+  "/api/videos/download-progress/",         // long-poll progress
+  "/api/clips/related/",                    // VideoDrawer side-panel polls
+];
+const QUIET_LOGS = process.env.LOG_QUIET !== "0";
+
+function shouldQuiet(path: string, status: number): boolean {
+  if (!QUIET_LOGS) return false;
+  if (status >= 400) return false;
+  if (QUIET_PATHS.has(path)) return true;
+  return QUIET_PREFIXES.some((p) => path.startsWith(p));
+}
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -19,18 +51,19 @@ app.use((req, res, next) => {
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
+    if (!path.startsWith("/api")) return;
+    if (shouldQuiet(path, res.statusCode)) return;
 
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-
-      log(logLine);
+    let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+    if (capturedJsonResponse) {
+      logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
     }
+
+    if (logLine.length > 80) {
+      logLine = logLine.slice(0, 79) + "…";
+    }
+
+    log(logLine);
   });
 
   next();

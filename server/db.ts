@@ -1,8 +1,40 @@
 import Database from "better-sqlite3";
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 let db: Database.Database | null = null;
+
+function defaultDbPath(): string {
+  const home = os.homedir();
+  if (process.platform === "darwin") {
+    return path.join(home, "Library", "Application Support", "Concord", "pipeline.db");
+  }
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || path.join(home, "AppData", "Roaming");
+    return path.join(appData, "Concord", "pipeline.db");
+  }
+  const xdg = process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
+  return path.join(xdg, "concord", "pipeline.db");
+}
+
+// One-shot migration from the legacy in-repo path. Runs before opening the
+// DB, so no connection is held — a plain rename is safe. Sidecar WAL/SHM
+// files are migrated alongside if present.
+function migrateLegacyDbIfPresent(target: string): void {
+  const legacy = path.resolve("./pipeline.db");
+  if (legacy === target) return;
+  if (fs.existsSync(target)) return;
+  if (!fs.existsSync(legacy)) return;
+
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.renameSync(legacy, target);
+  for (const sidecar of ["-wal", "-shm"]) {
+    const src = legacy + sidecar;
+    if (fs.existsSync(src)) fs.renameSync(src, target + sidecar);
+  }
+  console.log(`[db] Migrated legacy ./pipeline.db → ${target}`);
+}
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS app_config (
@@ -16,6 +48,7 @@ const SCHEMA = `
     name       TEXT NOT NULL,
     url        TEXT NOT NULL UNIQUE,
     enabled    INTEGER NOT NULL DEFAULT 1,
+    diarize    INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
@@ -60,6 +93,7 @@ const SCHEMA = `
     segment_index UNINDEXED,
     start_seconds UNINDEXED,
     end_seconds UNINDEXED,
+    speaker UNINDEXED,
     text,
     tokenize = 'unicode61'
   );
@@ -102,6 +136,23 @@ const SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_clip_links_to ON clip_links(to_clip_id);
 
+  CREATE TABLE IF NOT EXISTS transcript_segment_embeddings (
+    video_id      TEXT NOT NULL,
+    channel_id    TEXT NOT NULL,
+    segment_index INTEGER NOT NULL,
+    model         TEXT NOT NULL,
+    embedding     BLOB NOT NULL,
+    text          TEXT NOT NULL,
+    start_seconds REAL NOT NULL,
+    end_seconds   REAL NOT NULL,
+    speaker       TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (video_id, channel_id, segment_index, model)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_seg_emb_video ON transcript_segment_embeddings(video_id, channel_id);
+  CREATE INDEX IF NOT EXISTS idx_seg_emb_model ON transcript_segment_embeddings(model);
+
   CREATE TABLE IF NOT EXISTS clip_map_layouts (
     map_key    TEXT NOT NULL,
     node_id    TEXT NOT NULL,
@@ -139,11 +190,18 @@ export interface StoredChannel {
   name: string;
   url: string;
   enabled: boolean;
+  /** Run speaker diarization for files from this channel. Off when content
+   *  is known to be single-speaker (saves the diarization wall-time cost).
+   *  Optional in writes (undefined = default to true); always populated in
+   *  reads. */
+  diarize?: boolean;
 }
 
 export function getDb(dbPath?: string): Database.Database {
   if (!db) {
-    const resolvedPath = path.resolve(dbPath || "./pipeline.db");
+    const resolvedPath = dbPath ? path.resolve(dbPath) : defaultDbPath();
+    if (!dbPath) migrateLegacyDbIfPresent(resolvedPath);
+    fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
     db = new Database(resolvedPath);
     db.pragma("journal_mode = WAL");
     db.pragma("busy_timeout = 5000");
@@ -168,11 +226,37 @@ function runMigrations(database: Database.Database) {
     }
   };
   ensureColumn("video_queue", "notes", "TEXT");
+  ensureColumn("channels", "diarize", "INTEGER NOT NULL DEFAULT 1");
 
   // Renamed link kind: same_scripture → same_topic. Migrate any existing rows.
   database
     .prepare("UPDATE clip_links SET kind = 'same_topic' WHERE kind = 'same_scripture'")
     .run();
+
+  // Add `speaker` column to transcript_segments_fts. FTS5 has no
+  // ALTER TABLE — the only path is DROP + CREATE. Existing transcripts on
+  // disk get re-indexed automatically on the next refreshTranscriptSearchIndex
+  // call (the index is fully derivable from the .json/.md files).
+  const ftsCols = database.prepare(`PRAGMA table_info(transcript_segments_fts)`).all() as { name: string }[];
+  if (ftsCols.length > 0 && !ftsCols.some(c => c.name === "speaker")) {
+    database.exec("DROP TABLE transcript_segments_fts");
+    database.exec(`
+      CREATE VIRTUAL TABLE transcript_segments_fts USING fts5(
+        video_id UNINDEXED,
+        channel_id UNINDEXED,
+        segment_index UNINDEXED,
+        start_seconds UNINDEXED,
+        end_seconds UNINDEXED,
+        speaker UNINDEXED,
+        text,
+        tokenize = 'unicode61'
+      )
+    `);
+    // transcript_index uses md_mtime to skip "already indexed" files. Wipe it
+    // so the next refresh re-indexes everything into the new FTS schema.
+    database.exec("DELETE FROM transcript_index");
+    console.log("[db] Migrated transcript_segments_fts to add speaker column (re-index on next search)");
+  }
 }
 
 // ---- Pipeline config operations ----
@@ -199,30 +283,41 @@ export function setConfigValues(values: Record<string, string | number | boolean
   tx();
 }
 
-export function getChannels(): StoredChannel[] {
-  const rows = getDb().prepare(
-    "SELECT id, name, url, enabled FROM channels ORDER BY created_at ASC, name ASC"
-  ).all() as { id: string; name: string; url: string; enabled: number }[];
+type ChannelRow = { id: string; name: string; url: string; enabled: number; diarize: number };
 
-  return rows.map(row => ({
+function rowToChannel(row: ChannelRow): StoredChannel {
+  return {
     id: row.id,
     name: row.name,
     url: row.url,
     enabled: !!row.enabled,
-  }));
+    diarize: !!row.diarize,
+  };
+}
+
+export function getChannels(): StoredChannel[] {
+  const rows = getDb().prepare(
+    "SELECT id, name, url, enabled, diarize FROM channels ORDER BY created_at ASC, name ASC"
+  ).all() as ChannelRow[];
+
+  return rows.map(rowToChannel);
 }
 
 export function replaceChannels(channels: StoredChannel[]): void {
   const clear = getDb().prepare("DELETE FROM channels");
   const insert = getDb().prepare(`
-    INSERT INTO channels (id, name, url, enabled, updated_at)
-    VALUES (?, ?, ?, ?, datetime('now'))
+    INSERT INTO channels (id, name, url, enabled, diarize, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
   `);
 
   const tx = getDb().transaction(() => {
     clear.run();
     for (const channel of channels) {
-      insert.run(channel.id, channel.name, channel.url, channel.enabled ? 1 : 0);
+      insert.run(
+        channel.id, channel.name, channel.url,
+        channel.enabled ? 1 : 0,
+        channel.diarize === false ? 0 : 1,
+      );
     }
   });
 
@@ -231,14 +326,19 @@ export function replaceChannels(channels: StoredChannel[]): void {
 
 export function upsertChannel(channel: StoredChannel): void {
   getDb().prepare(`
-    INSERT INTO channels (id, name, url, enabled, updated_at)
-    VALUES (?, ?, ?, ?, datetime('now'))
+    INSERT INTO channels (id, name, url, enabled, diarize, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       url = excluded.url,
       enabled = excluded.enabled,
+      diarize = excluded.diarize,
       updated_at = datetime('now')
-  `).run(channel.id, channel.name, channel.url, channel.enabled ? 1 : 0);
+  `).run(
+    channel.id, channel.name, channel.url,
+    channel.enabled ? 1 : 0,
+    channel.diarize === false ? 0 : 1,
+  );
 }
 
 export function deleteChannel(channelId: string): boolean {
@@ -252,11 +352,26 @@ export function updateChannelEnabled(channelId: string, enabled: boolean): Store
   ).run(enabled ? 1 : 0, channelId);
   if (result.changes === 0) return undefined;
 
-  const row = d.prepare("SELECT id, name, url, enabled FROM channels WHERE id = ?").get(channelId) as
-    | { id: string; name: string; url: string; enabled: number }
-    | undefined;
+  const row = d.prepare("SELECT id, name, url, enabled, diarize FROM channels WHERE id = ?").get(channelId) as ChannelRow | undefined;
+  return row ? rowToChannel(row) : undefined;
+}
 
-  return row ? { ...row, enabled: !!row.enabled } : undefined;
+export function updateChannelDiarize(channelId: string, diarize: boolean): StoredChannel | undefined {
+  const d = getDb();
+  const result = d.prepare(
+    "UPDATE channels SET diarize = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(diarize ? 1 : 0, channelId);
+  if (result.changes === 0) return undefined;
+
+  const row = d.prepare("SELECT id, name, url, enabled, diarize FROM channels WHERE id = ?").get(channelId) as ChannelRow | undefined;
+  return row ? rowToChannel(row) : undefined;
+}
+
+export function getChannelById(channelId: string): StoredChannel | undefined {
+  const row = getDb().prepare(
+    "SELECT id, name, url, enabled, diarize FROM channels WHERE id = ?"
+  ).get(channelId) as ChannelRow | undefined;
+  return row ? rowToChannel(row) : undefined;
 }
 
 // ---- Queue operations ----
@@ -541,6 +656,7 @@ export interface TranscriptSearchResult {
   segment_index: number;
   start_seconds: number;
   end_seconds: number;
+  speaker: string | null;
   text: string;
   rank: number;
 }
@@ -576,6 +692,7 @@ export interface TranscriptSegment {
   start: number;
   end: number;
   text: string;
+  speaker?: string | null;
 }
 
 export function getTranscriptSearchIndexStats(): { files: number; segments: number } {
@@ -607,8 +724,8 @@ export function refreshTranscriptSearchIndex(): { indexed: number; skipped: numb
     VALUES (?, ?, ?, ?, ?, datetime('now'))
   `);
   const insertSegment = getDb().prepare(`
-    INSERT INTO transcript_segments_fts (video_id, channel_id, segment_index, start_seconds, end_seconds, text)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO transcript_segments_fts (video_id, channel_id, segment_index, start_seconds, end_seconds, speaker, text)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
   const tx = getDb().transaction((row: Pick<QueueEntry, "video_id" | "channel_id" | "md_path">, parsed: TranscriptSegment[], mtimeMs: number) => {
@@ -616,7 +733,7 @@ export function refreshTranscriptSearchIndex(): { indexed: number; skipped: numb
     clearSegments.run(row.video_id, row.channel_id);
     insertIndex.run(row.video_id, row.channel_id, row.md_path, mtimeMs, parsed.length);
     parsed.forEach((seg, index) => {
-      insertSegment.run(row.video_id, row.channel_id, index, seg.start, seg.end, seg.text);
+      insertSegment.run(row.video_id, row.channel_id, index, seg.start, seg.end, seg.speaker ?? null, seg.text);
     });
   });
 
@@ -714,6 +831,7 @@ export function searchTranscriptSegments(query: string, filters: TranscriptSearc
       CAST(s.segment_index AS INTEGER) AS segment_index,
       CAST(s.start_seconds AS REAL) AS start_seconds,
       CAST(s.end_seconds AS REAL) AS end_seconds,
+      s.speaker,
       s.text,
       bm25(transcript_segments_fts) AS rank
     FROM transcript_segments_fts s
@@ -729,6 +847,154 @@ export function getTranscriptSegmentsForVideo(videoId: string, channelId: string
   const entry = getQueueEntry(videoId, channelId);
   if (!entry?.md_path || !fs.existsSync(entry.md_path)) return [];
   return parseTranscriptSegments(entry.md_path);
+}
+
+// ---- Segment embeddings (semantic search) ----
+
+// Bumped on every embedding write/delete. The semantic-search cache
+// compares this counter against its loaded snapshot to decide whether
+// it needs to reload from disk. Cheap, no event plumbing required.
+let embeddingWriteCounter = 0;
+export function getEmbeddingWriteCounter(): number { return embeddingWriteCounter; }
+function bumpEmbeddingWriteCounter(): void { embeddingWriteCounter++; }
+
+export interface SegmentEmbedding {
+  video_id: string;
+  channel_id: string;
+  segment_index: number;
+  model: string;
+  embedding: Float32Array;
+  text: string;
+  start_seconds: number;
+  end_seconds: number;
+  speaker: string | null;
+}
+
+export interface EmbeddingInput {
+  segmentIndex: number;
+  embedding: Float32Array;
+  text: string;
+  start: number;
+  end: number;
+  speaker: string | null;
+}
+
+function float32ToBuffer(arr: Float32Array): Buffer {
+  return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+
+function bufferToFloat32(buf: Buffer | Uint8Array): Float32Array {
+  // Preserve view semantics — buf may be a slice of a larger buffer.
+  return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+}
+
+/** Replace all embeddings for one (video, channel, model). Used during
+ *  per-video backfill: clears any stale rows for this model first so an
+ *  edited transcript doesn't leave orphan embeddings around. */
+export function replaceVideoEmbeddings(args: {
+  videoId: string;
+  channelId: string;
+  model: string;
+  rows: EmbeddingInput[];
+}): void {
+  const { videoId, channelId, model, rows } = args;
+  const d = getDb();
+  const clear = d.prepare(
+    "DELETE FROM transcript_segment_embeddings WHERE video_id = ? AND channel_id = ? AND model = ?",
+  );
+  const insert = d.prepare(`
+    INSERT INTO transcript_segment_embeddings
+      (video_id, channel_id, segment_index, model, embedding, text, start_seconds, end_seconds, speaker)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const tx = d.transaction(() => {
+    clear.run(videoId, channelId, model);
+    for (const row of rows) {
+      insert.run(
+        videoId, channelId, row.segmentIndex, model,
+        float32ToBuffer(row.embedding),
+        row.text, row.start, row.end, row.speaker,
+      );
+    }
+  });
+  tx();
+  bumpEmbeddingWriteCounter();
+}
+
+/** Load every stored embedding for a given model. Used at semantic-search
+ *  query time. Returns a flat array — caller decides how to index it.
+ *  ~100 MB for a year of content per the handoff; fits in RAM easily. */
+export function getAllEmbeddings(model: string): SegmentEmbedding[] {
+  type Row = {
+    video_id: string;
+    channel_id: string;
+    segment_index: number;
+    model: string;
+    embedding: Buffer;
+    text: string;
+    start_seconds: number;
+    end_seconds: number;
+    speaker: string | null;
+  };
+  const rows = getDb().prepare(`
+    SELECT video_id, channel_id, segment_index, model, embedding, text,
+           start_seconds, end_seconds, speaker
+    FROM transcript_segment_embeddings
+    WHERE model = ?
+  `).all(model) as Row[];
+  return rows.map((r) => ({
+    ...r,
+    embedding: bufferToFloat32(r.embedding),
+  }));
+}
+
+export function clearVideoEmbeddings(videoId: string, channelId: string, model?: string): number {
+  const d = getDb();
+  const changes = model
+    ? d.prepare("DELETE FROM transcript_segment_embeddings WHERE video_id = ? AND channel_id = ? AND model = ?").run(videoId, channelId, model).changes
+    : d.prepare("DELETE FROM transcript_segment_embeddings WHERE video_id = ? AND channel_id = ?").run(videoId, channelId).changes;
+  if (changes > 0) bumpEmbeddingWriteCounter();
+  return changes;
+}
+
+export function clearAllEmbeddings(model?: string): number {
+  const d = getDb();
+  const changes = model
+    ? d.prepare("DELETE FROM transcript_segment_embeddings WHERE model = ?").run(model).changes
+    : d.prepare("DELETE FROM transcript_segment_embeddings").run().changes;
+  if (changes > 0) bumpEmbeddingWriteCounter();
+  return changes;
+}
+
+export interface EmbeddingStats {
+  models: { model: string; videos: number; segments: number }[];
+  totalSegments: number;
+  totalVideos: number;
+}
+
+export function getEmbeddingStats(): EmbeddingStats {
+  const rows = getDb().prepare(`
+    SELECT model,
+           COUNT(DISTINCT video_id || ':' || channel_id) AS videos,
+           COUNT(*) AS segments
+    FROM transcript_segment_embeddings
+    GROUP BY model
+    ORDER BY model
+  `).all() as { model: string; videos: number; segments: number }[];
+  const totalSegments = rows.reduce((s, r) => s + r.segments, 0);
+  const totalVideos = rows.reduce((s, r) => Math.max(s, r.videos), 0);
+  return { models: rows, totalSegments, totalVideos };
+}
+
+/** Cheap "have we already embedded this video at this model" check —
+ *  used by the auto-embed hook to avoid re-running on retranscribe. */
+export function hasVideoEmbeddings(videoId: string, channelId: string, model: string): boolean {
+  const row = getDb().prepare(`
+    SELECT 1 FROM transcript_segment_embeddings
+    WHERE video_id = ? AND channel_id = ? AND model = ?
+    LIMIT 1
+  `).get(videoId, channelId, model);
+  return !!row;
 }
 
 /**
@@ -1546,6 +1812,7 @@ function parseTranscriptSegments(mdPath: string): TranscriptSegment[] {
             start: Number(seg.start),
             end: Number(seg.end),
             text: String(seg.text || "").trim(),
+            speaker: seg.speaker ?? null,
           }))
           .filter((seg: TranscriptSegment) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.text);
         if (segments.length) return segments;

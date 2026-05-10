@@ -4,9 +4,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { apiRequest } from "@/lib/queryClient";
-import { VideoInfo, VideoFormat, DownloadSettings } from "@/types/video";
+import { VideoInfo, VideoFormat } from "@/types/video";
 import { useToast } from "@/hooks/use-toast";
-import { DownloadIcon, ClockIcon, EyeIcon, CheckCircle, FolderCheck, FileText } from "lucide-react";
+import { DownloadIcon, ClockIcon, EyeIcon, CheckCircle, FolderCheck, FileText, Loader2 } from "lucide-react";
+
+function transcribeJobLabel(status: string): string {
+  switch (status) {
+    case "extracting_audio": return "Extracting audio…";
+    case "transcribing":     return "Transcribing on Apple Neural Engine…";
+    case "saving_md":        return "Saving transcript…";
+    case "downloading":      return "Downloading…";
+    default:                 return status.replace(/_/g, " ") + "…";
+  }
+}
 
 interface VideoPreviewProps {
   videoData: VideoInfo;
@@ -14,7 +24,8 @@ interface VideoPreviewProps {
   isDownloading: boolean;
   setIsDownloading: (isDownloading: boolean) => void;
   updateDownloadProgress: (progress: number) => void;
-  downloadSettings: DownloadSettings;
+  /** Server-configured save directory (Pipeline → Settings → Video save). Empty = save to temp + show "Save to your computer" prompt. */
+  downloadLocation: string;
   /** If true, shows a "Transcribe" button after download completes */
   showTranscribe?: boolean;
   /** Called when user clicks Transcribe after download */
@@ -26,6 +37,10 @@ interface VideoPreviewProps {
     channelId?: string | null,
     channelName?: string | null,
   ) => void;
+  /** In-flight transcription job for THIS video, if any. Lets us show
+   *  inline progress instead of forcing the user to scroll to the global
+   *  jobs list. Pass null when no transcribe is in flight. */
+  transcribeJob?: { status: string; progress: number; error?: string } | null;
 }
 
 export default function VideoPreview({ 
@@ -34,9 +49,10 @@ export default function VideoPreview({
   isDownloading,
   setIsDownloading,
   updateDownloadProgress,
-  downloadSettings,
+  downloadLocation,
   showTranscribe = false,
   onTranscribe,
+  transcribeJob,
 }: VideoPreviewProps) {
   const [selectedResolution, setSelectedResolution] = useState("");
   const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
@@ -348,10 +364,10 @@ export default function VideoPreview({
       setDownloadComplete(false);
       
       // Send download request with format and download location
-      const downloadBody: any = { 
-        videoId: videoData.id, 
+      const downloadBody: any = {
+        videoId: videoData.id,
         formatId: selectedFormat.format_id,
-        downloadLocation: downloadSettings.downloadLocation
+        downloadLocation,
       };
       
       // Pipeline mode: pass extra params for channel folder + date prefix
@@ -535,15 +551,41 @@ export default function VideoPreview({
                 <CheckCircle className="h-4 w-4 shrink-0" />
                 <span className="font-mono text-xs">{finalFilePath}</span>
               </div>
-              {showTranscribe && onTranscribe && (
+              {showTranscribe && onTranscribe && (!transcribeJob || transcribeJob.status === "complete" || transcribeJob.status === "failed") && (
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => onTranscribe(finalFilePath, videoData.title, videoData.uploadDate, videoData.id, videoData.channelId, videoData.channelName)}
                 >
                   <FileText className="h-4 w-4" />
-                  Transcribe with Pipeline
+                  {transcribeJob?.status === "complete" ? "Re-transcribe" : "Transcribe with Pipeline"}
                 </Button>
+              )}
+              {transcribeJob && transcribeJob.status !== "complete" && transcribeJob.status !== "failed" && (
+                <div className="rounded-md border bg-muted/40 px-3 py-2">
+                  <div className="mb-1.5 flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5 font-medium text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      {transcribeJobLabel(transcribeJob.status)}
+                    </span>
+                    <span className="font-mono tabular-nums text-foreground">{transcribeJob.progress}%</span>
+                  </div>
+                  <Progress value={transcribeJob.progress} className="h-1.5" />
+                </div>
+              )}
+              {transcribeJob?.status === "complete" && (
+                <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                  <CheckCircle className="h-4 w-4 shrink-0 text-emerald-500" />
+                  <span>Transcribed — open in Library to read.</span>
+                </div>
+              )}
+              {transcribeJob?.status === "failed" && (
+                <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
+                  <div className="font-medium text-destructive">Transcription failed</div>
+                  {transcribeJob.error && (
+                    <div className="mt-1 break-all font-mono text-xs">{transcribeJob.error}</div>
+                  )}
+                </div>
               )}
             </div>
           )}

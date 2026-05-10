@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Switch, Route, Link, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -16,6 +16,7 @@ import Pipeline from "@/pages/Pipeline";
 import Library from "@/pages/Library";
 import Search from "@/pages/Search";
 import Clips from "@/pages/Clips";
+import AI from "@/pages/AI";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
@@ -25,6 +26,7 @@ import {
   Map as MapIcon,
   Moon,
   Search as SearchIcon,
+  Sparkles,
   Sun,
 } from "lucide-react";
 
@@ -36,6 +38,7 @@ const NAV_ITEMS = [
   { href: "/clips", label: "Clips", icon: Bookmark },
   { href: "/map", label: "Map", icon: MapIcon },
   { href: "/pipeline", label: "Pipeline", icon: Activity },
+  { href: "/ai", label: "AI", icon: Sparkles },
 ] as const;
 
 function TopBar() {
@@ -72,6 +75,7 @@ function TopBar() {
           })}
         </nav>
         <div className="flex items-center gap-1">
+          <LlmStatusDot />
           <Select value={themeName} onValueChange={setThemeName}>
             <SelectTrigger className="h-8 w-[120px] text-xs" aria-label="Theme">
               <SelectValue />
@@ -99,6 +103,50 @@ function TopBar() {
   );
 }
 
+function LlmStatusDot() {
+  const [status, setStatus] = useState<{ reachable: boolean; latencyMs?: number; errorKind?: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      // Abort after 3s so a dead server doesn't accumulate hung fetches
+      // (each call would otherwise wait on TCP timeout — minutes).
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 3000);
+      try {
+        const r = await fetch("/api/llm/status", { signal: ctl.signal });
+        if (!cancelled && r.ok) setStatus(await r.json());
+      } catch {
+        if (!cancelled) setStatus({ reachable: false, errorKind: "unreachable" });
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    probe();
+    const id = setInterval(probe, 10000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  const color =
+    !status              ? "bg-muted" :
+    status.reachable     ? "bg-emerald-500" :
+    status.errorKind === "http" ? "bg-amber-500" :
+                           "bg-zinc-500";
+  const title =
+    !status              ? "Probing LLM…" :
+    status.reachable     ? `LLM reachable${status.latencyMs !== undefined ? ` (${status.latencyMs}ms)` : ""}` :
+    status.errorKind === "config"      ? "LLM not configured" :
+    status.errorKind === "unreachable" ? "LLM unreachable" :
+    status.errorKind === "http"        ? "LLM auth/HTTP error" :
+                                         "LLM error";
+
+  return (
+    <Link href="/ai" aria-label={title} title={title} className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-secondary">
+      <span className={cn("inline-block h-2 w-2 rounded-full", color)} />
+    </Link>
+  );
+}
+
 function Router() {
   return (
     <Switch>
@@ -107,6 +155,7 @@ function Router() {
       <Route path="/library" component={Library} />
       <Route path="/search" component={Search} />
       <Route path="/clips" component={Clips} />
+      <Route path="/ai" component={AI} />
       <Route path="/map">
         <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading map...</div>}>
           <MapPage />

@@ -1,4 +1,4 @@
-import youtubedl from "youtube-dl-exec";
+import youtubedl from "./yt-dlp-bin";
 import path from "path";
 import fs from "fs";
 
@@ -18,6 +18,8 @@ export interface ChannelConfig {
   name: string;
   url: string;
   enabled: boolean;
+  /** Run speaker diarization for this channel's transcripts. Default true. */
+  diarize?: boolean;
 }
 
 /**

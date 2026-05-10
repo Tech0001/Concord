@@ -35,7 +35,10 @@ interface TranscriptSearchResult {
   segment_index: number;
   start_seconds: number;
   end_seconds: number;
+  speaker: string | null;
   text: string;
+  /** Cosine similarity for semantic results; absent for FTS results. */
+  score?: number;
 }
 
 interface IndexStats {
@@ -90,6 +93,11 @@ export default function TranscriptSearch() {
   const [indexStats, setIndexStats] = useState<IndexStats>({ files: 0, segments: 0 });
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [tagOptions, setTagOptions] = useState<TagOption[]>([]);
+  // Search mode: "words" hits the FTS5 index (exact tokens, fast).
+  // "meaning" embeds the query and cosine-ranks against the embedding store
+  // (semantic — finds conceptually-related segments without literal overlap).
+  const [mode, setMode] = useState<"words" | "meaning">("words");
+  const [embeddingStats, setEmbeddingStats] = useState<{ totalSegments: number; totalVideos: number } | null>(null);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerSegmentIndex, setDrawerSegmentIndex] = useState<number | undefined>();
@@ -119,6 +127,13 @@ export default function TranscriptSearch() {
         const statsResponse = await apiRequest("GET", `/api/transcripts/search/stats?t=${Date.now()}`);
         setIndexStats(await statsResponse.json() as IndexStats);
         await loadTagOptions();
+        // Embedding stats — used by the Mode toggle to warn when Meaning
+        // mode is selected but nothing has been embedded yet.
+        try {
+          const r = await apiRequest("GET", "/api/llm/embeddings/stats");
+          const s = await r.json();
+          setEmbeddingStats({ totalSegments: s.totalSegments || 0, totalVideos: s.totalVideos || 0 });
+        } catch { /* AI page might not be configured yet — fine */ }
       } catch (error: any) {
         toast({ variant: "destructive", title: "Could not load channels", description: error.message });
       }
@@ -137,20 +152,37 @@ export default function TranscriptSearch() {
     setLoading(true);
     setSearched(true);
     try {
-      const response = await apiRequest("GET", buildSearchUrl({
-        q: trimmed,
-        channelId,
-        status,
-        type,
-        dateFrom: dateFrom.replaceAll("-", ""),
-        dateTo: dateTo.replaceAll("-", ""),
-        tags: tagFilter.join(","),
-        limit: "200",
-        t: String(Date.now()),
-      }));
-      const data = await response.json() as { results: TranscriptSearchResult[]; index?: IndexStats };
-      setResults(data.results || []);
-      if (data.index) setIndexStats(data.index);
+      if (mode === "meaning") {
+        const response = await apiRequest("POST", "/api/transcripts/search-semantic", {
+          query: trimmed,
+          limit: 200,
+          filters: {
+            channelId,
+            status,
+            isLive: type === "live" ? true : type === "video" ? false : undefined,
+            dateFrom: dateFrom ? dateFrom.replaceAll("-", "") : undefined,
+            dateTo: dateTo ? dateTo.replaceAll("-", "") : undefined,
+            tags: tagFilter,
+          },
+        });
+        const data = await response.json() as { results: TranscriptSearchResult[] };
+        setResults(data.results || []);
+      } else {
+        const response = await apiRequest("GET", buildSearchUrl({
+          q: trimmed,
+          channelId,
+          status,
+          type,
+          dateFrom: dateFrom.replaceAll("-", ""),
+          dateTo: dateTo.replaceAll("-", ""),
+          tags: tagFilter.join(","),
+          limit: "200",
+          t: String(Date.now()),
+        }));
+        const data = await response.json() as { results: TranscriptSearchResult[]; index?: IndexStats };
+        setResults(data.results || []);
+        if (data.index) setIndexStats(data.index);
+      }
     } catch (error: any) {
       toast({ variant: "destructive", title: "Search failed", description: error.message });
     } finally {
@@ -211,15 +243,35 @@ export default function TranscriptSearch() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-2 lg:grid-cols-[minmax(240px,1fr)_180px_150px_140px_150px_150px_auto]">
-            <div className="relative">
-              <SearchIcon className="h-4 w-4 absolute left-2 top-2.5 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={event => setQuery(event.target.value)}
-                onKeyDown={event => { if (event.key === "Enter") runSearch(); }}
-                placeholder="Search spoken words"
-                className="h-9 pl-8"
-              />
+            <div className="relative flex gap-1">
+              <div className="relative flex-1">
+                <SearchIcon className="h-4 w-4 absolute left-2 top-2.5 text-muted-foreground" />
+                <Input
+                  value={query}
+                  onChange={event => setQuery(event.target.value)}
+                  onKeyDown={event => { if (event.key === "Enter") runSearch(); }}
+                  placeholder={mode === "meaning" ? "Describe what you're looking for…" : "Search spoken words"}
+                  className="h-9 pl-8"
+                />
+              </div>
+              <div className="inline-flex h-9 items-center rounded-md border bg-muted/40 p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setMode("words")}
+                  className={`h-full rounded-sm px-2.5 transition-colors ${mode === "words" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  title="Exact word matching (FTS5)"
+                >
+                  Words
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("meaning")}
+                  className={`h-full rounded-sm px-2.5 transition-colors ${mode === "meaning" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  title="Semantic search by meaning (embeddings)"
+                >
+                  Meaning
+                </button>
+              </div>
             </div>
             <Select value={channelId} onValueChange={setChannelId}>
               <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
@@ -275,9 +327,20 @@ export default function TranscriptSearch() {
             )}
           </div>
 
-          <p className="text-xs text-muted-foreground">
-            Tip: wrap a phrase in quotes to match exactly &mdash; e.g. <code className="rounded bg-muted px-1 font-mono">"red heifer"</code> finds the exact phrase, while <code className="rounded bg-muted px-1 font-mono">red heifer</code> finds segments containing both words anywhere.
-          </p>
+          {mode === "words" && (
+            <p className="text-xs text-muted-foreground">
+              Tip: wrap a phrase in quotes to match exactly &mdash; e.g. <code className="rounded bg-muted px-1 font-mono">"red heifer"</code> finds the exact phrase, while <code className="rounded bg-muted px-1 font-mono">red heifer</code> finds segments containing both words anywhere.
+            </p>
+          )}
+          {mode === "meaning" && (
+            <p className="text-xs text-muted-foreground">
+              Meaning search finds conceptually related segments even when wording differs. {embeddingStats && embeddingStats.totalSegments > 0 ? (
+                <>Searching <span className="font-mono">{embeddingStats.totalSegments}</span> embedded segments across <span className="font-mono">{embeddingStats.totalVideos}</span> videos.</>
+              ) : (
+                <span className="text-amber-600 dark:text-amber-400">No embeddings yet — run <strong>Reindex semantics</strong> on the <a href="/ai" className="underline">AI page</a> first.</span>
+              )}
+            </p>
+          )}
 
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <Badge variant="secondary">{results.length} matching segments</Badge>
@@ -315,7 +378,28 @@ export default function TranscriptSearch() {
                     {result.word_count > 0 && <Badge variant="outline">{result.word_count} words</Badge>}
                   </div>
                 </div>
-                <p className="mt-2 leading-6 text-sm">{result.text}</p>
+                <p className="mt-2 leading-6 text-sm">
+                  {result.speaker && (
+                    <span className="mr-1.5 rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] font-semibold text-foreground">
+                      {result.speaker}
+                    </span>
+                  )}
+                  {typeof result.score === "number" && (
+                    <span
+                      className={`mr-1.5 rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
+                        result.score >= 0.7
+                          ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"
+                          : result.score >= 0.55
+                            ? "bg-foreground/10 text-foreground"
+                            : "bg-muted text-muted-foreground"
+                      }`}
+                      title="Cosine similarity to your query (1.0 = identical, 0 = unrelated)"
+                    >
+                      {result.score.toFixed(2)}
+                    </span>
+                  )}
+                  {result.text}
+                </p>
                 <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex flex-wrap gap-2 text-xs text-muted-foreground font-mono">
                     {result.md_path && <span>{result.md_path}</span>}
