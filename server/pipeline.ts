@@ -249,6 +249,7 @@ export class Pipeline extends EventEmitter {
     this.config = this.loadConfig();
     this.persistConfig(this.config);
     this.recoverStuckJobs();
+    this.resumeWaitingLive();
   }
 
   /** Reset any rows left in an in-flight status (downloading, transcribing,
@@ -301,6 +302,59 @@ export class Pipeline extends EventEmitter {
       console.log(
         `[pipeline] Recovered ${result.changes} stuck job${result.changes === 1 ? "" : "s"} from a previous run`,
       );
+    }
+  }
+
+  /** Re-establish 5-minute live-recheck timers for any rows left in
+   *  `waiting_live` from a previous session. The original timers were
+   *  in-memory setTimeouts and lost on every restart, leaving rows
+   *  orphaned forever. Staggered with jitter across a 30-minute window
+   *  so a hundred resumed rows don't all fire yt-dlp calls at the same
+   *  moment on boot. Skips channels that are disabled — re-checking
+   *  there would consume YouTube quota for nothing. */
+  private resumeWaitingLive(): void {
+    interface Row {
+      video_id: string; channel_id: string; title: string; url: string;
+      upload_date: string | null; is_live: number;
+      c_id: string; c_name: string; c_url: string;
+      c_enabled: number; c_diarize: number;
+    }
+    const rows = getDb().prepare(`
+      SELECT q.video_id, q.channel_id, q.title, q.url, q.upload_date, q.is_live,
+             c.id AS c_id, c.name AS c_name, c.url AS c_url,
+             c.enabled AS c_enabled, c.diarize AS c_diarize
+      FROM video_queue q
+      JOIN channels c ON c.id = q.channel_id
+      WHERE q.status = 'waiting_live' AND c.enabled = 1
+    `).all() as Row[];
+
+    if (rows.length === 0) return;
+
+    const windowMs = 30 * 60 * 1000;
+    console.log(
+      `[pipeline] Resuming ${rows.length} live-stream recheck${rows.length === 1 ? "" : "s"} from previous run (staggered over 30min)`,
+    );
+
+    for (const row of rows) {
+      const video: ChannelVideo = {
+        id: row.video_id,
+        title: row.title,
+        url: row.url,
+        duration: null,
+        isLive: !!row.is_live,
+        isShorts: false,
+        uploadDate: row.upload_date,
+        thumbnail: null,
+      };
+      const channel: ChannelConfig = {
+        id: row.c_id,
+        name: row.c_name,
+        url: row.c_url,
+        enabled: !!row.c_enabled,
+        diarize: !!row.c_diarize,
+      };
+      const jitterMs = Math.random() * windowMs;
+      setTimeout(() => this.recheckLive(video, channel), jitterMs);
     }
   }
 
