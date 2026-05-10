@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { visibleModels, defaultModelForPlatform } from "@/lib/transcription-models";
 import {
   AlertCircle,
   CheckCircle,
@@ -144,19 +145,20 @@ function statusBadge(status: string) {
   );
 }
 
-function modelSelector(value: string, onChange: (value: string) => void) {
+function modelSelector(
+  platform: NodeJS.Platform | null,
+  value: string,
+  onChange: (value: string) => void,
+) {
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger className="h-8 text-xs w-[150px]">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="large-v3">large-v3</SelectItem>
-        <SelectItem value="large-v3-turbo">turbo</SelectItem>
-        <SelectItem value="medium">medium</SelectItem>
-        <SelectItem value="small">small</SelectItem>
-        <SelectItem value="tiny">tiny</SelectItem>
-        <SelectItem value="nvidia/parakeet-tdt-0.6b-v3">parakeet-v3</SelectItem>
+        {visibleModels(platform, value).map((opt) => (
+          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+        ))}
       </SelectContent>
     </Select>
   );
@@ -186,7 +188,23 @@ export default function Library() {
   // request) and after the drawer closes (in case the user re-labeled
   // a speaker in the open video).
   const [speakerBadges, setSpeakerBadges] = useState<Record<string, { speaker_id: string; name: string; display_color: string | null; airtime_seconds: number; local_speaker: string }[]>>({});
+  const [platform, setPlatform] = useState<NodeJS.Platform | null>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    apiRequest("GET", "/api/system/info")
+      .then((r) => r.json())
+      .then((d: { platform: NodeJS.Platform }) => {
+        setPlatform(d.platform);
+        // Migrate users who never saved a preference off the legacy "large-v3"
+        // default onto whatever actually runs on their machine (FluidAudio on
+        // Mac, whisper-large on Linux). Skip if they explicitly picked something.
+        if (!savedSettings.model) {
+          setModel(defaultModelForPlatform(d.platform));
+        }
+      })
+      .catch(() => { /* leave null — selector shows all */ });
+  }, []);
 
   const channelNames = useMemo(() => {
     return Object.fromEntries(channels.map(ch => [ch.id, ch.name]));
@@ -414,7 +432,7 @@ export default function Library() {
                 </SelectContent>
               </Select>
               <span className="text-xs text-muted-foreground">Model</span>
-              {modelSelector(model, setModel)}
+              {modelSelector(platform, model, setModel)}
             </div>
           </div>
 
@@ -488,7 +506,7 @@ export default function Library() {
                       </TableCell>
                       <TableCell className="py-2">
                         <div className="flex justify-end gap-2">
-                          {modelSelector(model, setModel)}
+                          {modelSelector(platform, model, setModel)}
                           <Button
                             size="sm"
                             variant="outline"

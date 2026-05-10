@@ -20,6 +20,7 @@ import {
 import { apiRequest } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import FolderInput from "@/components/FolderInput";
+import { visibleModels } from "@/lib/transcription-models";
 
 interface Channel {
   id: string;
@@ -101,29 +102,6 @@ function codecLabel(value: string): string {
 interface QueueData {
   counts: Record<string, number>;
   recent: any[];
-}
-
-// All supported transcription engines + which platforms they actually run on.
-// Filtering the dropdown saves users from picking a model that will fail at
-// transcribe time. `null` = available on all platforms.
-const TRANSCRIPTION_OPTIONS: { value: string; label: string; platforms: NodeJS.Platform[] | null }[] = [
-  { value: "fluid-parakeet-tdt-v3",        label: "Parakeet v3 (Apple Neural Engine, fastest on Mac)", platforms: ["darwin"] },
-  { value: "nvidia/parakeet-tdt-0.6b-v3",  label: "parakeet-v3 (multilingual, fastest on CUDA)",       platforms: ["linux"] },
-  { value: "large-v3",                     label: "whisper large-v3 (multilingual)",                   platforms: ["linux"] },
-  { value: "large-v3-turbo",               label: "whisper turbo",                                     platforms: ["linux"] },
-  { value: "medium",                       label: "whisper medium",                                    platforms: ["linux"] },
-  { value: "small",                        label: "whisper small",                                     platforms: ["linux"] },
-  { value: "tiny",                         label: "whisper tiny",                                      platforms: ["linux"] },
-];
-
-function visibleModels(platform: NodeJS.Platform | null, currentValue: string | undefined) {
-  // Hide engines that can't run here, but always keep the saved value visible
-  // so users can see what's set and change it (instead of it appearing blank).
-  return TRANSCRIPTION_OPTIONS.filter((o) => {
-    if (o.value === currentValue) return true;
-    if (!platform || !o.platforms) return true;
-    return o.platforms.includes(platform);
-  });
 }
 
 export default function PipelineStatus() {
