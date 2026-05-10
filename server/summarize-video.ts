@@ -88,7 +88,7 @@ export async function summarizeVideo(
         { role: "user", content: `Transcript:${truncatedNote}\n\n${text}` },
       ],
       temperature: 0.4,
-      maxTokens: 4000,
+      maxTokens: 8000,
     });
   } catch (err) {
     if (err instanceof LlmConfigError || err instanceof LlmUnreachableError) {

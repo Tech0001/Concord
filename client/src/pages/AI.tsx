@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2, FileText } from "lucide-react";
+import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2, FileText, BookOpen, ChevronDown, ChevronUp } from "lucide-react";
 
 interface LlmConfig {
   baseUrl: string;
@@ -307,6 +307,8 @@ export default function AI() {
       <EmbeddingsCard hasEmbeddingModel={Boolean(embeddingModel || config?.embeddingModel)} />
 
       <SummariesCard hasChatModel={Boolean(chatModel || config?.chatModel)} />
+
+      <ModelNamingCheatsheet />
 
 
       {status && !status.reachable && status.error && !/abort/i.test(status.error) && (
@@ -675,5 +677,180 @@ function EmbeddingsCard({ hasEmbeddingModel }: { hasEmbeddingModel: boolean }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Reference card for understanding what the cryptic model names in oMLX
+ * (and HuggingFace generally) actually mean. Collapsed by default —
+ * users only need this when picking a model, not every time the page loads.
+ */
+function ModelNamingCheatsheet() {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <Card>
+      <button
+        type="button"
+        onClick={() => setExpanded(v => !v)}
+        className="flex w-full items-center justify-between p-6 text-left hover:bg-muted/30"
+      >
+        <span className="flex items-center gap-2 text-sm font-medium">
+          <BookOpen className="h-4 w-4 text-muted-foreground" />
+          Model naming cheatsheet
+        </span>
+        {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+      </button>
+
+      {expanded && (
+        <CardContent className="space-y-5 border-t pt-5 text-xs">
+
+          <Section title="Anatomy of a model name">
+            <p className="text-muted-foreground">Generic shape:</p>
+            <pre className="overflow-x-auto rounded bg-muted px-3 py-2 font-mono text-[11px]">
+              creator/Family-Version-Size-Variant-Quantization{"\n"}
+              {"  "}mlx-community/Qwen3.5-9B-OptiQ-4bit
+            </pre>
+          </Section>
+
+          <Section title="Family — who made the base">
+            <CheatTable
+              cols={["Tag", "Maker", "Notes"]}
+              rows={[
+                ["Qwen", "Alibaba", "Currently top open models. 2.5 / 3 / 3.5 / 3.6"],
+                ["Llama", "Meta", "3.1, 3.2, 3.3"],
+                ["DeepSeek", "DeepSeek", "R1 = reasoning specialist"],
+                ["Gemma", "Google", "2, 3"],
+                ["Mistral", "Mistral", "Mixtral = MoE variant"],
+                ["Phi", "Microsoft", "Small, punches above weight"],
+              ]}
+            />
+          </Section>
+
+          <Section title="Size — params count">
+            <p className="text-muted-foreground">
+              <Code>4B</Code>, <Code>8B</Code>, <Code>14B</Code>, <Code>27B</Code>… = billions of parameters.
+              Bigger = smarter + slower + more RAM.
+            </p>
+            <p className="text-muted-foreground">
+              <strong className="text-foreground">MoE (Mixture-of-Experts):</strong> <Code>35B-A3B</Code> means
+              35B total params with only 3B active per token. Disk size is the 35B; speed/RAM during inference is closer
+              to the 3B. Cheaper to run than its size suggests.
+            </p>
+          </Section>
+
+          <Section title="Variant — what it's tuned for">
+            <CheatTable
+              cols={["Suffix", "Means", "Good for", "Avoid for"]}
+              rows={[
+                ["(none) / -Base", "Foundation, not chat-tuned", "Fine-tuning your own", "Chat — won't follow instructions"],
+                ["-Instruct / -Chat", "Follows instructions", "Summaries, tags, general chat — your default", "—"],
+                ["-Coder", "Trained on code", "Code completion, debugging", "General prose"],
+                ["-VL", "Vision-Language (multimodal)", "Image / OCR / diagrams", "Pure text (wastes weights)"],
+                ["-Thinking / -R1", "Chain-of-thought reasoning", "Math, logic, multi-step RAG", "Summaries — overthinks"],
+                ["-Distill / -UD", "Distilled from bigger teacher", "Smaller with bigger model's flavor", "—"],
+              ]}
+            />
+          </Section>
+
+          <Section title="Quantization — disk size vs quality">
+            <CheatTable
+              cols={["Tag", "Bits", "Quality vs FP16", "Use when"]}
+              rows={[
+                ["FP16 / no suffix", "16", "Reference", "100+ GB RAM"],
+                ["-8bit", "8", "~99%", "Best quality, have RAM"],
+                ["-6bit", "6", "~98%", "Sweet spot middle"],
+                ["-5bit", "5", "~96%", "Tight RAM"],
+                ["-4bit ★", "4", "~94-96%", "Default — best size/quality trade-off"],
+                ["-3bit", "3", "Noticeable drop", "Desperate for RAM"],
+                ["-DWQ", "4-ish, smarter", "~97%", "Pick over plain -4bit when both exist"],
+                ["-OptiQ", "Variable", "Optimized scheme", "Newer, similar to DWQ"],
+                ["-mxfp8", "8", "High", "Mac-specific, large"],
+              ]}
+            />
+          </Section>
+
+          <Section title="Format tag">
+            <CheatTable
+              cols={["Tag", "Means"]}
+              rows={[
+                ["MLX ★", "Compiled for Apple Silicon (uses ANE/Metal). Use these on Mac."],
+                ["GGUF", "llama.cpp format. Cross-platform but slower on Mac."],
+                ["safetensors (no tag)", "Raw weights, runs in PyTorch."],
+              ]}
+            />
+            <p className="text-muted-foreground">For oMLX, always pick <Code>MLX</Code>.</p>
+          </Section>
+
+          <Section title="For Concord on this Mac">
+            <CheatTable
+              cols={["Task", "Pick", "Why"]}
+              rows={[
+                ["Per-video summary", "Qwen3.5-9B-MLX-4bit", "Fast, clean, instruction-following"],
+                ["Tag suggestions", "Same as summary", "Categorization is simple — 9B is plenty"],
+                ["Embeddings", "Qwen3-Embedding-0.6B-4bit-DWQ", "Right size, instruction-tuned, current default"],
+                ["Future RAG", "Qwen3.5-27B-Instruct or DeepSeek-R1-Qwen3-8B", "Worth the reasoning overhead for multi-source citation"],
+                ["Visual content", "Qwen3-VL-8B-Instruct-MLX-4bit", "Only if you ever need image understanding"],
+              ]}
+            />
+          </Section>
+
+          <Section title="Quick rules of thumb">
+            <ul className="list-disc space-y-1 pl-4 text-muted-foreground">
+              <li>Always pick <Code>-Instruct</Code> / <Code>-Chat</Code> unless you're fine-tuning</li>
+              <li>Always pick <Code>MLX</Code> on Mac (vs GGUF / safetensors)</li>
+              <li>Default to <Code>-4bit</Code> or <Code>-DWQ</Code> — 99% as good for half the size</li>
+              <li>Skip <Code>-Coder</Code> and <Code>-VL</Code> unless you specifically need code or images</li>
+              <li>Skip <Code>-Thinking</Code> / <Code>-R1</Code> for summaries (overthinks); use them for RAG</li>
+              <li>MoE (<Code>A3B</Code>) gives bigger-model quality on smaller-active-RAM</li>
+              <li>Bigger ≠ always better — 9B-Instruct beats 27B-Thinking at summaries</li>
+            </ul>
+          </Section>
+
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-2">
+      <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function Code({ children }: { children: React.ReactNode }) {
+  return <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">{children}</code>;
+}
+
+function CheatTable({ cols, rows }: { cols: string[]; rows: string[][] }) {
+  return (
+    <div className="overflow-x-auto rounded border">
+      <table className="w-full border-collapse text-[11px]">
+        <thead>
+          <tr className="bg-muted/40">
+            {cols.map((c) => (
+              <th key={c} className="border-b px-2 py-1.5 text-left font-medium text-muted-foreground">{c}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i} className="border-b last:border-b-0">
+              {row.map((cell, j) => (
+                <td key={j} className="px-2 py-1.5 align-top">
+                  {/^-?[A-Za-z0-9.+\- /★]{1,30}$/.test(cell) && j === 0
+                    ? <span className="font-mono text-foreground">{cell}</span>
+                    : <span className="text-muted-foreground">{cell}</span>}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
