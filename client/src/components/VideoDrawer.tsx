@@ -918,21 +918,28 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                             {formatTimestamp(segment.start)} - {formatTimestamp(segment.end)}
                             {segment.speaker && (() => {
                               const known = speakerMap[segment.speaker];
+                              const open = (e: React.SyntheticEvent) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setLabelDialog({ localSpeaker: segment.speaker!, currentSpeakerId: known?.id ?? null });
+                              };
+                              // span (not button) because the parent is a button — nested
+                              // buttons are illegal HTML and break event handling. role +
+                              // keyboard handlers preserve a11y semantics.
                               return (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setLabelDialog({ localSpeaker: segment.speaker!, currentSpeakerId: known?.id ?? null });
-                                  }}
-                                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold hover:ring-2 hover:ring-foreground/30"
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={open}
+                                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") open(e); }}
+                                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold cursor-pointer hover:ring-2 hover:ring-foreground/30"
                                   style={known?.color
                                     ? { background: known.color, color: "white" }
                                     : { background: "var(--secondary, #e5e7eb)", color: "inherit", fontFamily: "ui-monospace, monospace" }}
                                   title={known ? `Speaker: ${known.name} (click to change)` : "Click to label this speaker"}
                                 >
                                   {known?.name || segment.speaker}
-                                </button>
+                                </span>
                               );
                             })()}
                             {highlighted && <Badge variant="secondary" className="h-5">match</Badge>}

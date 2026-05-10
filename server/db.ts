@@ -2389,9 +2389,12 @@ export function getVideoSpeakerSummariesBatch(
 }
 
 /** Manually link (or unlink) a video-local speaker to a global speaker.
- *  When linking, also folds this video's centroid into the speaker's
- *  global centroid as a count-weighted moving average — improves match
- *  quality for future videos. Pass speakerId = null to unlink. */
+ *  Upserts: if no video_speaker_assignments row exists yet (e.g. the
+ *  video was transcribed before Phase 1 added the centroid-saving step),
+ *  inserts a stub row with an empty centroid so the assignment sticks.
+ *  When centroid IS available, also folds it into the speaker's global
+ *  centroid as a count-weighted moving average — improves match quality
+ *  for future videos. Pass speakerId = null to unlink. */
 export function assignVideoSpeakerToGlobal(args: {
   videoId: string;
   channelId: string;
@@ -2399,20 +2402,32 @@ export function assignVideoSpeakerToGlobal(args: {
   speakerId: string | null;
 }): void {
   const d = getDb();
+  // Upsert. ON CONFLICT keeps the existing centroid + airtime when the
+  // row already exists; for new rows we insert an empty centroid (we
+  // don't have one for old pre-Phase 1 transcripts). The assignment
+  // itself always wins.
   d.prepare(`
-    UPDATE video_speaker_assignments
-    SET speaker_id = ?, confidence = NULL, updated_at = datetime('now')
-    WHERE video_id = ? AND channel_id = ? AND local_speaker = ?
-  `).run(args.speakerId, args.videoId, args.channelId, args.localSpeaker);
+    INSERT INTO video_speaker_assignments
+      (video_id, channel_id, local_speaker, speaker_id, centroid,
+       confidence, sample_start, sample_end, airtime_seconds, updated_at)
+    VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, 0, datetime('now'))
+    ON CONFLICT(video_id, channel_id, local_speaker) DO UPDATE SET
+      speaker_id = excluded.speaker_id,
+      confidence = NULL,
+      updated_at = datetime('now')
+  `).run(
+    args.videoId, args.channelId, args.localSpeaker, args.speakerId,
+    Buffer.alloc(0),  // empty centroid — stub for old transcripts; ignored when zero-length
+  );
 
-  // If linking to a real speaker, fold the video's centroid into the
-  // speaker's global centroid (count-weighted moving average).
+  // If linking to a real speaker AND we have a non-empty centroid for
+  // this video-local, fold it into the global speaker's centroid.
   if (args.speakerId === null) return;
   const va = d.prepare(`
     SELECT centroid FROM video_speaker_assignments
     WHERE video_id = ? AND channel_id = ? AND local_speaker = ?
   `).get(args.videoId, args.channelId, args.localSpeaker) as { centroid: Buffer } | undefined;
-  if (!va) return;
+  if (!va || va.centroid.byteLength === 0) return;  // pre-Phase 1 transcript, no fingerprint to fold
   const newCentroid = bufferToF32(va.centroid);
 
   const existing = getSpeakerEmbedding(args.speakerId);
