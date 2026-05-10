@@ -1,7 +1,16 @@
 import Database from "better-sqlite3";
+import * as sqliteVec from "sqlite-vec";
 import fs from "fs";
 import os from "os";
 import path from "path";
+
+// Embedding dimension is hardcoded to match Qwen3-Embedding-0.6B (the
+// recommended embedding model for Concord). If the user switches to a
+// different-dim model (e.g. EmbeddingGemma at 768), the insert path
+// throws with a clear "wipe + reindex required" message and they re-run
+// the AI page reindex with the new model. We intentionally don't try
+// to support mixed dimensions in one table — that gets complicated fast.
+const EMBEDDING_DIM = 1024;
 
 let db: Database.Database | null = null;
 
@@ -136,23 +145,6 @@ const SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_clip_links_to ON clip_links(to_clip_id);
 
-  CREATE TABLE IF NOT EXISTS transcript_segment_embeddings (
-    video_id      TEXT NOT NULL,
-    channel_id    TEXT NOT NULL,
-    segment_index INTEGER NOT NULL,
-    model         TEXT NOT NULL,
-    embedding     BLOB NOT NULL,
-    text          TEXT NOT NULL,
-    start_seconds REAL NOT NULL,
-    end_seconds   REAL NOT NULL,
-    speaker       TEXT,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (video_id, channel_id, segment_index, model)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_seg_emb_video ON transcript_segment_embeddings(video_id, channel_id);
-  CREATE INDEX IF NOT EXISTS idx_seg_emb_model ON transcript_segment_embeddings(model);
-
   CREATE TABLE IF NOT EXISTS clip_map_layouts (
     map_key    TEXT NOT NULL,
     node_id    TEXT NOT NULL,
@@ -212,9 +204,38 @@ export function getDb(dbPath?: string): Database.Database {
     db.pragma("journal_mode = WAL");
     db.pragma("busy_timeout = 5000");
     db.pragma("foreign_keys = ON");
+
+    // Load sqlite-vec extension (vector search). Must happen BEFORE we
+    // create the vec_segments virtual table or run any migration that
+    // touches it. The npm package ships prebuilt loadable libs for
+    // darwin-arm64 / darwin-x64 / linux-x64 / linux-arm64 / windows-x64.
+    sqliteVec.load(db);
+
     db.exec(SCHEMA);
+
+    // The vec0 virtual table for embeddings. Auxiliary columns (`+`)
+    // are stored alongside the vector and queryable in WHERE clauses
+    // without leaving the index. vec0 in 0.1.x supports TEXT / INTEGER /
+    // FLOAT / DOUBLE / BLOB only — REAL throws a misleading "chunk_size"
+    // error, so seconds use FLOAT. Distance is L2 by default; we
+    // normalize vectors at insert/query time so L2 ranks identically
+    // to cosine, then convert distance back to similarity for display.
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS vec_segments USING vec0(
+        embedding float[${EMBEDDING_DIM}],
+        +video_id TEXT,
+        +channel_id TEXT,
+        +segment_index INTEGER,
+        +model TEXT,
+        +text TEXT,
+        +start_seconds FLOAT,
+        +end_seconds FLOAT,
+        +speaker TEXT
+      )
+    `);
+
     runMigrations(db);
-    console.log(`[db] SQLite ready: ${resolvedPath}`);
+    console.log(`[db] SQLite ready: ${resolvedPath} (sqlite-vec loaded, dim=${EMBEDDING_DIM})`);
   }
   return db;
 }
@@ -264,6 +285,77 @@ function runMigrations(database: Database.Database) {
     // so the next refresh re-indexes everything into the new FTS schema.
     database.exec("DELETE FROM transcript_index");
     console.log("[db] Migrated transcript_segments_fts to add speaker column (re-index on next search)");
+  }
+
+  // Migrate from the legacy `transcript_segment_embeddings` SQL table to
+  // the new `vec_segments` vec0 virtual table (sqlite-vec). Pure-JS cosine
+  // doesn't scale past ~50K segments; vec0 is built for this. One-shot
+  // copy + drop, idempotent (the source table won't exist after the first
+  // run). Skips rows whose embedding dim doesn't match EMBEDDING_DIM —
+  // those would fail at insert anyway and would just bloat the new table.
+  const oldExists = database.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='transcript_segment_embeddings'",
+  ).get();
+  if (oldExists) {
+    type LegacyRow = {
+      video_id: string;
+      channel_id: string;
+      segment_index: number;
+      model: string;
+      embedding: Buffer;
+      text: string;
+      start_seconds: number;
+      end_seconds: number;
+      speaker: string | null;
+    };
+    const rows = database.prepare(`
+      SELECT video_id, channel_id, segment_index, model, embedding, text,
+             start_seconds, end_seconds, speaker
+      FROM transcript_segment_embeddings
+    `).all() as LegacyRow[];
+
+    let migrated = 0;
+    let skippedDim = 0;
+    if (rows.length > 0) {
+      const insert = database.prepare(`
+        INSERT INTO vec_segments
+          (embedding, video_id, channel_id, segment_index, model, text, start_seconds, end_seconds, speaker)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const tx = database.transaction(() => {
+        for (const row of rows) {
+          const dim = row.embedding.byteLength / 4;
+          if (dim !== EMBEDDING_DIM) {
+            skippedDim++;
+            continue;
+          }
+          // Normalize during migration — old embeddings predate the
+          // unit-norm-at-insert convention. vec0 uses L2 distance, which
+          // ranks identically to cosine only for unit-norm vectors.
+          const oldVec = new Float32Array(
+            row.embedding.buffer,
+            row.embedding.byteOffset,
+            row.embedding.byteLength / 4,
+          );
+          const normalized = normalizeVector(oldVec);
+          insert.run(
+            float32ToBuffer(normalized),
+            row.video_id, row.channel_id,
+            BigInt(row.segment_index), // INTEGER aux column — see note in replaceVideoEmbeddings
+            row.model,
+            row.text, row.start_seconds, row.end_seconds, row.speaker,
+          );
+          migrated++;
+        }
+      });
+      tx();
+    }
+
+    database.exec("DROP TABLE transcript_segment_embeddings");
+    console.log(
+      `[db] Migrated ${migrated} embeddings → sqlite-vec vec_segments`
+      + (skippedDim > 0 ? ` (skipped ${skippedDim} with mismatched dim — re-embed via AI page reindex)` : ""),
+    );
   }
 }
 
@@ -857,26 +949,13 @@ export function getTranscriptSegmentsForVideo(videoId: string, channelId: string
   return parseTranscriptSegments(entry.md_path);
 }
 
-// ---- Segment embeddings (semantic search) ----
-
-// Bumped on every embedding write/delete. The semantic-search cache
-// compares this counter against its loaded snapshot to decide whether
-// it needs to reload from disk. Cheap, no event plumbing required.
-let embeddingWriteCounter = 0;
-export function getEmbeddingWriteCounter(): number { return embeddingWriteCounter; }
-function bumpEmbeddingWriteCounter(): void { embeddingWriteCounter++; }
-
-export interface SegmentEmbedding {
-  video_id: string;
-  channel_id: string;
-  segment_index: number;
-  model: string;
-  embedding: Float32Array;
-  text: string;
-  start_seconds: number;
-  end_seconds: number;
-  speaker: string | null;
-}
+// ---- Segment embeddings (semantic search via sqlite-vec) ----
+//
+// Storage: vec0 virtual table `vec_segments` (created in getDb).
+// sqlite-vec handles indexing internally — no manual cache, no write
+// counter. Queries use `WHERE embedding MATCH ? AND model = ? AND k = ?`
+// for KNN search, with auxiliary columns (text, speaker, etc.) returned
+// inline so we don't need a join back to a side table.
 
 export interface EmbeddingInput {
   segmentIndex: number;
@@ -891,14 +970,29 @@ function float32ToBuffer(arr: Float32Array): Buffer {
   return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
 }
 
-function bufferToFloat32(buf: Buffer | Uint8Array): Float32Array {
-  // Preserve view semantics — buf may be a slice of a larger buffer.
-  return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+/**
+ * Unit-normalize a vector. vec0 only supports L2 distance; for unit-norm
+ * vectors L2 ranking is identical to cosine ranking (d² = 2 - 2·cos),
+ * so normalizing at insert + query gives us cosine semantics for free.
+ *
+ * Idempotent on already-normalized input. Returns the input untouched
+ * if its norm is zero (degenerate empty vector — can't happen in
+ * practice but guard against div-by-zero).
+ */
+export function normalizeVector(vec: Float32Array): Float32Array {
+  let norm = 0;
+  for (let i = 0; i < vec.length; i++) norm += vec[i] * vec[i];
+  norm = Math.sqrt(norm);
+  if (norm === 0) return vec;
+  const out = new Float32Array(vec.length);
+  for (let i = 0; i < vec.length; i++) out[i] = vec[i] / norm;
+  return out;
 }
 
-/** Replace all embeddings for one (video, channel, model). Used during
- *  per-video backfill: clears any stale rows for this model first so an
- *  edited transcript doesn't leave orphan embeddings around. */
+/** Replace all embeddings for one (video, channel, model) in vec_segments.
+ *  Throws on dimension mismatch — the caller (embed-segments.ts) catches
+ *  config errors and returns a "skipped" result, so this surfaces a clear
+ *  message to the user instead of silently storing corrupt data. */
 export function replaceVideoEmbeddings(args: {
   videoId: string;
   channelId: string;
@@ -906,72 +1000,57 @@ export function replaceVideoEmbeddings(args: {
   rows: EmbeddingInput[];
 }): void {
   const { videoId, channelId, model, rows } = args;
+  // Dim sanity check — fail loudly before touching the DB.
+  for (const row of rows) {
+    if (row.embedding.length !== EMBEDDING_DIM) {
+      throw new Error(
+        `Embedding dim mismatch: model produced ${row.embedding.length}-dim vector, `
+        + `vec_segments expects ${EMBEDDING_DIM}. Wipe + reindex required `
+        + `(use the AI page Reindex button).`,
+      );
+    }
+  }
   const d = getDb();
   const clear = d.prepare(
-    "DELETE FROM transcript_segment_embeddings WHERE video_id = ? AND channel_id = ? AND model = ?",
+    "DELETE FROM vec_segments WHERE video_id = ? AND channel_id = ? AND model = ?",
   );
   const insert = d.prepare(`
-    INSERT INTO transcript_segment_embeddings
-      (video_id, channel_id, segment_index, model, embedding, text, start_seconds, end_seconds, speaker)
+    INSERT INTO vec_segments
+      (embedding, video_id, channel_id, segment_index, model, text, start_seconds, end_seconds, speaker)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const tx = d.transaction(() => {
     clear.run(videoId, channelId, model);
     for (const row of rows) {
+      // Normalize at insert so L2 ranking == cosine ranking later.
+      const normalized = normalizeVector(row.embedding);
       insert.run(
-        videoId, channelId, row.segmentIndex, model,
-        float32ToBuffer(row.embedding),
+        float32ToBuffer(normalized),
+        videoId, channelId,
+        // BigInt forces INTEGER binding — better-sqlite3 binds plain JS
+        // numbers as REAL/FLOAT by default, which vec0 strictly rejects
+        // for INTEGER aux columns ("type mismatch" error).
+        BigInt(row.segmentIndex),
+        model,
         row.text, row.start, row.end, row.speaker,
       );
     }
   });
   tx();
-  bumpEmbeddingWriteCounter();
-}
-
-/** Load every stored embedding for a given model. Used at semantic-search
- *  query time. Returns a flat array — caller decides how to index it.
- *  ~100 MB for a year of content per the handoff; fits in RAM easily. */
-export function getAllEmbeddings(model: string): SegmentEmbedding[] {
-  type Row = {
-    video_id: string;
-    channel_id: string;
-    segment_index: number;
-    model: string;
-    embedding: Buffer;
-    text: string;
-    start_seconds: number;
-    end_seconds: number;
-    speaker: string | null;
-  };
-  const rows = getDb().prepare(`
-    SELECT video_id, channel_id, segment_index, model, embedding, text,
-           start_seconds, end_seconds, speaker
-    FROM transcript_segment_embeddings
-    WHERE model = ?
-  `).all(model) as Row[];
-  return rows.map((r) => ({
-    ...r,
-    embedding: bufferToFloat32(r.embedding),
-  }));
 }
 
 export function clearVideoEmbeddings(videoId: string, channelId: string, model?: string): number {
   const d = getDb();
-  const changes = model
-    ? d.prepare("DELETE FROM transcript_segment_embeddings WHERE video_id = ? AND channel_id = ? AND model = ?").run(videoId, channelId, model).changes
-    : d.prepare("DELETE FROM transcript_segment_embeddings WHERE video_id = ? AND channel_id = ?").run(videoId, channelId).changes;
-  if (changes > 0) bumpEmbeddingWriteCounter();
-  return changes;
+  return model
+    ? d.prepare("DELETE FROM vec_segments WHERE video_id = ? AND channel_id = ? AND model = ?").run(videoId, channelId, model).changes
+    : d.prepare("DELETE FROM vec_segments WHERE video_id = ? AND channel_id = ?").run(videoId, channelId).changes;
 }
 
 export function clearAllEmbeddings(model?: string): number {
   const d = getDb();
-  const changes = model
-    ? d.prepare("DELETE FROM transcript_segment_embeddings WHERE model = ?").run(model).changes
-    : d.prepare("DELETE FROM transcript_segment_embeddings").run().changes;
-  if (changes > 0) bumpEmbeddingWriteCounter();
-  return changes;
+  return model
+    ? d.prepare("DELETE FROM vec_segments WHERE model = ?").run(model).changes
+    : d.prepare("DELETE FROM vec_segments").run().changes;
 }
 
 export interface EmbeddingStats {
@@ -985,7 +1064,7 @@ export function getEmbeddingStats(): EmbeddingStats {
     SELECT model,
            COUNT(DISTINCT video_id || ':' || channel_id) AS videos,
            COUNT(*) AS segments
-    FROM transcript_segment_embeddings
+    FROM vec_segments
     GROUP BY model
     ORDER BY model
   `).all() as { model: string; videos: number; segments: number }[];
@@ -998,7 +1077,7 @@ export function getEmbeddingStats(): EmbeddingStats {
  *  used by the auto-embed hook to avoid re-running on retranscribe. */
 export function hasVideoEmbeddings(videoId: string, channelId: string, model: string): boolean {
   const row = getDb().prepare(`
-    SELECT 1 FROM transcript_segment_embeddings
+    SELECT 1 FROM vec_segments
     WHERE video_id = ? AND channel_id = ? AND model = ?
     LIMIT 1
   `).get(videoId, channelId, model);
