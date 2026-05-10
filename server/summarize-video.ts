@@ -34,16 +34,47 @@ const SYSTEM_PROMPT = [
 ].join(" ");
 
 /**
- * Minimal cleanup of the model response. Trim whitespace and strip the
- * one universal-noise pattern — closed `<think>...</think>` blocks
- * (DeepSeek-R1 / Qwen-thinking convention). Everything else is left
- * alone: trying to be clever about extracting "the real answer" from
- * verbose models was costing us good summaries when the heuristics
- * misfired.
+ * Cleanup for thinking-model output. Designed around two observations:
+ *
+ *   1. Big thinking models (Qwen3.6-27B etc.) emit a long visible
+ *      analysis section that mirrors the prompt ("Here's a thinking
+ *      process: 1. **Analyze User Input:** ...") followed by the
+ *      actual summary as a standalone paragraph at the end.
+ *   2. Trying to recognize-and-strip the analysis is brittle (every
+ *      model phrases it differently). Trying to extract the summary
+ *      via tags is brittle (models forget tags).
+ *
+ * Strategy: take the LAST paragraph if it looks like prose (not a list,
+ * substantive length). That's the model's natural "answer" paragraph.
+ * If the response doesn't have that shape — single paragraph, or last
+ * paragraph is itself a list/header — return the whole response. The
+ * user sees verbose output rather than empty.
+ *
+ * Also strips `<think>...</think>` XML blocks (DeepSeek-R1 convention).
+ *
+ * Hard guarantee: never returns empty if `raw` was non-empty.
  */
 function cleanSummary(raw: string): string {
   if (!raw) return raw;
-  return raw.replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+
+  // 1. Strip closed `<think>...</think>` blocks (XML-tag thinking
+  //    models). Unclosed tags are left alone — bare-trim fallback wins.
+  let out = raw.replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+  if (!out) out = raw.trim();
+
+  // 2. If the response has paragraph structure, prefer the last
+  //    substantive prose paragraph (= the actual summary the model
+  //    produced after its analysis). "Substantive" = >= 50 chars and
+  //    doesn't start with a list/header marker.
+  const paragraphs = out.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  if (paragraphs.length > 1) {
+    const last = paragraphs[paragraphs.length - 1];
+    const startsWithListOrHeader = /^(?:\d+\.\s|[*•-]\s|#|\*\*[A-Z][^*]*\*\*\s*$)/.test(last);
+    if (last.length >= 50 && !startsWithListOrHeader) return last;
+  }
+
+  // 3. Fallback: return whatever we have. Verbose > empty.
+  return out;
 }
 
 /**
@@ -100,7 +131,11 @@ export async function summarizeVideo(
         { role: "user", content: `Transcript:${truncatedNote}\n\n${text}` },
       ],
       temperature: 0.4,
-      maxTokens: 280,
+      // 1000 gives big thinking models (Qwen3.6-27B-Thinking etc.) room
+      // to finish their analysis AND emit the actual summary at the end.
+      // 280 was starving them mid-analysis. cleanSummary() pulls just
+      // the final summary paragraph out for display.
+      maxTokens: 1000,
     });
   } catch (err) {
     if (err instanceof LlmConfigError || err instanceof LlmUnreachableError) {
