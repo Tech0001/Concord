@@ -17,6 +17,7 @@ import Library from "@/pages/Library";
 import Search from "@/pages/Search";
 import Clips from "@/pages/Clips";
 import AI from "@/pages/AI";
+import Speakers from "@/pages/Speakers";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
@@ -28,6 +29,7 @@ import {
   Search as SearchIcon,
   Sparkles,
   Sun,
+  Users,
 } from "lucide-react";
 
 const MapPage = lazy(() => import("@/pages/Map"));
@@ -36,6 +38,7 @@ const NAV_ITEMS = [
   { href: "/library", label: "Library", icon: Database },
   { href: "/search", label: "Search", icon: SearchIcon },
   { href: "/clips", label: "Clips", icon: Bookmark },
+  { href: "/speakers", label: "Speakers", icon: Users },
   { href: "/map", label: "Map", icon: MapIcon },
   { href: "/pipeline", label: "Pipeline", icon: Activity },
   { href: "/ai", label: "AI", icon: Sparkles },
@@ -157,6 +160,7 @@ function Router() {
       <Route path="/library" component={Library} />
       <Route path="/search" component={Search} />
       <Route path="/clips" component={Clips} />
+      <Route path="/speakers" component={Speakers} />
       <Route path="/ai" component={AI} />
       <Route path="/map">
         <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading map...</div>}>

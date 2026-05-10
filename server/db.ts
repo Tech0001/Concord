@@ -787,6 +787,10 @@ export interface TranscriptSearchFilters {
   dateFrom?: string;
   dateTo?: string;
   tags?: string[];
+  /** Filter to segments spoken by a specific global speaker. Resolves
+   *  the local "S0"/"S1" labels to the global speaker via
+   *  video_speaker_assignments. */
+  speakerId?: string;
   limit?: number;
 }
 
@@ -942,6 +946,19 @@ export function searchTranscriptSegments(query: string, filters: TranscriptSearc
   if (filters.dateTo) {
     where.push("q.upload_date <= ?");
     params.push(normalizeDateFilter(filters.dateTo));
+  }
+
+  // Speaker filter: only return segments whose (video_id, channel_id,
+  // speaker) maps to the requested global speaker via video_speaker_assignments.
+  if (filters.speakerId) {
+    where.push(`EXISTS (
+      SELECT 1 FROM video_speaker_assignments vsa
+      WHERE vsa.video_id = q.video_id
+        AND vsa.channel_id = q.channel_id
+        AND vsa.local_speaker = s.speaker
+        AND vsa.speaker_id = ?
+    )`);
+    params.push(filters.speakerId);
   }
 
   // Tag scope: only return segments from videos that have at least one clip
@@ -2225,6 +2242,110 @@ export function getVideoSpeakerAssignments(videoId: string, channelId: string): 
     ORDER BY airtime_seconds DESC
   `).all(videoId, channelId) as Array<Omit<VideoSpeakerAssignment, "centroid"> & { centroid: Buffer }>;
   return rows.map(r => ({ ...r, centroid: bufferToF32(r.centroid) }));
+}
+
+export interface SpeakerWithStats extends Speaker {
+  total_airtime_seconds: number;
+  appearance_count: number;     // distinct videos
+  has_embedding: number;        // 1 if speaker_embeddings row exists, else 0
+}
+
+/** Speakers list with rolled-up stats — the "Speakers" page main view. */
+export function getSpeakersWithStats(): SpeakerWithStats[] {
+  return getDb().prepare(`
+    SELECT
+      s.id, s.name, s.display_color, s.notes, s.created_at, s.updated_at,
+      COALESCE(SUM(vsa.airtime_seconds), 0) AS total_airtime_seconds,
+      COUNT(DISTINCT vsa.video_id || '|' || vsa.channel_id) AS appearance_count,
+      CASE WHEN se.speaker_id IS NOT NULL THEN 1 ELSE 0 END AS has_embedding
+    FROM speakers s
+    LEFT JOIN video_speaker_assignments vsa ON vsa.speaker_id = s.id
+    LEFT JOIN speaker_embeddings se ON se.speaker_id = s.id
+    GROUP BY s.id
+    ORDER BY total_airtime_seconds DESC, s.name COLLATE NOCASE
+  `).all() as SpeakerWithStats[];
+}
+
+export interface UnidentifiedAssignment extends VideoSpeakerAssignment {
+  video_title: string;
+  video_url: string;
+  video_path: string | null;
+  channel_name: string | null;
+  upload_date: string | null;
+}
+
+/** All video-local speakers without a global speaker mapping —
+ *  the "needs labeling" list for the UI. Ordered by airtime so
+ *  dominant unidentifieds get attention first. */
+export function getUnidentifiedAssignments(limit = 200): UnidentifiedAssignment[] {
+  const rows = getDb().prepare(`
+    SELECT
+      vsa.video_id, vsa.channel_id, vsa.local_speaker, vsa.speaker_id,
+      vsa.centroid, vsa.confidence, vsa.sample_start, vsa.sample_end,
+      vsa.airtime_seconds,
+      q.title AS video_title, q.url AS video_url, q.video_path,
+      c.name AS channel_name, q.upload_date
+    FROM video_speaker_assignments vsa
+    JOIN video_queue q ON q.video_id = vsa.video_id AND q.channel_id = vsa.channel_id
+    LEFT JOIN channels c ON c.id = vsa.channel_id
+    WHERE vsa.speaker_id IS NULL
+    ORDER BY vsa.airtime_seconds DESC
+    LIMIT ?
+  `).all(limit) as Array<Omit<UnidentifiedAssignment, "centroid"> & { centroid: Buffer }>;
+  return rows.map(r => ({ ...r, centroid: bufferToF32(r.centroid) }));
+}
+
+export interface SpeakerAppearance {
+  video_id: string;
+  channel_id: string;
+  channel_name: string | null;
+  title: string;
+  url: string;
+  video_path: string | null;
+  upload_date: string | null;
+  local_speaker: string;
+  airtime_seconds: number;
+  sample_start: number | null;
+  sample_end: number | null;
+}
+
+/** All videos where a given speaker appears, with their local label
+ *  and airtime in each. Used by the speaker-detail view. */
+export function getSpeakerAppearances(speakerId: string): SpeakerAppearance[] {
+  return getDb().prepare(`
+    SELECT
+      vsa.video_id, vsa.channel_id, c.name AS channel_name,
+      q.title, q.url, q.video_path, q.upload_date,
+      vsa.local_speaker, vsa.airtime_seconds,
+      vsa.sample_start, vsa.sample_end
+    FROM video_speaker_assignments vsa
+    JOIN video_queue q ON q.video_id = vsa.video_id AND q.channel_id = vsa.channel_id
+    LEFT JOIN channels c ON c.id = vsa.channel_id
+    WHERE vsa.speaker_id = ?
+    ORDER BY vsa.airtime_seconds DESC
+  `).all(speakerId) as SpeakerAppearance[];
+}
+
+/** Per-video summary of which speakers appear, for the Library badges.
+ *  Returns top speakers (those with global identity) ordered by airtime. */
+export interface VideoSpeakerSummary {
+  speaker_id: string;
+  name: string;
+  display_color: string | null;
+  airtime_seconds: number;
+  local_speaker: string;
+}
+
+export function getVideoSpeakerSummary(videoId: string, channelId: string): VideoSpeakerSummary[] {
+  return getDb().prepare(`
+    SELECT
+      s.id AS speaker_id, s.name, s.display_color,
+      vsa.airtime_seconds, vsa.local_speaker
+    FROM video_speaker_assignments vsa
+    JOIN speakers s ON s.id = vsa.speaker_id
+    WHERE vsa.video_id = ? AND vsa.channel_id = ?
+    ORDER BY vsa.airtime_seconds DESC
+  `).all(videoId, channelId) as VideoSpeakerSummary[];
 }
 
 /** Manually link (or unlink) a video-local speaker to a global speaker.

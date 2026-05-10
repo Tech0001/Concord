@@ -14,7 +14,12 @@ import { searchSemantic } from "./semantic-search";
 import { embedSegmentsForVideo } from "./embed-segments";
 import { summarizeVideo } from "./summarize-video";
 import { chat as llmChat } from "./llm";
-import { getEmbeddingStats, clearAllEmbeddings, setVideoAiSummary } from "./db";
+import {
+  getEmbeddingStats, clearAllEmbeddings, setVideoAiSummary,
+  getSpeakersWithStats, getSpeakerById, createSpeaker, updateSpeaker, deleteSpeaker,
+  getUnidentifiedAssignments, getSpeakerAppearances, assignVideoSpeakerToGlobal,
+  getVideoSpeakerSummary,
+} from "./db";
 import {
   addClipLink,
   countByStatus,
@@ -1237,6 +1242,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const liveFilter = String(req.query.type || "all");
       const tagsParam = typeof req.query.tags === "string" ? req.query.tags : "";
       const tags = tagsParam.split(",").map(t => t.trim()).filter(Boolean);
+      const speakerIdParam = typeof req.query.speakerId === "string" && req.query.speakerId ? req.query.speakerId : undefined;
       const results = searchTranscriptSegments(query, {
         channelId: String(req.query.channelId || "all"),
         status: String(req.query.status || "complete"),
@@ -1244,6 +1250,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         dateFrom: req.query.dateFrom ? String(req.query.dateFrom) : undefined,
         dateTo: req.query.dateTo ? String(req.query.dateTo) : undefined,
         tags,
+        speakerId: speakerIdParam,
         limit: req.query.limit ? Number(req.query.limit) : 100,
       });
       res.json({ results, index: getTranscriptSearchIndexStats() });
@@ -1251,6 +1258,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: error instanceof Error ? error.message : "Transcript search failed" });
     }
   });
+
+  // ---- Speakers (cross-video voice identity) ----
+
+  // List all speakers with rolled-up stats (airtime + appearance count).
+  app.get("/api/speakers", (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ speakers: getSpeakersWithStats() });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
+    }
+  });
+
+  app.get("/api/speakers/unidentified", (req, res) => {
+    try {
+      const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 1000);
+      res.json({ assignments: getUnidentifiedAssignments(limit) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
+    }
+  });
+
+  app.get("/api/speakers/:id", (req: Request<{ id: string }>, res) => {
+    const s = getSpeakerById(req.params.id);
+    if (!s) return res.status(404).json({ error: "Speaker not found" });
+    res.json({ speaker: s, appearances: getSpeakerAppearances(req.params.id) });
+  });
+
+  app.post("/api/speakers", (req, res) => {
+    try {
+      const name = String(req.body?.name || "").trim();
+      if (!name) return res.status(400).json({ error: "name required" });
+      const displayColor = req.body?.displayColor ?? null;
+      const notes = req.body?.notes ?? null;
+      const id = nanoid();
+      const speaker = createSpeaker({ id, name, displayColor, notes });
+      res.json({ speaker });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
+    }
+  });
+
+  app.patch("/api/speakers/:id", (req: Request<{ id: string }>, res) => {
+    const fields: { name?: string; displayColor?: string | null; notes?: string | null } = {};
+    if (typeof req.body?.name === "string") fields.name = req.body.name.trim();
+    if (req.body?.displayColor !== undefined) fields.displayColor = req.body.displayColor;
+    if (req.body?.notes !== undefined) fields.notes = req.body.notes;
+    const updated = updateSpeaker(req.params.id, fields);
+    if (!updated) return res.status(404).json({ error: "Speaker not found" });
+    res.json({ speaker: updated });
+  });
+
+  app.delete("/api/speakers/:id", (req: Request<{ id: string }>, res) => {
+    const ok = deleteSpeaker(req.params.id);
+    res.json({ success: ok });
+  });
+
+  // Manually assign (or re-assign) a video-local speaker to a global one.
+  // Pass speakerId to link, or null to unlink. If `newName` is provided
+  // and `speakerId` is omitted, creates a new speaker first then assigns.
+  app.post("/api/speakers/assign", (req, res) => {
+    try {
+      const videoId = String(req.body?.videoId || "");
+      const channelId = String(req.body?.channelId || "");
+      const localSpeaker = String(req.body?.localSpeaker || "");
+      if (!videoId || !channelId || !localSpeaker) {
+        return res.status(400).json({ error: "videoId, channelId, localSpeaker required" });
+      }
+      let speakerId: string | null;
+      let createdSpeaker = null;
+      if (typeof req.body?.newName === "string" && req.body.newName.trim()) {
+        const id = nanoid();
+        createdSpeaker = createSpeaker({
+          id,
+          name: req.body.newName.trim(),
+          displayColor: req.body.displayColor ?? null,
+        });
+        speakerId = id;
+      } else if (req.body?.speakerId === null) {
+        speakerId = null;
+      } else if (typeof req.body?.speakerId === "string") {
+        speakerId = req.body.speakerId;
+      } else {
+        return res.status(400).json({ error: "Provide speakerId, newName, or speakerId=null" });
+      }
+      assignVideoSpeakerToGlobal({ videoId, channelId, localSpeaker, speakerId });
+      res.json({ success: true, speakerId, createdSpeaker });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
+    }
+  });
+
+  // Library badge data — speakers identified in a single video, ordered by airtime.
+  app.get("/api/videos/library/:channelId/:videoId/speakers",
+    (req: Request<{ channelId: string; videoId: string }>, res) => {
+      res.json({ speakers: getVideoSpeakerSummary(req.params.videoId, req.params.channelId) });
+    });
 
   // Force-refresh the local transcript search index
   app.post("/api/transcripts/search/reindex", (_req, res) => {
