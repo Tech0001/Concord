@@ -313,7 +313,7 @@ export class Pipeline extends EventEmitter {
       videoSaveDir: "/media/pc/Maac/YouTube/saved_videos",
       transcriptDir: "/media/pc/Maac/YouTube/transcripts",
       qmdVaultDir: null,
-      checkIntervalMinutes: 15,
+      checkIntervalMinutes: 1440,
       skipShorts: true,
       videoQuality: "1080",
       videoCodec: "any",
