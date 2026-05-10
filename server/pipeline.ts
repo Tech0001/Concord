@@ -127,6 +127,11 @@ export interface PipelineJob {
   audioPath?: string;
   mdPath?: string;
   transcriptionResult?: TranscriptionResult;
+  /** The transcription model this specific job is using. Stamped before
+   *  the transcribe step starts so the UI can show accurate "Transcribing
+   *  with X" labels without guessing from the global config default
+   *  (which may have been changed mid-flight or differ per re-transcribe). */
+  model?: string;
   retries: number;
 }
 
@@ -905,6 +910,7 @@ export class Pipeline extends EventEmitter {
 
       // Step 4: Transcribe
       job.status = "transcribing";
+      job.model = this.config.transcription.model;
       updateQueueStatus(video.id, channel.id, { status: "transcribing" });
       this.emit("jobUpdated", job);
 
@@ -1317,6 +1323,7 @@ export class Pipeline extends EventEmitter {
 
       // Transcribe
       job.status = "transcribing";
+      job.model = transModel;
       this.emit("jobUpdated", job);
 
       const result = await transcribeAudio(audioPath, mdPath, {
@@ -1456,6 +1463,7 @@ export class Pipeline extends EventEmitter {
 
       // Step 2: Transcribe
       job.status = "transcribing";
+      job.model = this.config.transcription.model;
       this.emit("jobUpdated", job);
 
       const mdFileName = `${safeName}.md`;

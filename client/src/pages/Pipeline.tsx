@@ -48,6 +48,7 @@ interface Job {
   audioPath?: string;
   mdPath?: string;
   transcriptionResult?: any;
+  model?: string;
   retries: number;
 }
 
@@ -91,8 +92,15 @@ const CODEC_OPTIONS: { value: string; label: string }[] = [
 function transcribingLabel(model: string | undefined): string {
   if (!model) return "Transcribing…";
   const m = model.toLowerCase();
-  if (m.includes("parakeet")) return `Transcribing with Parakeet (${model.split("/").pop()}) on CUDA…`;
-  if (m.startsWith("fluid-") || m.includes("fluidaudio")) return "Transcribing with FluidAudio on Apple Neural Engine…";
+  // Check fluid- prefix BEFORE the parakeet substring match — the Mac
+  // engine is "fluid-parakeet-tdt-v3", which contains "parakeet" but runs
+  // through FluidAudio on the Apple Neural Engine, not NeMo on CUDA.
+  if (m.startsWith("fluid-") || m.includes("fluidaudio")) {
+    return "Transcribing with FluidAudio on Apple Neural Engine…";
+  }
+  if (m.includes("parakeet")) {
+    return `Transcribing with Parakeet (${model.split("/").pop()}) on CUDA…`;
+  }
   return `Transcribing with faster-whisper (${model}) on CUDA…`;
 }
 
@@ -755,7 +763,7 @@ export default function PipelineStatus() {
                 )}
                 {job.status === "downloading" && <p className="text-xs text-muted-foreground mt-1">Downloading video with yt-dlp…</p>}
                 {job.status === "extracting_audio" && <p className="text-xs text-muted-foreground mt-1">Extracting audio with ffmpeg (16kHz mono WAV)…</p>}
-                {job.status === "transcribing" && <p className="text-xs text-muted-foreground mt-1">{transcribingLabel(config?.transcription?.model)}</p>}
+                {job.status === "transcribing" && <p className="text-xs text-muted-foreground mt-1">{transcribingLabel(job.model || config?.transcription?.model)}</p>}
                 {job.status === "saving_md" && <p className="text-xs text-muted-foreground mt-1">Saving transcript as markdown…</p>}
               </div>
             ))}
