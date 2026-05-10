@@ -71,7 +71,7 @@ interface Config {
   videoQuality: string;
   videoCodec: string;
   transcription: { model: string; language: string; device: string };
-  processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean };
+  processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean; diarizationEnabled: boolean };
 }
 
 const CODEC_OPTIONS: { value: string; label: string }[] = [
@@ -245,6 +245,21 @@ export default function PipelineStatus() {
   const toggleChannelDiarize = async (id: string, diarize: boolean) => {
     await apiRequest("PATCH", `/api/pipeline/channels/${id}`, { diarize });
     fetchConfig();
+  };
+
+  const toggleGlobalDiarize = async (enabled: boolean) => {
+    if (!config) return;
+    await apiRequest("POST", "/api/pipeline/config", {
+      ...config,
+      processing: { ...config.processing, diarizationEnabled: enabled },
+    });
+    fetchConfig();
+    toast({
+      title: enabled ? "Diarization enabled" : "Diarization disabled",
+      description: enabled
+        ? "Per-channel toggles now control which channels diarize."
+        : "All transcripts will skip speaker identification until re-enabled.",
+    });
   };
 
   const archiveChannel = async (id: string) => {
@@ -484,7 +499,19 @@ export default function PipelineStatus() {
 
       {/* Channels */}
       <Card>
-        <CardHeader><CardTitle>Channels</CardTitle></CardHeader>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle>Channels</CardTitle>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Switch
+                checked={config?.processing?.diarizationEnabled !== false}
+                onCheckedChange={toggleGlobalDiarize}
+                aria-label="Speaker diarization (master switch)"
+              />
+              <span>Speaker diarization</span>
+            </div>
+          </div>
+        </CardHeader>
         <CardContent className="space-y-2">
           {config?.channels.map(ch => {
             const isLocal = ch.url.startsWith("file://");
@@ -520,9 +547,14 @@ export default function PipelineStatus() {
                   <Switch
                     checked={ch.diarize !== false}
                     onCheckedChange={v => toggleChannelDiarize(ch.id, v)}
+                    disabled={config?.processing?.diarizationEnabled === false}
                     aria-label="Diarize transcripts (identify speakers)"
                   />
-                  <span>Identify speakers (turn off for single-speaker content — faster)</span>
+                  <span className={config?.processing?.diarizationEnabled === false ? "opacity-50" : ""}>
+                    {config?.processing?.diarizationEnabled === false
+                      ? "Identify speakers (master switch is off — toggle above)"
+                      : "Identify speakers (turn off for single-speaker content — faster)"}
+                  </span>
                 </div>
                 {archiveMsg[ch.id] && <div className="text-xs text-muted-foreground">{archiveMsg[ch.id]}</div>}
               </div>

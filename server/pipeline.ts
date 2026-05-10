@@ -81,6 +81,11 @@ export interface PipelineConfig {
     waitForLiveToFinish: boolean;
     maxRetries: number;
     retryDelayMinutes: number;
+    /** Master switch for speaker diarization. When false, no diarization
+     *  runs regardless of per-channel settings — saves the GPU time and
+     *  produces transcripts with `speaker: null` everywhere. UI greys out
+     *  per-channel diarize toggles when this is false. */
+    diarizationEnabled: boolean;
   };
 }
 
@@ -406,6 +411,7 @@ export class Pipeline extends EventEmitter {
         keepVideo: true,
         keepAudio: false,
         waitForLiveToFinish: true,
+        diarizationEnabled: true,
         maxRetries: 3,
         retryDelayMinutes: 5,
       },
@@ -442,6 +448,7 @@ export class Pipeline extends EventEmitter {
         keepVideo: parseConfigBoolean(stored["processing.keepVideo"], defaults.processing.keepVideo),
         keepAudio: parseConfigBoolean(stored["processing.keepAudio"], defaults.processing.keepAudio),
         waitForLiveToFinish: parseConfigBoolean(stored["processing.waitForLiveToFinish"], defaults.processing.waitForLiveToFinish),
+        diarizationEnabled: parseConfigBoolean(stored["processing.diarizationEnabled"], defaults.processing.diarizationEnabled),
         maxRetries: parseConfigNumber(stored["processing.maxRetries"], defaults.processing.maxRetries),
         retryDelayMinutes: parseConfigNumber(stored["processing.retryDelayMinutes"], defaults.processing.retryDelayMinutes),
       },
@@ -504,6 +511,7 @@ export class Pipeline extends EventEmitter {
       "processing.keepVideo": config.processing.keepVideo,
       "processing.keepAudio": config.processing.keepAudio,
       "processing.waitForLiveToFinish": config.processing.waitForLiveToFinish,
+      "processing.diarizationEnabled": config.processing.diarizationEnabled,
       "processing.maxRetries": config.processing.maxRetries,
       "processing.retryDelayMinutes": config.processing.retryDelayMinutes,
     });
@@ -843,7 +851,7 @@ export class Pipeline extends EventEmitter {
         computeType: this.config.transcription.computeType,
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
-        diarize: channel.diarize !== false,
+        diarize: this.config.processing.diarizationEnabled !== false && channel.diarize !== false,
       });
 
       job.mdPath = mdPath;
@@ -1217,7 +1225,7 @@ export class Pipeline extends EventEmitter {
         computeType: this.config.transcription.computeType,
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
-        diarize: channel.diarize !== false,
+        diarize: this.config.processing.diarizationEnabled !== false && channel.diarize !== false,
       });
 
       job.mdPath = mdPath;
@@ -1357,7 +1365,7 @@ export class Pipeline extends EventEmitter {
         computeType: this.config.transcription.computeType,
         beamSize: this.config.transcription.beamSize,
         pythonPath: this.config.transcription.pythonVenv,
-        diarize: channel.diarize !== false,
+        diarize: this.config.processing.diarizationEnabled !== false && channel.diarize !== false,
       });
 
       job.mdPath = mdPath;
