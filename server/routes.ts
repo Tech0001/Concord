@@ -18,7 +18,7 @@ import {
   getEmbeddingStats, clearAllEmbeddings, setVideoAiSummary,
   getSpeakersWithStats, getSpeakerById, createSpeaker, updateSpeaker, deleteSpeaker,
   getUnidentifiedAssignments, getSpeakerAppearances, assignVideoSpeakerToGlobal,
-  getVideoSpeakerSummary,
+  getVideoSpeakerSummary, getVideoSpeakerSummariesBatch,
 } from "./db";
 import {
   addClipLink,
@@ -1355,6 +1355,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     (req: Request<{ channelId: string; videoId: string }>, res) => {
       res.json({ speakers: getVideoSpeakerSummary(req.params.videoId, req.params.channelId) });
     });
+
+  // Batched per-video speaker summary for the Library list. POST so the
+  // request body can carry the (potentially long) list of (video_id, channel_id)
+  // pairs without hitting URL length limits.
+  app.post("/api/videos/library/speakers-batch", (req, res) => {
+    try {
+      const items = Array.isArray(req.body?.videos) ? req.body.videos : [];
+      const pairs = items
+        .map((v: any) => ({ video_id: String(v?.videoId || ""), channel_id: String(v?.channelId || "") }))
+        .filter((p: any) => p.video_id && p.channel_id);
+      res.json({ speakers: getVideoSpeakerSummariesBatch(pairs) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
+    }
+  });
 
   // Force-refresh the local transcript search index
   app.post("/api/transcripts/search/reindex", (_req, res) => {

@@ -2348,6 +2348,46 @@ export function getVideoSpeakerSummary(videoId: string, channelId: string): Vide
   `).all(videoId, channelId) as VideoSpeakerSummary[];
 }
 
+/** Batched version of getVideoSpeakerSummary for the Library list view.
+ *  Returns a map keyed by `video_id|channel_id` so the client can do
+ *  one fetch per page-load instead of N per visible row. */
+export function getVideoSpeakerSummariesBatch(
+  pairs: { video_id: string; channel_id: string }[],
+): Record<string, VideoSpeakerSummary[]> {
+  const out: Record<string, VideoSpeakerSummary[]> = {};
+  if (pairs.length === 0) return out;
+
+  // Build (?, ?), (?, ?) ... placeholder list. SQLite has a hard cap of
+  // ~32k bound parameters, so chunk if a caller passes a huge batch.
+  const CHUNK = 200; // per-call row count cap (= 400 params, well under limit)
+  const stmt = (count: number) => getDb().prepare(`
+    SELECT
+      vsa.video_id, vsa.channel_id,
+      s.id AS speaker_id, s.name, s.display_color,
+      vsa.airtime_seconds, vsa.local_speaker
+    FROM video_speaker_assignments vsa
+    JOIN speakers s ON s.id = vsa.speaker_id
+    WHERE (vsa.video_id, vsa.channel_id) IN (${
+      Array.from({ length: count }, () => "(?, ?)").join(", ")
+    })
+    ORDER BY vsa.airtime_seconds DESC
+  `);
+
+  for (let i = 0; i < pairs.length; i += CHUNK) {
+    const slice = pairs.slice(i, i + CHUNK);
+    const params: string[] = [];
+    for (const p of slice) { params.push(p.video_id, p.channel_id); }
+    const rows = stmt(slice.length).all(...params) as Array<VideoSpeakerSummary & { video_id: string; channel_id: string }>;
+    for (const row of rows) {
+      const key = `${row.video_id}|${row.channel_id}`;
+      if (!out[key]) out[key] = [];
+      const { video_id: _v, channel_id: _c, ...rest } = row;
+      out[key].push(rest);
+    }
+  }
+  return out;
+}
+
 /** Manually link (or unlink) a video-local speaker to a global speaker.
  *  When linking, also folds this video's centroid into the speaker's
  *  global centroid as a count-weighted moving average — improves match

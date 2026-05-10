@@ -173,6 +173,10 @@ export default function Library() {
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Per-video speaker badges. Refetched after entries load (one batch
+  // request) and after the drawer closes (in case the user re-labeled
+  // a speaker in the open video).
+  const [speakerBadges, setSpeakerBadges] = useState<Record<string, { speaker_id: string; name: string; display_color: string | null; airtime_seconds: number; local_speaker: string }[]>>({});
   const { toast } = useToast();
 
   const channelNames = useMemo(() => {
@@ -226,6 +230,17 @@ export default function Library() {
       setTotal(queue.total || 0);
       setChannels(config.channels || []);
       setModel(current => current || config.transcription?.model || "large-v3");
+      // Best-effort batched speaker fetch — silently noop if the speakers
+      // tables don't exist yet or the call fails. Doesn't block the page.
+      const visible = (queue.recent || []).map(e => ({ videoId: e.video_id, channelId: e.channel_id }));
+      if (visible.length > 0) {
+        apiRequest("POST", "/api/videos/library/speakers-batch", { videos: visible })
+          .then(r => r.json())
+          .then(data => setSpeakerBadges(data.speakers || {}))
+          .catch(() => setSpeakerBadges({}));
+      } else {
+        setSpeakerBadges({});
+      }
     } catch (error: any) {
       toast({ variant: "destructive", title: "Library load failed", description: error.message });
     } finally {
@@ -420,6 +435,27 @@ export default function Library() {
                       <TableCell className="py-2 min-w-[280px]">
                         <div className="font-medium line-clamp-2">{entry.title}</div>
                         <div className="text-xs text-muted-foreground font-mono mt-1">{entry.video_id}</div>
+                        {(speakerBadges[`${entry.video_id}|${entry.channel_id}`] || []).slice(0, 3).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {speakerBadges[`${entry.video_id}|${entry.channel_id}`].slice(0, 3).map(s => (
+                              <span
+                                key={s.speaker_id}
+                                className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                                style={s.display_color
+                                  ? { background: s.display_color, color: "white" }
+                                  : { background: "var(--secondary, #e5e7eb)" }}
+                                title={`${s.name} • ${Math.round(s.airtime_seconds)}s`}
+                              >
+                                {s.name}
+                              </span>
+                            ))}
+                            {(speakerBadges[`${entry.video_id}|${entry.channel_id}`].length > 3) && (
+                              <span className="text-[10px] text-muted-foreground self-center">
+                                +{speakerBadges[`${entry.video_id}|${entry.channel_id}`].length - 3} more
+                              </span>
+                            )}
+                          </div>
+                        )}
                         {entry.error && <div className="text-xs text-destructive mt-1 line-clamp-2">{entry.error}</div>}
                       </TableCell>
                       <TableCell className="py-2 text-sm">

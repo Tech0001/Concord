@@ -3,13 +3,11 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
-import { Mic, Play, UserPlus, Link2, Trash2, Pencil, X, Check, Users } from "lucide-react";
+import { SpeakerLabelDialog } from "@/components/SpeakerLabelDialog";
+import { Mic, Play, UserPlus, Trash2, Pencil, X, Check, Users } from "lucide-react";
 
 interface Speaker {
   id: string;
@@ -76,12 +74,8 @@ export default function Speakers() {
   const [editName, setEditName] = useState("");
   const [editColor, setEditColor] = useState<string | null>(null);
 
-  // Assignment workflow state
+  // Assignment workflow — uses shared SpeakerLabelDialog component
   const [assignTarget, setAssignTarget] = useState<UnidentifiedAssignment | null>(null);
-  const [assignMode, setAssignMode] = useState<"new" | "merge">("new");
-  const [newName, setNewName] = useState("");
-  const [newColor, setNewColor] = useState<string>(PRESET_COLORS[0]);
-  const [mergeIntoId, setMergeIntoId] = useState<string>("");
 
   // VideoDrawer state for sample playback
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
@@ -165,45 +159,9 @@ export default function Speakers() {
     }
   };
 
-  const openAssign = (assignment: UnidentifiedAssignment) => {
-    setAssignTarget(assignment);
-    setAssignMode(speakers.length > 0 ? "new" : "new");
-    setNewName("");
-    setNewColor(PRESET_COLORS[speakers.length % PRESET_COLORS.length]);
-    setMergeIntoId("");
-  };
-
-  const submitAssign = async () => {
-    if (!assignTarget) return;
-    try {
-      const body: any = {
-        videoId: assignTarget.video_id,
-        channelId: assignTarget.channel_id,
-        localSpeaker: assignTarget.local_speaker,
-      };
-      if (assignMode === "new") {
-        if (!newName.trim()) {
-          toast({ variant: "destructive", title: "Name required" });
-          return;
-        }
-        body.newName = newName.trim();
-        body.displayColor = newColor;
-      } else {
-        if (!mergeIntoId) {
-          toast({ variant: "destructive", title: "Pick a speaker" });
-          return;
-        }
-        body.speakerId = mergeIntoId;
-      }
-      await apiRequest("POST", "/api/speakers/assign", body);
-      setAssignTarget(null);
-      // Invalidate appearance cache for any affected speakers
-      setAppearances({});
-      fetchAll();
-      toast({ title: "Speaker assigned" });
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Assign failed", description: e.message });
-    }
+  const onAssignSaved = () => {
+    setAppearances({});  // invalidate appearance cache for affected speakers
+    fetchAll();
   };
 
   const totalAirtime = useMemo(
@@ -350,7 +308,7 @@ export default function Speakers() {
                 <div className="text-[10px] text-muted-foreground truncate">{u.channel_name}</div>
               </div>
               <Badge variant="outline" className="text-[10px] shrink-0">{fmtAirtime(u.airtime_seconds)}</Badge>
-              <Button size="sm" variant="secondary" className="h-7 text-xs shrink-0" onClick={() => openAssign(u)}>
+              <Button size="sm" variant="secondary" className="h-7 text-xs shrink-0" onClick={() => setAssignTarget(u)}>
                 <UserPlus className="h-3 w-3 mr-1"/>Label
               </Button>
             </div>
@@ -358,62 +316,17 @@ export default function Speakers() {
         </CardContent>
       </Card>
 
-      {/* Inline assign modal */}
       {assignTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm" onClick={() => setAssignTarget(null)}>
-          <Card className="w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
-            <CardHeader>
-              <CardTitle className="text-base">Label voice</CardTitle>
-              <p className="text-xs text-muted-foreground">
-                <span className="font-mono">{assignTarget.local_speaker}</span> in &quot;{assignTarget.video_title}&quot;
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex gap-1 text-xs">
-                <Button size="sm" variant={assignMode === "new" ? "default" : "outline"} onClick={() => setAssignMode("new")} className="flex-1">
-                  <UserPlus className="h-3 w-3 mr-1"/>New speaker
-                </Button>
-                <Button size="sm" variant={assignMode === "merge" ? "default" : "outline"} onClick={() => setAssignMode("merge")} className="flex-1" disabled={speakers.length === 0}>
-                  <Link2 className="h-3 w-3 mr-1"/>Existing speaker
-                </Button>
-              </div>
-              {assignMode === "new" ? (
-                <>
-                  <Input placeholder="Speaker name (e.g. Joe Rogan)" value={newName} onChange={e => setNewName(e.target.value)} autoFocus onKeyDown={e => { if (e.key === "Enter") submitAssign(); }}/>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-muted-foreground">Color:</span>
-                    {PRESET_COLORS.map(c => (
-                      <button
-                        key={c}
-                        type="button"
-                        className={`h-6 w-6 rounded-full border-2 ${newColor === c ? "border-foreground" : "border-transparent"}`}
-                        style={{ background: c }}
-                        onClick={() => setNewColor(c)}
-                        aria-label={`Color ${c}`}
-                      />
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <Select value={mergeIntoId} onValueChange={setMergeIntoId}>
-                  <SelectTrigger><SelectValue placeholder="Pick a known speaker"/></SelectTrigger>
-                  <SelectContent>
-                    {speakers.map(s => (
-                      <SelectItem key={s.id} value={s.id}>
-                        <span className="inline-block h-2 w-2 rounded-full mr-2 align-middle" style={{ background: s.display_color || "transparent" }}/>
-                        {s.name} <span className="text-muted-foreground">({fmtAirtime(s.total_airtime_seconds)})</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-              <div className="flex gap-2 justify-end pt-2">
-                <Button size="sm" variant="ghost" onClick={() => setAssignTarget(null)}>Cancel</Button>
-                <Button size="sm" onClick={submitAssign}>Save</Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <SpeakerLabelDialog
+          open={true}
+          onOpenChange={(o) => { if (!o) setAssignTarget(null); }}
+          localSpeaker={assignTarget.local_speaker}
+          contextLabel={assignTarget.video_title}
+          videoId={assignTarget.video_id}
+          channelId={assignTarget.channel_id}
+          currentSpeakerId={null}
+          onSaved={() => { onAssignSaved(); setAssignTarget(null); }}
+        />
       )}
 
       <VideoDrawer
