@@ -122,21 +122,75 @@ user has gone deep on the alternatives — don't re-debate it):
   via CoreML, ~155× realtime on Apple Silicon. The `macparakeet` app
   (https://github.com/moona3k/macparakeet) is built on it.
 
-Build it once on the Mac:
+**Prerequisite — full Swift 6.0+ toolchain.** FluidAudio doesn't ship a
+Homebrew formula or pre-built binary release; you have to build the CLI
+locally with `swift build`.
+
+**Important gotcha:** `xcode-select --install` alone (Command Line Tools)
+gives you a `swift` compiler binary but ships a stripped-down
+`PackageDescription` library that **can't link a `swift-tools-version: 6.0`
+manifest**. The build fails before compiling any code with linker errors
+about `PackageDescription.Package.__allocating_init(...)`. You need a
+*complete* toolchain.
+
+Two ways to get one:
+
+- **Recommended: standalone Swift toolchain from
+  https://www.swift.org/install/macos/.** ~1 GB Apple-signed `.pkg`, no
+  App Store account, no IDE bloat. Sufficient for the entire build →
+  sign → notarize → DMG pipeline (codesign, notarytool, hdiutil all live
+  in CLT).
+- Full Xcode from the App Store (~15 GB). Needed only if you want the
+  IDE, iOS simulators, or App Store distribution UI. Overkill for this.
+
+Install + verify:
 
 ```bash
-xcode-select --install     # if not already done
+xcode-select --install     # one-time CLT install (gives you codesign etc.)
+# Then download swift.org's latest 6.0+ release .pkg and install it.
+
+export TOOLCHAINS=swift    # add to ~/.zshrc to persist across sessions
+swift --version            # should print 6.0 or newer
+```
+
+Alternative invocation (no env var): `xcrun --toolchain swift swift build`.
+
+Build the CLI:
+
+```bash
 git clone https://github.com/FluidInference/FluidAudio ~/code/FluidAudio
 cd ~/code/FluidAudio
-swift build -c release
+swift build -c release      # ~2 minutes; downloads SPM deps + compiles
 ```
 
-The resulting binary is at `.build/release/fluidaudiocli`. Test it
-manually first:
+Resulting binary is at `~/code/FluidAudio/.build/release/fluidaudiocli`.
+Copy it somewhere on PATH so the pipeline can spawn it without an
+absolute path:
 
 ```bash
-.build/release/fluidaudiocli transcribe /path/to/test.wav
+sudo cp .build/release/fluidaudiocli /usr/local/bin/
+fluidaudiocli --help        # should print usage; no Swift required at runtime
 ```
+
+The compiled binary is self-contained — Swift is only needed at build
+time. For the eventual `.app` distribution to the friend, we'll do this
+build once during release, sign the binary with the user's developer
+cert, and bundle it inside `Concord.app/Contents/Resources/bin/`. The
+friend never installs Swift, never sees a terminal.
+
+**Test fluidaudiocli manually first** before wiring it up:
+
+```bash
+fluidaudiocli transcribe /path/to/short-test.wav
+```
+
+Confirm it:
+- Prints transcribed text to stdout (or a JSON-flagged variant)
+- Downloads the Parakeet model on first run (~600 MB to
+  `~/Library/Application Support/...` — the path will print)
+- Doesn't crash on a 60+ minute file (FluidAudio handles long-form
+  internally via cache-aware streaming, unlike the Linux NeMo path
+  which we had to chunk manually)
 
 **Verify the output schema** — the pipeline expects a JSON file alongside
 the .md transcript with `text`, `segments` (start/end/text), `words`
@@ -173,6 +227,28 @@ Smoke test end-to-end after wiring:
 3. Run Check. Should: queue the file → audio extract → spawn
    fluidaudiocli → produce md + json → mark complete → become searchable
    in Library.
+
+**Fallback option — whisper.cpp** (only if the Swift toolchain install
+turns into a problem the user wants to avoid). It's strictly easier to
+install but slightly lower quality and ~5× slower than FluidAudio:
+
+```bash
+brew install whisper-cpp
+```
+
+Same architecture in Concord — a TS shell wrapper that spawns a CLI
+binary and parses JSON output. Tradeoffs:
+
+- Whisper-large-v3 quality, not Parakeet-v3 — slightly worse English
+  accuracy, much better non-English coverage
+- ~30× realtime instead of ~155× (still fine for an archive tool)
+- Single brew install; no Swift, no Python, no venv
+
+If the user pivots to whisper.cpp, write
+`server/transcribe-whisper-cpp.ts` instead of (or in addition to) the
+FluidAudio wrapper, and route models named `whisper-cpp-*` to it. Keep
+both paths if you implement both — the user can pick per-channel via
+the existing Settings model dropdown.
 
 ### Step 3 — Move SQLite to user-data dir (small, prep for Electron)
 
@@ -349,8 +425,8 @@ Electron later.
 - App is called **Concord** (just renamed from "YouTube Ripper"). Top bar
   shows `C` mark + "Concord". package.json `name` is `concord`. localStorage
   keys are `concord-*` with legacy `yt-ripper-*` fallbacks for migration.
-- The repo folder may still be `YouTube_Ripper` — rename to `Concord` is
-  optional polish.
+- The repo folder is `Concord` (renamed from `YouTube_Ripper`). All
+  internal references have been swept.
 - Folder-as-channel is implemented via `file://` URLs in the channels
   table. Don't introduce a separate "kind" column or a separate table for
   local sources — it's the same row, branched at scan time.
