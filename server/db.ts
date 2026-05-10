@@ -383,6 +383,46 @@ export function setConfigValues(values: Record<string, string | number | boolean
   tx();
 }
 
+// ---- Daily download counter ----
+//
+// Stored as two app_config rows: `dailyDownload.date` (YYYY-MM-DD local
+// timezone) and `dailyDownload.count` (stringified integer). If the
+// stored date isn't today's local date, the count is stale and reads
+// as 0 — equivalent to a midnight reset, no scheduler needed.
+
+function todayLocalDateString(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+export function getTodayDownloadCount(): number {
+  const cfg = getConfigValues();
+  if (cfg["dailyDownload.date"] !== todayLocalDateString()) return 0;
+  const n = parseInt(cfg["dailyDownload.count"] || "0", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+export function incrementTodayDownloadCount(): number {
+  const next = getTodayDownloadCount() + 1;
+  setConfigValues({
+    "dailyDownload.date": todayLocalDateString(),
+    "dailyDownload.count": String(next),
+  });
+  return next;
+}
+
+export function resetTodayDownloadCount(): void {
+  setConfigValues({
+    "dailyDownload.date": todayLocalDateString(),
+    "dailyDownload.count": "0",
+  });
+}
+
+// ---- Channels ----
+
 type ChannelRow = { id: string; name: string; url: string; enabled: number; diarize: number };
 
 function rowToChannel(row: ChannelRow): StoredChannel {

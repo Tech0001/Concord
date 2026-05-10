@@ -33,6 +33,8 @@ import {
   getDb,
   videoExists,
   closeDb,
+  getTodayDownloadCount,
+  incrementTodayDownloadCount,
   QueueEntry,
 } from "./db";
 import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
@@ -67,6 +69,10 @@ export interface PipelineConfig {
    *  hits at the cost of slower downloads. Fast trades safety for speed
    *  (use when you have cookies set and a small queue). */
   youtubeSpeedPreset: "fast" | "balanced" | "conservative";
+  /** Soft daily cap on YouTube downloads. Once today's count reaches the
+   *  cap the pipeline stops pulling new YouTube videos; resets at local
+   *  midnight. Local-folder channels don't count. 0 disables the cap. */
+  dailyDownloadCap: number;
   transcription: {
     model: string;
     language: string;
@@ -123,6 +129,23 @@ export interface PipelineState {
   pendingCount: number;
   jobs: PipelineJob[];
   monitoredChannels: ChannelConfig[];
+  /** Today's YouTube download count (resets at local midnight). */
+  dailyDownloadCount: number;
+  /** Configured cap. 0 = no cap. */
+  dailyDownloadCap: number;
+}
+
+/**
+ * Thrown when the daily download cap has been reached. The error
+ * propagates up through processVideo's catch block — the job is reset
+ * to pending (so it'll retry tomorrow when getTodayDownloadCount rolls
+ * over) rather than marked failed.
+ */
+export class DailyCapReachedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DailyCapReachedError";
+  }
 }
 
 function isNonRetryableTranscriptionError(message: string): boolean {
@@ -329,6 +352,7 @@ export class Pipeline extends EventEmitter {
       videoCodec: "any",
       youtubeCookiesFromBrowser: "",
       youtubeSpeedPreset: "conservative",
+      dailyDownloadCap: 200,
       transcription: {
         model: "large-v3",
         language: "en",
@@ -367,6 +391,7 @@ export class Pipeline extends EventEmitter {
       videoCodec: stored.videoCodec || defaults.videoCodec,
       youtubeCookiesFromBrowser: stored.youtubeCookiesFromBrowser || defaults.youtubeCookiesFromBrowser,
       youtubeSpeedPreset: parseSpeedPreset(stored.youtubeSpeedPreset, defaults.youtubeSpeedPreset),
+      dailyDownloadCap: parseConfigNumber(stored.dailyDownloadCap, defaults.dailyDownloadCap),
       transcription: {
         model: stored["transcription.model"] || defaults.transcription.model,
         language: stored["transcription.language"] || defaults.transcription.language,
@@ -406,6 +431,8 @@ export class Pipeline extends EventEmitter {
       pendingCount: counts.pending || 0,
       jobs: [...this.jobs],
       monitoredChannels: this.config.channels,
+      dailyDownloadCount: getTodayDownloadCount(),
+      dailyDownloadCap: this.config.dailyDownloadCap,
     };
   }
 
@@ -436,6 +463,7 @@ export class Pipeline extends EventEmitter {
       videoCodec: config.videoCodec,
       youtubeCookiesFromBrowser: config.youtubeCookiesFromBrowser,
       youtubeSpeedPreset: config.youtubeSpeedPreset,
+      dailyDownloadCap: config.dailyDownloadCap,
       "transcription.model": config.transcription.model,
       "transcription.language": config.transcription.language,
       "transcription.device": config.transcription.device,
@@ -734,10 +762,24 @@ export class Pipeline extends EventEmitter {
         job.progress = 40;
         this.emit("jobUpdated", job);
       } else {
+        // Soft daily cap on YouTube downloads. Resets at local midnight
+        // (date comparison, no scheduler). 0 disables the cap. Local-
+        // folder channels don't count (only YouTube videos hit this).
+        const cap = this.config.dailyDownloadCap;
+        if (cap > 0) {
+          const today = getTodayDownloadCount();
+          if (today >= cap) {
+            throw new DailyCapReachedError(
+              `Daily download cap reached (${today}/${cap}). Resets at midnight.`,
+            );
+          }
+        }
+
         await this.downloadVideo(video.id, workVideoPath, (pct) => {
           job.progress = Math.floor(pct * 0.4);
           this.emit("jobUpdated", job);
         });
+        incrementTodayDownloadCount();
 
         job.videoPath = workVideoPath;
         job.progress = 40;
@@ -860,6 +902,22 @@ export class Pipeline extends EventEmitter {
 
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
+
+      // Daily cap is a *deferral*, not a failure — reset to pending and
+      // don't bump retries (this isn't the video's fault, and we want it
+      // to try first thing tomorrow when the date rolls over). Also stop
+      // the pipeline loop entirely — pulling the next video would just
+      // re-hit the cap immediately.
+      if (error instanceof DailyCapReachedError) {
+        console.log(`[pipeline] ⏸  ${video.title} — ${errMsg}`);
+        updateQueueStatus(video.id, channel.id, { status: "pending" });
+        job.status = "pending";
+        job.error = errMsg;
+        this.emit("jobUpdated", job);
+        this.status = "sleeping";
+        return;
+      }
+
       console.error(`[pipeline] ❌ ${video.title} — ${errMsg}`);
 
       const retries = queueEntry.retries + 1;

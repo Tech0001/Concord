@@ -58,6 +58,8 @@ interface PipelineState {
   pendingCount: number;
   jobs: Job[];
   monitoredChannels: Channel[];
+  dailyDownloadCount?: number;
+  dailyDownloadCap?: number;
 }
 
 interface Config {
@@ -72,6 +74,7 @@ interface Config {
   videoCodec: string;
   youtubeCookiesFromBrowser: string;
   youtubeSpeedPreset: "fast" | "balanced" | "conservative";
+  dailyDownloadCap: number;
   transcription: { model: string; language: string; device: string };
   processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean };
 }
@@ -141,6 +144,7 @@ export default function PipelineStatus() {
   const [videoCodec, setVideoCodec] = useState("any");
   const [youtubeCookies, setYoutubeCookies] = useState("");
   const [youtubeSpeed, setYoutubeSpeed] = useState<"fast" | "balanced" | "conservative">("conservative");
+  const [dailyCap, setDailyCap] = useState(200);
   const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
 
   // Download state (same pattern as main page)
@@ -205,6 +209,7 @@ export default function PipelineStatus() {
       setVideoCodec(c.videoCodec || "any");
       setYoutubeCookies(c.youtubeCookiesFromBrowser || "");
       setYoutubeSpeed(c.youtubeSpeedPreset || "conservative");
+      setDailyCap(typeof c.dailyDownloadCap === "number" ? c.dailyDownloadCap : 200);
       setTranscriptionModel(c.transcription?.model || "large-v3");
     } catch {}
   };
@@ -318,6 +323,7 @@ export default function PipelineStatus() {
       videoCodec,
       youtubeCookiesFromBrowser: youtubeCookies,
       youtubeSpeedPreset: youtubeSpeed,
+      dailyDownloadCap: dailyCap,
       transcription: {
         ...config.transcription,
         model: transcriptionModel,
@@ -368,6 +374,15 @@ export default function PipelineStatus() {
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>{state?.totalCompleted || 0} done</span>
             <span>{state?.pendingCount || 0} pending</span>
+            {state?.dailyDownloadCap !== undefined && state.dailyDownloadCap > 0 && (
+              <span className={
+                (state.dailyDownloadCount ?? 0) >= state.dailyDownloadCap
+                  ? "font-medium text-amber-600 dark:text-amber-400"
+                  : ""
+              }>
+                {state.dailyDownloadCount ?? 0} / {state.dailyDownloadCap} today
+              </span>
+            )}
             {state?.lastCheck && <span>Last check: {new Date(state.lastCheck).toLocaleTimeString()}</span>}
           </div>
         </CardHeader>
@@ -457,6 +472,18 @@ export default function PipelineStatus() {
                 </Select>
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <label className="text-muted-foreground" htmlFor="dailyCap">Daily cap</label>
+                <Input
+                  id="dailyCap"
+                  type="number"
+                  min={0}
+                  value={dailyCap}
+                  onChange={e => setDailyCap(Number(e.target.value) || 0)}
+                  className="h-8 font-mono"
+                  placeholder="200 (0 = disabled)"
+                />
+              </div>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <label className="text-muted-foreground">Download speed</label>
                 <Select value={youtubeSpeed} onValueChange={v => setYoutubeSpeed(v as "fast" | "balanced" | "conservative")}>
                   <SelectTrigger className="h-8">
@@ -515,6 +542,8 @@ export default function PipelineStatus() {
               <code className="font-mono text-foreground">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code>
               <span className="text-muted-foreground">Video codec</span>
               <code className="font-mono text-foreground">{codecLabel(config?.videoCodec || "any")}</code>
+              <span className="text-muted-foreground">Daily cap</span>
+              <code className="font-mono text-foreground">{config?.dailyDownloadCap ?? 200}{config?.dailyDownloadCap === 0 ? " (disabled)" : ""}</code>
               <span className="text-muted-foreground">Download speed</span>
               <code className="font-mono text-foreground">{config?.youtubeSpeedPreset || "conservative"}</code>
               <span className="text-muted-foreground">YouTube cookies</span>
