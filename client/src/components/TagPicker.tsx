@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { Plus, Tag, X } from "lucide-react";
+import { Loader2, Plus, Sparkles, Tag, X } from "lucide-react";
 
 interface TagOption {
   tag: string;
@@ -28,6 +28,10 @@ interface TagPickerProps {
   size?: "sm" | "default";
   /** Called once when the picker opens. Use to refresh tag options lazily. */
   onOpen?: () => void;
+  /** When set, the picker fetches AI-suggested tags from the chat model
+   *  on open and shows them in a "Suggested" group above existing tags.
+   *  No fetch / no group when omitted. */
+  quote?: string;
 }
 
 function normalize(tag: string): string {
@@ -49,9 +53,16 @@ export function TagPicker({
   className,
   size = "default",
   onOpen,
+  quote,
 }: TagPickerProps) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
+  const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  // Cache the last quote we fetched for so opening/closing doesn't re-hit
+  // the LLM unless the clip text actually changes.
+  const lastFetchedQuoteRef = useRef<string | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
@@ -59,6 +70,51 @@ export function TagPicker({
   useEffect(() => {
     if (open) onOpenRef.current?.();
   }, [open]);
+
+  // Fetch AI suggestions when the picker opens (and quote is non-empty,
+  // and we haven't already fetched for this exact quote). Best-effort:
+  // any error is swallowed to a small inline note, never blocks the UI.
+  useEffect(() => {
+    if (!open || !quote || quote.trim().length === 0) return;
+    const trimmed = quote.trim();
+    if (lastFetchedQuoteRef.current === trimmed) return;
+    lastFetchedQuoteRef.current = trimmed;
+    let cancelled = false;
+    setSuggestLoading(true);
+    setSuggestError(null);
+    setSuggestedTags([]);
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 30_000);
+    fetch("/api/clips/suggest-tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ quote: trimmed }),
+      signal: ctl.signal,
+    })
+      .then(async (r) => {
+        if (cancelled) return;
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          if (data.error === "no_chat_model") {
+            setSuggestError("Configure a chat model on the AI page to get suggestions.");
+          } else {
+            setSuggestError(data.message || data.error || `HTTP ${r.status}`);
+          }
+          return;
+        }
+        const data = await r.json();
+        setSuggestedTags(Array.isArray(data.suggestions) ? data.suggestions : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setSuggestError(err.name === "AbortError" ? "Suggestion request timed out" : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setSuggestLoading(false);
+        clearTimeout(timer);
+      });
+    return () => { cancelled = true; ctl.abort(); clearTimeout(timer); };
+  }, [open, quote]);
 
   const selected = useMemo(() => new Set(value.map(normalize)), [value]);
   const inputN = normalize(input);
@@ -68,6 +124,17 @@ export function TagPicker({
       .filter(option => !selected.has(option.tag))
       .filter(option => !inputN || option.tag.includes(inputN));
   }, [options, selected, inputN]);
+
+  // AI suggestions, filtered against already-selected and against current
+  // input. Tags that are already in the existing options list still appear
+  // here (with a slightly different visual cue) since the model
+  // explicitly recommended them — that's signal worth preserving.
+  const aiSuggestions = useMemo(() => {
+    return suggestedTags
+      .map(normalize)
+      .filter((tag) => !selected.has(tag))
+      .filter((tag) => !inputN || tag.includes(inputN));
+  }, [suggestedTags, selected, inputN]);
 
   const showCreate =
     inputN.length > 0 &&
@@ -132,6 +199,37 @@ export function TagPicker({
             />
             <CommandList>
               <CommandEmpty>No matching tags.</CommandEmpty>
+              {quote && (suggestLoading || suggestError || aiSuggestions.length > 0) && (
+                <CommandGroup heading="Suggested by AI">
+                  {suggestLoading && (
+                    <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Asking the chat model…
+                    </div>
+                  )}
+                  {!suggestLoading && suggestError && (
+                    <div className="px-2 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+                      {suggestError}
+                    </div>
+                  )}
+                  {!suggestLoading && aiSuggestions.map((tag) => {
+                    const known = options.find((o) => o.tag === tag);
+                    return (
+                      <CommandItem
+                        key={`ai:${tag}`}
+                        value={`ai:${tag}`}
+                        onSelect={() => addTag(tag)}
+                      >
+                        <Sparkles className="h-3 w-3 text-foreground" />
+                        <span className="flex-1 truncate">{tag}</span>
+                        {known && (
+                          <span className="text-xs tabular-nums text-muted-foreground">{known.count}</span>
+                        )}
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              )}
               {showCreate && (
                 <CommandGroup heading="New">
                   <CommandItem value={`__create__${inputN}`} onSelect={() => addTag(input)}>

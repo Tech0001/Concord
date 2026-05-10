@@ -109,10 +109,12 @@ function LlmStatusDot() {
   useEffect(() => {
     let cancelled = false;
     const probe = async () => {
-      // Abort after 3s so a dead server doesn't accumulate hung fetches
-      // (each call would otherwise wait on TCP timeout — minutes).
+      // Abort after 8s. oMLX serializes requests; during a long chat
+      // call the /v1/models probe can queue for several seconds before
+      // responding. 8s avoids false-negative "unreachable" flicker
+      // while still surfacing real failures within one poll cycle.
       const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 3000);
+      const timer = setTimeout(() => ctl.abort(), 8000);
       try {
         const r = await fetch("/api/llm/status", { signal: ctl.signal });
         if (!cancelled && r.ok) setStatus(await r.json());

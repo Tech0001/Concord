@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/sheet";
 import { TagChip, TagPicker } from "@/components/TagPicker";
 import { apiRequest } from "@/lib/queryClient";
-import { BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, Download, FileText, Loader2, Play, Radio, Scissors, Search, X } from "lucide-react";
+import { Bookmark, BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, Download, FileText, Loader2, Play, Radio, RefreshCw, Scissors, Search, Sparkles, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 export interface VideoDrawerEntry {
@@ -148,6 +148,9 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
   const [sameVideoClips, setSameVideoClips] = useState<RelatedClip[]>([]);
   const [loadingRelated, setLoadingRelated] = useState(false);
   const [notes, setNotes] = useState("");
+  const [aiSummary, setAiSummary] = useState("");
+  const [aiSummaryModel, setAiSummaryModel] = useState<string | null>(null);
+  const [regeneratingSummary, setRegeneratingSummary] = useState(false);
   const [notesStatus, setNotesStatus] = useState<"idle" | "saving" | "saved">("idle");
   const notesTimerRef = useRef<number | null>(null);
   const [videoDuration, setVideoDuration] = useState(0);
@@ -204,10 +207,14 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
         const data = await response.json() as {
           segments?: TranscriptSegment[];
           notes?: string;
+          aiSummary?: string;
+          aiSummaryModel?: string | null;
           video?: VideoStreamInfo | null;
         };
         setSegments(data.segments || []);
         setNotes(data.notes || "");
+        setAiSummary(data.aiSummary || "");
+        setAiSummaryModel(data.aiSummaryModel ?? null);
         setNotesStatus("idle");
         setVideoInfo(data.video ?? null);
       } catch (error: any) {
@@ -314,6 +321,19 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
       if (range.end > segment.start) return true;
     }
     return false;
+  };
+
+  // Return every saved clip whose [start, end] overlaps this segment.
+  // Used to render inline tag pills + note for clipped transcript segments
+  // so the user can see what they tagged at a glance.
+  const clipsForSegment = (segment: TranscriptSegment): RelatedClip[] => {
+    const matches: RelatedClip[] = [];
+    for (const clip of sameVideoClips) {
+      if (clip.start_seconds >= segment.end) continue;
+      if (clip.end_seconds <= segment.start) continue;
+      matches.push(clip);
+    }
+    return matches;
   };
 
   const closestSegmentIndex = useMemo(() => {
@@ -710,9 +730,40 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                 )}
               </div>
 
+              <AiSummarySection
+                summary={aiSummary}
+                model={aiSummaryModel}
+                regenerating={regeneratingSummary}
+                onRegenerate={async () => {
+                  if (!video) return;
+                  setRegeneratingSummary(true);
+                  try {
+                    const r = await apiRequest(
+                      "POST",
+                      `/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/ai-summary/regenerate`,
+                    );
+                    const data = await r.json();
+                    if (data.success) {
+                      // Refetch the transcript meta to pick up the new summary.
+                      const refetch = await apiRequest(
+                        "GET",
+                        `/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/transcript?t=${Date.now()}`,
+                      );
+                      const refreshed = await refetch.json();
+                      setAiSummary(refreshed.aiSummary || "");
+                      setAiSummaryModel(refreshed.aiSummaryModel ?? null);
+                    }
+                  } catch (err: any) {
+                    setAiSummary((prev) => prev || `(regenerate failed: ${err.message})`);
+                  } finally {
+                    setRegeneratingSummary(false);
+                  }
+                }}
+              />
+
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label htmlFor="video-notes" className="text-sm font-medium">Notes</label>
+                  <label htmlFor="video-notes" className="text-sm font-medium">Your notes</label>
                   {notesStatus !== "idle" && (
                     <span className="text-[11px] text-muted-foreground">
                       {notesStatus === "saving" ? "Saving…" : "Saved"}
@@ -803,6 +854,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                         size="sm"
                         placeholder="Add tags..."
                         onOpen={loadTagOptions}
+                        quote={rangeBounds ? segments.slice(rangeBounds.start, rangeBounds.end + 1).map(s => s.text).join(" ") : ""}
                       />
                     </div>
                   )}
@@ -815,12 +867,19 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                     const searchMatch = transcriptMatches.includes(index);
                     const selected = !!rangeBounds && index >= rangeBounds.start && index <= rangeBounds.end;
                     const takingNote = clipSegmentIndex === index;
-                    const clipped = isSegmentClipped(segment);
+                    const segmentClips = clipsForSegment(segment);
+                    const clipped = segmentClips.length > 0;
+                    // Aggregate tags across all overlapping clips, dedup'd.
+                    const allTags = Array.from(new Set(segmentClips.flatMap(c => c.tags || [])));
+                    // First non-empty note. Multiple-clip overlap is rare; if it
+                    // happens we'll just surface the first one rather than try to
+                    // render two arbitrarily.
+                    const firstNote = segmentClips.map(c => c.note).find(n => n && n.trim()) || null;
                     return (
                       <div
                         key={`${segment.start}:${index}`}
                         className={`border-b px-3 py-2 text-sm last:border-b-0 ${
-                          clipped ? "border-l-2 border-l-primary/60" : ""
+                          clipped ? "border-l-4 border-l-primary bg-primary/5" : ""
                         } ${
                           selected ? "bg-primary/15" : highlighted ? "bg-primary/10" : active ? "bg-accent" : ""
                         }`}
@@ -841,9 +900,32 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                             )}
                             {highlighted && <Badge variant="secondary" className="h-5">match</Badge>}
                             {searchMatch && <Badge variant="outline" className="h-5">search</Badge>}
-                            {clipped && <Badge variant="outline" className="h-5">clipped</Badge>}
+                            {clipped && (
+                              <Badge variant="default" className="h-5 gap-1">
+                                <Bookmark className="h-3 w-3" />
+                                Clipped
+                              </Badge>
+                            )}
                           </span>
                           <span className="leading-6">{segment.text}</span>
+                          {clipped && (allTags.length > 0 || firstNote) && (
+                            <div className="mt-2 space-y-1.5">
+                              {allTags.length > 0 && (
+                                <div className="flex flex-wrap gap-1">
+                                  {allTags.map(tag => (
+                                    <Badge key={tag} variant="secondary" className="h-5 font-mono text-[10px]">
+                                      {tag}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+                              {firstNote && (
+                                <div className="rounded border border-primary/20 bg-background/50 px-2 py-1 text-xs italic text-foreground">
+                                  {firstNote}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </button>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <Button
@@ -910,6 +992,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                             placeholder="Add tags..."
                             onOpen={loadTagOptions}
                             className="mt-2"
+                            quote={segment.text}
                           />
                         )}
                       </div>
@@ -1045,6 +1128,62 @@ interface RelatedClipSectionProps {
   emptyMessage: string;
   showOverlap?: boolean;
   onSelect: (clip: RelatedClip) => void;
+}
+
+/**
+ * AI-generated 2-3 sentence summary of the transcript. Lives in its own
+ * `ai_summary` column, completely separate from user-authored `notes`.
+ * Empty state nudges the user to either configure a chat model on the
+ * AI page or run the bulk reindex; populated state shows the summary
+ * with the model that wrote it and a regenerate button.
+ */
+function AiSummarySection({
+  summary,
+  model,
+  regenerating,
+  onRegenerate,
+}: {
+  summary: string;
+  model: string | null;
+  regenerating: boolean;
+  onRegenerate: () => void;
+}) {
+  return (
+    <div className="space-y-1.5 rounded-md border border-primary/30 bg-primary/5 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-sm font-medium">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
+          AI summary
+        </div>
+        <button
+          type="button"
+          onClick={onRegenerate}
+          disabled={regenerating}
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          title={summary ? "Regenerate with current chat model" : "Generate with current chat model"}
+        >
+          {regenerating
+            ? <Loader2 className="h-3 w-3 animate-spin" />
+            : <RefreshCw className="h-3 w-3" />}
+          {summary ? "Regenerate" : "Generate"}
+        </button>
+      </div>
+      {summary ? (
+        <>
+          <p className="text-sm leading-6 text-foreground">{summary}</p>
+          {model && (
+            <div className="text-[10px] text-muted-foreground font-mono">
+              {model}
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-xs italic text-muted-foreground">
+          No AI summary yet. Click Generate, or run the backfill on the AI page to do all transcripts at once.
+        </p>
+      )}
+    </div>
+  );
 }
 
 function RelatedClipSection({

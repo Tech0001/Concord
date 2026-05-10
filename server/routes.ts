@@ -12,7 +12,9 @@ import {
 } from "./llm";
 import { searchSemantic } from "./semantic-search";
 import { embedSegmentsForVideo } from "./embed-segments";
-import { getEmbeddingStats, clearAllEmbeddings } from "./db";
+import { summarizeVideo } from "./summarize-video";
+import { chat as llmChat } from "./llm";
+import { getEmbeddingStats, clearAllEmbeddings, setVideoAiSummary } from "./db";
 import {
   addClipLink,
   countByStatus,
@@ -875,6 +877,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.end();
   });
 
+  // Regenerate the AI summary for a single video. Used by the per-video
+  // "Regenerate" button in the transcript drawer. Synchronous (no SSE)
+  // since it's one chat call — the UI can show a spinner.
+  app.post("/api/videos/library/:channelId/:videoId/ai-summary/regenerate", async (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
+    try {
+      const cfg = pipeline.getConfig().llm;
+      const model = cfg.chatModel;
+      if (!model) return res.status(400).json({ error: "No chat model configured (set on AI page first)" });
+
+      // Clear so summarizeVideo's "already populated by this model" guard
+      // doesn't short-circuit the regen.
+      setVideoAiSummary(req.params.videoId, req.params.channelId, null, null);
+
+      const result = await summarizeVideo(req.params.videoId, req.params.channelId, model);
+      if (result.skipped) return res.status(400).json({ error: result.skipped, model: result.model });
+      res.json({
+        success: true,
+        model: result.model,
+        charsIn: result.charsIn,
+        charsOut: result.charsOut,
+      });
+    } catch (err) {
+      if (err instanceof LlmConfigError) return res.status(400).json({ error: err.message });
+      if (err instanceof LlmUnreachableError) return res.status(503).json({ error: err.message });
+      res.status(500).json({ error: err instanceof Error ? err.message : "Unknown" });
+    }
+  });
+
+  // Bulk-generate AI summaries for every transcribed video. SSE-streamed
+  // since iterating + calling chat() per video is slow (multi-second per
+  // call). By default, skips videos whose notes are already populated;
+  // pass `overwrite: true` to regenerate everything (uses are: model
+  // changed, prompt tweaked).
+  app.post("/api/llm/summaries/regenerate", async (req, res) => {
+    const cfg = pipeline.getConfig().llm;
+    const model = (req.body?.model as string | undefined) || cfg.chatModel;
+    if (!model) {
+      return res.status(400).json({ error: "No chat model configured (set on AI page first)" });
+    }
+
+    const overwrite = req.body?.overwrite === true;
+    const videos = getQueueList({ status: "complete", limit: 100000 }).rows;
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const sse = (event: string, data: unknown) => {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    sse("start", { total: videos.length, model, overwrite });
+
+    let done = 0;
+    let written = 0;
+    let skipped = 0;
+    for (const v of videos) {
+      try {
+        if (overwrite) {
+          // Clear so summarizeVideo doesn't short-circuit on the
+          // "already populated by this model" idempotency guard.
+          setVideoAiSummary(v.video_id, v.channel_id, null, null);
+        }
+        const r = await summarizeVideo(v.video_id, v.channel_id, model);
+        if (r.skipped) skipped++;
+        else written++;
+        sse("video", { ...r, done: ++done, total: videos.length });
+      } catch (err) {
+        sse("video", {
+          videoId: v.video_id, channelId: v.channel_id, model,
+          charsIn: 0, charsOut: 0,
+          error: err instanceof Error ? err.message : String(err),
+          done: ++done, total: videos.length,
+        });
+      }
+    }
+
+    sse("done", { total: videos.length, written, skipped, model });
+    res.end();
+  });
+
   // Semantic search — embeds the query, cosines vs all stored vectors.
   app.post("/api/transcripts/search-semantic", async (req, res) => {
     try {
@@ -1206,6 +1290,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         channelId: entry.channel_id,
         segments: getTranscriptSegmentsForVideo(entry.video_id, entry.channel_id),
         notes: entry.notes ?? "",
+        aiSummary: entry.ai_summary ?? "",
+        aiSummaryModel: entry.ai_summary_model ?? null,
         video,
       });
     } catch (error) {
@@ -1412,6 +1498,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ tags: listAllClipTags() });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed to list tags" });
+    }
+  });
+
+  // AI tag suggestions for a clip quote. Best-effort — the TagPicker shows
+  // a "Suggested" row when this returns; if anything goes wrong it just
+  // doesn't show, no error toast (the user can still type tags by hand).
+  app.post("/api/clips/suggest-tags", async (req, res) => {
+    const quote = String(req.body?.quote || "").trim();
+    if (!quote) return res.status(400).json({ error: "quote required" });
+
+    const cfg = pipeline.getConfig().llm;
+    const model = cfg.chatModel;
+    if (!model) return res.status(400).json({ error: "no_chat_model", message: "No chat model configured" });
+
+    // Cap the existing-tag list and the quote so we don't blow context on
+    // big libraries / very long clips.
+    const allTags = listAllClipTags();
+    const existing = allTags.slice(0, 200);
+    const existingList = existing.length
+      ? existing.map((t) => `${t.tag} (${t.count})`).join("\n")
+      : "(no tags exist yet — propose 3-5 reasonable starter tags)";
+    const cappedQuote = quote.length > 2000 ? quote.slice(0, 2000) + "…" : quote;
+
+    const systemPrompt = [
+      "You suggest 3-5 short tags for a transcript clip in a personal research archive.",
+      "Tags use lowercase with hyphens for spaces (e.g. \"oil\", \"middle-east\", \"fed-rate\").",
+      "Hierarchical tags use dots (e.g. \"religion.end-times.rapture\").",
+      "STRONGLY prefer tags from the EXISTING list. Propose new tags only when none of the existing ones fit.",
+      "Output ONLY a JSON array of strings — no prose, no markdown, no explanation.",
+      "Example output: [\"oil\", \"commodities\", \"middle-east\"]",
+    ].join(" ");
+
+    const userPrompt = `EXISTING TAGS:\n${existingList}\n\nCLIP:\n"${cappedQuote}"`;
+
+    try {
+      const reply = await llmChat({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.3,
+        maxTokens: 120,
+      });
+
+      // Parse the first JSON array we find. Models sometimes wrap output in
+      // prose despite our instructions; the regex is forgiving.
+      const match = reply.match(/\[[\s\S]*?\]/);
+      let suggestions: string[] = [];
+      if (match) {
+        try {
+          const parsed = JSON.parse(match[0]);
+          if (Array.isArray(parsed)) {
+            suggestions = parsed
+              .filter((s) => typeof s === "string")
+              .map((s) => String(s).trim().toLowerCase().replace(/\s+/g, "-"))
+              .filter(Boolean);
+          }
+        } catch { /* fall through to empty */ }
+      }
+      // Dedupe and cap.
+      suggestions = Array.from(new Set(suggestions)).slice(0, 8);
+
+      res.json({ suggestions, model });
+    } catch (err) {
+      if (err instanceof LlmConfigError) return res.status(400).json({ error: err.message });
+      if (err instanceof LlmUnreachableError) return res.status(503).json({ error: err.message });
+      if (err instanceof LlmHttpError) return res.status(err.status).json({ error: err.message });
+      res.status(500).json({ error: err instanceof Error ? err.message : "Unknown" });
     }
   });
 

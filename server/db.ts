@@ -181,6 +181,12 @@ export interface QueueEntry {
   error: string | null;
   retries: number;
   notes: string | null;
+  /** Auto-generated 2-3 sentence summary. Distinct from `notes` so the
+   *  user's own observations and the AI's derived summary never overwrite
+   *  each other. Regenerable from any chat model — the model id is
+   *  recorded alongside so the UI can flag stale summaries. */
+  ai_summary: string | null;
+  ai_summary_model: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -226,6 +232,8 @@ function runMigrations(database: Database.Database) {
     }
   };
   ensureColumn("video_queue", "notes", "TEXT");
+  ensureColumn("video_queue", "ai_summary", "TEXT");
+  ensureColumn("video_queue", "ai_summary_model", "TEXT");
   ensureColumn("channels", "diarize", "INTEGER NOT NULL DEFAULT 1");
 
   // Renamed link kind: same_scripture → same_topic. Migrate any existing rows.
@@ -1336,6 +1344,22 @@ export function setVideoNotes(videoId: string, channelId: string, notes: string 
     SET notes = ?, updated_at = datetime('now')
     WHERE video_id = ? AND channel_id = ?
   `).run(trimmed, videoId, channelId);
+}
+
+// ---- Per-video AI summary (distinct from notes) ----
+
+export function setVideoAiSummary(
+  videoId: string,
+  channelId: string,
+  summary: string | null,
+  model: string | null,
+): void {
+  const trimmed = summary?.trim() ? summary.trim() : null;
+  getDb().prepare(`
+    UPDATE video_queue
+    SET ai_summary = ?, ai_summary_model = ?, updated_at = datetime('now')
+    WHERE video_id = ? AND channel_id = ?
+  `).run(trimmed, trimmed ? model : null, videoId, channelId);
 }
 
 // ---- Clip links (manual, typed) ----

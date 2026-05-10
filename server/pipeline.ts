@@ -15,6 +15,7 @@ import { getYouTubeVideoInfo } from "./youtube-dl";
 import { extractAudio, copyAudioTrack } from "./audio";
 import { transcribeAudio, TranscriptionResult } from "./transcribe";
 import { embedSegmentsForVideo } from "./embed-segments";
+import { summarizeVideo } from "./summarize-video";
 import {
   enqueueVideo,
   enqueueVideos,
@@ -269,6 +270,21 @@ export class Pipeline extends EventEmitter {
         else console.log(`[embed] ${videoId}: indexed ${r.segmentCount} segments (${model})`);
       })
       .catch((err) => console.error(`[embed] ${videoId} failed:`, err));
+  }
+
+  /** Fire-and-forget AI summary into the video's notes field. Same
+   *  best-effort envelope as embedding — the transcribe pipeline never
+   *  waits on or fails because of summarization. Skips when notes are
+   *  already populated (user-authored content takes priority). */
+  private maybeSummarizeVideo(videoId: string, channelId: string): void {
+    const model = this.config.llm.chatModel;
+    if (!model) return;
+    summarizeVideo(videoId, channelId, model)
+      .then((r) => {
+        if (r.skipped) console.log(`[summarize] ${videoId}: ${r.skipped}`);
+        else console.log(`[summarize] ${videoId}: ${r.charsIn} → ${r.charsOut} chars (${model})`);
+      })
+      .catch((err) => console.error(`[summarize] ${videoId} failed:`, err));
   }
 
   private recoverStuckJobs(): void {
@@ -813,6 +829,7 @@ export class Pipeline extends EventEmitter {
       job.progress = 100;
       job.completedAt = new Date().toISOString();
       this.maybeEmbedSegments(video.id, channel.id);
+      this.maybeSummarizeVideo(video.id, channel.id);
 
       updateQueueStatus(video.id, channel.id, {
         status: "complete",
@@ -1134,6 +1151,7 @@ export class Pipeline extends EventEmitter {
       job.progress = 100;
       job.completedAt = new Date().toISOString();
       this.maybeEmbedSegments(videoId, channelId);
+      this.maybeSummarizeVideo(videoId, channelId);
 
       updateQueueStatus(videoId, channelId, { mdPath, wordCount: result.word_count, status: "complete" });
       if (audioPath) {
@@ -1324,6 +1342,7 @@ export class Pipeline extends EventEmitter {
           error: null,
         });
         this.maybeEmbedSegments(realVideoId, dbCh);
+        this.maybeSummarizeVideo(realVideoId, dbCh);
       }
 
     } catch (error) {
@@ -1407,6 +1426,8 @@ export class Pipeline extends EventEmitter {
       error: null,
       retries: 0,
       notes: null,
+      ai_summary: null,
+      ai_summary_model: null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };

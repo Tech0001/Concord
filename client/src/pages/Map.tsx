@@ -675,6 +675,16 @@ export default function MapPage() {
     setSelectedClip(clip);
   };
 
+  // Double-click on a clip-mode or force-mode node opens the source video
+  // drawer at the clip's start, matching the video-mode card behavior.
+  // ReactFlow's video-mode nodes handle their own double-click on inner
+  // clip cards (see VideoFlowNode), so this handler only fires for the
+  // simpler clip/force-mode node shells.
+  const onNodeDoubleClick: NodeMouseHandler = (_event, node) => {
+    if (mode === "video") return;
+    openClipVideo(node.data as GraphNodeData);
+  };
+
   const onNodesChange = (changes: NodeChange[]) => {
     setFlowNodesState(nodes => {
       const next = applyNodeChanges(changes, nodes);
@@ -884,6 +894,7 @@ export default function MapPage() {
                 order={arcOrder}
                 selectedId={selectedClip?.id || null}
                 onSelect={setSelectedClip}
+                onOpen={openClipVideo}
               />
             ) : mode === "force" ? (
               <ForceDiagram
@@ -891,6 +902,7 @@ export default function MapPage() {
                 edges={graph.edges}
                 selectedId={selectedClip?.id || null}
                 onSelect={setSelectedClip}
+                onOpen={openClipVideo}
               />
             ) : (
               <ReactFlow
@@ -898,6 +910,7 @@ export default function MapPage() {
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
                 onNodeClick={onNodeClick}
+                onNodeDoubleClick={onNodeDoubleClick}
                 onConnect={onConnect}
                 onEdgeClick={onEdgeClick}
                 onNodesChange={onNodesChange}
@@ -958,12 +971,14 @@ function ArcDiagram({
   order,
   selectedId,
   onSelect,
+  onOpen,
 }: {
   nodes: GraphNodeData[];
   edges: GraphEdgeData[];
   order: ArcOrder;
   selectedId: string | null;
   onSelect: (node: GraphNodeData) => void;
+  onOpen?: (node: GraphNodeData) => void;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -1086,7 +1101,8 @@ function ArcDiagram({
       .attr("class", node => `arc-node ${node.id === selectedId ? "selected" : ""}`)
       .attr("transform", node => `translate(${marginLeft},${y(node.id)})`)
       .style("cursor", "pointer")
-      .on("click", (_event, node) => onSelect(node));
+      .on("click", (_event, node) => onSelect(node))
+      .on("dblclick", (event, node) => { event.stopPropagation(); onOpen?.(node); });
 
     label.append("text")
       .attr("x", -10)
@@ -1167,7 +1183,7 @@ function ArcDiagram({
       .hovering .arc-link.primary { stroke-opacity: 0.95; stroke-width: 3; }
       .arc-link.selected { stroke-opacity: 0.95; stroke-width: 3; }
     `);
-  }, [edges, nodes, onSelect, order, selectedId]);
+  }, [edges, nodes, onOpen, onSelect, order, selectedId]);
 
   return (
     <div className="h-full w-full overflow-auto">
@@ -1181,11 +1197,13 @@ function ForceDiagram({
   edges,
   selectedId,
   onSelect,
+  onOpen,
 }: {
   nodes: GraphNodeData[];
   edges: GraphEdgeData[];
   selectedId: string | null;
   onSelect: (node: GraphNodeData | null) => void;
+  onOpen?: (node: GraphNodeData) => void;
 }) {
   type ForceNode = NodeObject<{
     clip: GraphNodeData;
@@ -1419,8 +1437,11 @@ function ForceDiagram({
         cooldownTicks={220}
         onNodeClick={node => {
           const clip = node.clip as GraphNodeData;
-          // Click the same node again to deselect.
-          onSelect(selectedId === clip.id ? null : clip);
+          // Force-mode dots have no real "selected" affordance, so a
+          // single click both selects (inspector updates) and opens the
+          // source video drawer. Click background to clear.
+          onSelect(clip);
+          onOpen?.(clip);
         }}
         onBackgroundClick={() => onSelect(null)}
         onNodeHover={(node) => setHoverNodeId(node ? String(node.id) : null)}

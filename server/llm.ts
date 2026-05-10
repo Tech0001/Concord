@@ -122,6 +122,11 @@ export async function chat(opts: ChatOptions): Promise<string> {
   const json = await res.json() as {
     choices?: { message?: { content?: string } }[];
   };
+  // Return the raw model output. Per-task parsing (e.g. extracting a
+  // summary from inside <think> tags vs <summary> tags) happens in the
+  // caller — chat() shouldn't be opinionated about what's "noise" since
+  // that varies by task. summarize-video.ts has its own extractor; tag
+  // suggestions parse JSON; future RAG may want the thinking visible.
   return json.choices?.[0]?.message?.content || "";
 }
 

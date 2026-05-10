@@ -537,6 +537,7 @@ export default function Clips() {
                           options={allTags}
                           size="sm"
                           onOpen={loadTags}
+                          quote={clip.quote}
                         />
                       ) : (
                         <Button

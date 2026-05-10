@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2 } from "lucide-react";
+import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2, FileText } from "lucide-react";
 
 interface LlmConfig {
   baseUrl: string;
@@ -75,10 +75,12 @@ export default function AI() {
   // clobbering the form mid-edit. The fallback uses empty strings; the
   // happy path always returns the server's authoritative view anyway.
   const fetchStatus = useCallback(async () => {
-    // Abort after 3s — a dead server otherwise hangs the poll for minutes
-    // (TCP timeout), accumulating pending fetches every 10s.
+    // Abort after 8s. oMLX serializes requests behind the active chat
+    // completion; during a long summary-backfill batch, /v1/models can
+    // queue for several seconds. 8s is forgiving enough to avoid noise
+    // but still surfaces a truly-dead server within one poll cycle.
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 3000);
+    const timer = setTimeout(() => ctl.abort(), 8000);
     try {
       const r = await fetch("/api/llm/status", { signal: ctl.signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -304,8 +306,10 @@ export default function AI() {
 
       <EmbeddingsCard hasEmbeddingModel={Boolean(embeddingModel || config?.embeddingModel)} />
 
+      <SummariesCard hasChatModel={Boolean(chatModel || config?.chatModel)} />
 
-      {status && !status.reachable && status.error && (
+
+      {status && !status.reachable && status.error && !/abort/i.test(status.error) && (
         <div className="rounded-md border border-zinc-500/30 bg-card px-3 py-2 text-xs text-muted-foreground">
           <div className="font-medium text-foreground">Last probe error</div>
           <div className="mt-1 break-all font-mono">{status.error}</div>
@@ -364,6 +368,147 @@ interface EmbeddingStats {
   models: { model: string; videos: number; segments: number }[];
   totalSegments: number;
   totalVideos: number;
+}
+
+interface SummariesProgress {
+  done: number;
+  total: number;
+  written: number;
+  skipped: number;
+  current?: string;
+}
+
+function SummariesCard({ hasChatModel }: { hasChatModel: boolean }) {
+  const { toast } = useToast();
+  const [progress, setProgress] = useState<SummariesProgress | null>(null);
+  const [running, setRunning] = useState(false);
+  const [overwrite, setOverwrite] = useState(false);
+
+  const generate = async () => {
+    if (!hasChatModel) {
+      toast({ title: "Pick + save a chat model first", variant: "destructive" });
+      return;
+    }
+    setRunning(true);
+    setProgress({ done: 0, total: 0, written: 0, skipped: 0 });
+    try {
+      const res = await fetch("/api/llm/summaries/regenerate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ overwrite }),
+      });
+      if (!res.ok || !res.body) {
+        const err = await res.text().catch(() => `HTTP ${res.status}`);
+        throw new Error(err);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let written = 0;
+      let skipped = 0;
+      let total = 0;
+      let done = 0;
+      while (true) {
+        const { value, done: streamDone } = await reader.read();
+        if (streamDone) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const eventMatch = chunk.match(/^event: (.+)$/m);
+          const dataMatch = chunk.match(/^data: (.+)$/m);
+          if (!eventMatch || !dataMatch) continue;
+          const event = eventMatch[1];
+          const data = JSON.parse(dataMatch[1]);
+          if (event === "start") {
+            total = data.total;
+            setProgress({ done: 0, total, written: 0, skipped: 0 });
+          } else if (event === "video") {
+            done = data.done;
+            if (data.skipped) skipped++;
+            else if (data.charsOut > 0) written++;
+            setProgress({ done, total, written, skipped, current: data.videoId });
+          } else if (event === "done") {
+            setProgress({ done: data.total, total: data.total, written: data.written, skipped: data.skipped });
+          }
+        }
+      }
+      toast({
+        title: "Summaries done",
+        description: `${written} written, ${skipped} skipped`,
+      });
+    } catch (err) {
+      toast({ title: "Summary generation failed", description: String(err), variant: "destructive" });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <FileText className="h-4 w-4 text-muted-foreground" />
+          AI summaries (per video)
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="text-xs text-muted-foreground">
+          Auto-generated 2-3 sentence summaries appear in each video's <strong>AI summary</strong> section
+          (separate from your own notes — those are never touched). New transcripts get summarized
+          automatically; this button backfills existing ones. Without <strong>Overwrite</strong>,
+          videos that already have an AI summary from this same model are skipped — useful when
+          you've changed model and want to refresh everything.
+        </div>
+
+        {progress && (
+          <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="flex items-center gap-1.5 font-medium text-muted-foreground">
+                {running && <Loader2 className="h-3 w-3 animate-spin" />}
+                {running ? "Summarizing…" : "Done"}
+              </span>
+              <span className="font-mono tabular-nums text-foreground">
+                {progress.done} / {progress.total || "?"}
+              </span>
+            </div>
+            <div className="h-1 overflow-hidden rounded bg-secondary">
+              <div
+                className="h-full bg-foreground transition-[width]"
+                style={{ width: progress.total ? `${(progress.done / progress.total) * 100}%` : "0%" }}
+              />
+            </div>
+            <div className="mt-1.5 flex justify-between text-muted-foreground">
+              <span>{progress.written} written</span>
+              {progress.skipped > 0 && <span>{progress.skipped} skipped</span>}
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} disabled={running} />
+            Overwrite existing AI summaries
+          </label>
+          <div className="ml-auto">
+            <Button size="sm" onClick={generate} disabled={running || !hasChatModel}>
+              {running
+                ? <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                : <FileText className="mr-2 h-3 w-3" />}
+              Generate summaries
+            </Button>
+          </div>
+        </div>
+
+        {!hasChatModel && (
+          <div className="text-xs text-amber-600 dark:text-amber-400">
+            Pick + save a chat model above to enable summary generation.
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 interface ReindexProgress {
