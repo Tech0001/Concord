@@ -2,11 +2,20 @@ import youtubedl from "./yt-dlp-bin";
 import fs from "fs";
 import path from "path";
 import { getConfigValues } from "./db";
+import { speedPresetToSleepInterval } from "./pipeline";
 
 /** Read the user's "cookies from which browser?" pipeline setting and
  *  return it normalized — empty string when unset (= no cookie auth). */
 function youtubeCookiesFromBrowser(): string {
   return (getConfigValues().youtubeCookiesFromBrowser || "").trim();
+}
+
+/** Read the user's speed preset (fast / balanced / conservative) and
+ *  return the corresponding yt-dlp sleep-interval pair. */
+function youtubeSleep(): { min: number; max: number } {
+  const raw = getConfigValues().youtubeSpeedPreset;
+  const preset = raw === "fast" || raw === "balanced" || raw === "conservative" ? raw : "conservative";
+  return speedPresetToSleepInterval(preset);
 }
 
 interface YouTubeDlVideoInfo {
@@ -42,6 +51,7 @@ interface ProgressCallback {
 export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoInfo> {
   try {
     const cookiesBrowser = youtubeCookiesFromBrowser();
+    const sleep = youtubeSleep();
     // Get video info with available formats
     const result = await youtubedl(url, {
       dumpSingleJson: true,
@@ -58,6 +68,8 @@ export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoIn
       // Without it, anonymous metadata fetches eventually hit YouTube's
       // bot-detection gate.
       ...(cookiesBrowser ? { cookiesFromBrowser: cookiesBrowser } : {}),
+      sleepInterval: sleep.min,
+      maxSleepInterval: sleep.max,
     } as Parameters<typeof youtubedl>[1]);
 
     return result as unknown as YouTubeDlVideoInfo;
@@ -90,6 +102,7 @@ export async function downloadYouTubeVideo(
     }
 
     const cookiesBrowser = youtubeCookiesFromBrowser();
+    const sleep = youtubeSleep();
 
     // When downloading, we need to specify that we want both video and audio
     const downloader = youtubedl.exec(url, {
@@ -117,6 +130,8 @@ export async function downloadYouTubeVideo(
       jsRuntimes: 'node',
       // Pass through to yt-dlp's --cookies-from-browser when configured.
       ...(cookiesBrowser ? { cookiesFromBrowser: cookiesBrowser } : {}),
+      sleepInterval: sleep.min,
+      maxSleepInterval: sleep.max,
     } as Parameters<typeof youtubedl>[1]);
 
     if (!downloader.stdout || !downloader.stderr) {

@@ -62,6 +62,11 @@ export interface PipelineConfig {
    *  you're not a bot" eventually). Pass through to yt-dlp's
    *  `--cookies-from-browser <browser>` flag. */
   youtubeCookiesFromBrowser: string;
+  /** Politeness preset for yt-dlp's --sleep-interval / --max-sleep-interval.
+   *  Conservative is the safe default for new installs — fewer rate-limit
+   *  hits at the cost of slower downloads. Fast trades safety for speed
+   *  (use when you have cookies set and a small queue). */
+  youtubeSpeedPreset: "fast" | "balanced" | "conservative";
   transcription: {
     model: string;
     language: string;
@@ -323,6 +328,7 @@ export class Pipeline extends EventEmitter {
       videoQuality: "1080",
       videoCodec: "any",
       youtubeCookiesFromBrowser: "",
+      youtubeSpeedPreset: "conservative",
       transcription: {
         model: "large-v3",
         language: "en",
@@ -360,6 +366,7 @@ export class Pipeline extends EventEmitter {
       videoQuality: stored.videoQuality || defaults.videoQuality,
       videoCodec: stored.videoCodec || defaults.videoCodec,
       youtubeCookiesFromBrowser: stored.youtubeCookiesFromBrowser || defaults.youtubeCookiesFromBrowser,
+      youtubeSpeedPreset: parseSpeedPreset(stored.youtubeSpeedPreset, defaults.youtubeSpeedPreset),
       transcription: {
         model: stored["transcription.model"] || defaults.transcription.model,
         language: stored["transcription.language"] || defaults.transcription.language,
@@ -428,6 +435,7 @@ export class Pipeline extends EventEmitter {
       videoQuality: config.videoQuality,
       videoCodec: config.videoCodec,
       youtubeCookiesFromBrowser: config.youtubeCookiesFromBrowser,
+      youtubeSpeedPreset: config.youtubeSpeedPreset,
       "transcription.model": config.transcription.model,
       "transcription.language": config.transcription.language,
       "transcription.device": config.transcription.device,
@@ -983,6 +991,7 @@ export class Pipeline extends EventEmitter {
   ): Promise<void> {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     const cookiesBrowser = (this.config.youtubeCookiesFromBrowser || "").trim();
+    const sleep = speedPresetToSleepInterval(this.config.youtubeSpeedPreset);
 
     return new Promise((resolve, reject) => {
       const dl = youtubedl.exec(url, {
@@ -999,6 +1008,10 @@ export class Pipeline extends EventEmitter {
         // inherit the user's logged-in YouTube session (defeats the
         // "Sign in to confirm you're not a bot" gate).
         ...(cookiesBrowser ? { cookiesFromBrowser: cookiesBrowser } : {}),
+        // Politeness: random sleep between requests reduces rate-limit
+        // and bot-detection hits. Maps the user's speed preset.
+        sleepInterval: sleep.min,
+        maxSleepInterval: sleep.max,
       } as Parameters<typeof youtubedl>[1]);
 
       // youtube-dl-exec returns a Promise that auto-rejects on non-zero
@@ -1459,6 +1472,29 @@ function parseConfigNumber(value: string | undefined, fallback: number): number 
 function parseConfigBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined || value === "") return fallback;
   return value === "true" || value === "1";
+}
+
+type SpeedPreset = "fast" | "balanced" | "conservative";
+
+function parseSpeedPreset(value: string | undefined, fallback: SpeedPreset): SpeedPreset {
+  if (value === "fast" || value === "balanced" || value === "conservative") return value;
+  return fallback;
+}
+
+/**
+ * Map a politeness preset to yt-dlp's --sleep-interval (min sleep
+ * between requests in seconds) and --max-sleep-interval (random ceiling).
+ * Higher values = more polite to YouTube's rate-limiter = lower chance
+ * of triggering bot-detection or temporary blocks. Conservative is the
+ * "I don't want my IP banned" setting; Fast is "I have cookies and a
+ * small queue and want it done now".
+ */
+export function speedPresetToSleepInterval(preset: SpeedPreset): { min: number; max: number } {
+  switch (preset) {
+    case "fast":         return { min: 1,  max: 3  };
+    case "balanced":     return { min: 3,  max: 8  };
+    case "conservative": return { min: 30, max: 90 };
+  }
 }
 
 // ---- Singleton ----

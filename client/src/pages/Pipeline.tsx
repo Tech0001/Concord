@@ -71,6 +71,7 @@ interface Config {
   videoQuality: string;
   videoCodec: string;
   youtubeCookiesFromBrowser: string;
+  youtubeSpeedPreset: "fast" | "balanced" | "conservative";
   transcription: { model: string; language: string; device: string };
   processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean };
 }
@@ -139,6 +140,7 @@ export default function PipelineStatus() {
   const [videoQuality, setVideoQuality] = useState("1080");
   const [videoCodec, setVideoCodec] = useState("any");
   const [youtubeCookies, setYoutubeCookies] = useState("");
+  const [youtubeSpeed, setYoutubeSpeed] = useState<"fast" | "balanced" | "conservative">("conservative");
   const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
 
   // Download state (same pattern as main page)
@@ -202,6 +204,7 @@ export default function PipelineStatus() {
       setVideoQuality(c.videoQuality || "1080");
       setVideoCodec(c.videoCodec || "any");
       setYoutubeCookies(c.youtubeCookiesFromBrowser || "");
+      setYoutubeSpeed(c.youtubeSpeedPreset || "conservative");
       setTranscriptionModel(c.transcription?.model || "large-v3");
     } catch {}
   };
@@ -314,6 +317,7 @@ export default function PipelineStatus() {
       videoQuality,
       videoCodec,
       youtubeCookiesFromBrowser: youtubeCookies,
+      youtubeSpeedPreset: youtubeSpeed,
       transcription: {
         ...config.transcription,
         model: transcriptionModel,
@@ -453,6 +457,19 @@ export default function PipelineStatus() {
                 </Select>
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <label className="text-muted-foreground">Download speed</label>
+                <Select value={youtubeSpeed} onValueChange={v => setYoutubeSpeed(v as "fast" | "balanced" | "conservative")}>
+                  <SelectTrigger className="h-8">
+                    <SelectValue placeholder="Speed preset" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fast">Fast (1-3s — risky, use with cookies)</SelectItem>
+                    <SelectItem value="balanced">Balanced (3-8s)</SelectItem>
+                    <SelectItem value="conservative">Conservative (30-90s — safest)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <label className="text-muted-foreground">YouTube cookies</label>
                 <Select value={youtubeCookies || "none"} onValueChange={v => setYoutubeCookies(v === "none" ? "" : v)}>
                   <SelectTrigger className="h-8">
@@ -498,6 +515,8 @@ export default function PipelineStatus() {
               <code className="font-mono text-foreground">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code>
               <span className="text-muted-foreground">Video codec</span>
               <code className="font-mono text-foreground">{codecLabel(config?.videoCodec || "any")}</code>
+              <span className="text-muted-foreground">Download speed</span>
+              <code className="font-mono text-foreground">{config?.youtubeSpeedPreset || "conservative"}</code>
               <span className="text-muted-foreground">YouTube cookies</span>
               <code className="font-mono text-foreground">{config?.youtubeCookiesFromBrowser || "none"}</code>
               <span className="text-muted-foreground">Transcription model</span>
