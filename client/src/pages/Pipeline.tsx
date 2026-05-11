@@ -383,11 +383,12 @@ export default function PipelineStatus() {
               <Badge variant={running ? "default" : "secondary"}>{running ? "Running" : state?.status || "?"}</Badge>
             </CardTitle>
             <div className="flex gap-2">
-              {running ? (
-                <Button size="sm" variant="outline" onClick={stop}><Square className="h-4 w-4"/>Stop</Button>
-              ) : (
-                <Button size="sm" onClick={start}><Play className="h-4 w-4"/>Start</Button>
-              )}
+              <Button size="sm" onClick={start} disabled={running} title={running ? "Pipeline already running" : "Start the pipeline"}>
+                <Play className="h-4 w-4"/>Start
+              </Button>
+              <Button size="sm" variant="outline" onClick={stop} disabled={!running} title={running ? "Stop the pipeline" : "Pipeline already stopped"}>
+                <Square className="h-4 w-4"/>Stop
+              </Button>
               <Button size="sm" variant="outline" onClick={checkNow}><RefreshCw className="h-4 w-4"/>Check</Button>
             </div>
           </div>
