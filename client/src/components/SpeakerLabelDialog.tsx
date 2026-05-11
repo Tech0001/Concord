@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -145,9 +146,13 @@ export function SpeakerLabelDialog({
     }
   };
 
-  return (
+  // Portal to document.body so the dialog escapes any parent inert
+  // tree (Radix Sheet wraps its children in inert when modal is open,
+  // which makes a "fixed-positioned" dialog visually overlay but reject
+  // pointer events until the underlying Sheet closes).
+  return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-background/80 backdrop-blur-sm"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm"
       onClick={() => !busy && onOpenChange(false)}
     >
       <Card className="w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
@@ -256,6 +261,7 @@ export function SpeakerLabelDialog({
           </div>
         </CardContent>
       </Card>
-    </div>
+    </div>,
+    document.body,
   );
 }

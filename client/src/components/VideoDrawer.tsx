@@ -662,6 +662,15 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                   }
                   const unidentifiedLocals = Object.entries(unidentifiedAirtime).sort((a, b) => b[1] - a[1]);
                   const dominantUnidentified = unidentifiedLocals[0]?.[0];
+                  // Find the first occurring segment for the dominant
+                  // unidentified — clicking the badge seeks the player +
+                  // scrolls the transcript here so the user can hear/see
+                  // who they're about to label BEFORE clicking the chip.
+                  const jumpToDominant = () => {
+                    if (!dominantUnidentified) return;
+                    const idx = segments.findIndex(s => s.speaker === dominantUnidentified);
+                    if (idx >= 0) seekTo(segments[idx].start, true);
+                  };
                   return (
                     <>
                       {distinct.map(s => (
@@ -678,9 +687,9 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                       {dominantUnidentified && (
                         <button
                           type="button"
-                          onClick={() => setLabelDialog({ localSpeaker: dominantUnidentified, currentSpeakerId: null })}
+                          onClick={jumpToDominant}
                           className="inline-flex items-center rounded border border-input bg-transparent px-2 py-0.5 text-xs font-semibold cursor-pointer hover:bg-accent hover:text-accent-foreground transition-colors"
-                          title={`Click to label the ${unidentifiedLocals.length === 1 ? "remaining unlabeled speaker" : "dominant unlabeled speaker (and optionally the others)"} in this video`}
+                          title={`Jump to where ${dominantUnidentified} is talking — listen, then click their chip in the transcript to label`}
                         >
                           {unidentifiedLocals.length} unidentified
                         </button>
