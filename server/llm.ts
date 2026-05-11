@@ -131,6 +131,60 @@ export async function chat(opts: ChatOptions): Promise<string> {
 }
 
 /**
+ * Streaming variant of chat() — yields delta chunks as they arrive from
+ * the LLM. Used by the RAG chat endpoint so answers paint in the UI as
+ * they're generated rather than blocking until completion.
+ *
+ * Wire format: OpenAI-compatible SSE (`data: {...}` lines, `data: [DONE]`
+ * terminator). Both oMLX and Ollama serve this format on /v1/chat/completions
+ * when stream=true.
+ */
+export async function* chatStream(opts: ChatOptions): AsyncGenerator<string, void, void> {
+  const cfg = getLlmConfig();
+  const model = opts.model || cfg.chatModel;
+  if (!model) throw new LlmConfigError("No chat model configured");
+
+  const res = await llmFetch("/chat/completions", {
+    method: "POST",
+    body: JSON.stringify({
+      model,
+      messages: opts.messages,
+      temperature: opts.temperature,
+      max_tokens: opts.maxTokens,
+      stream: true,
+    }),
+  }, opts.signal);
+
+  if (!res.body) throw new LlmUnreachableError("LLM returned no response body");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (payload === "[DONE]") return;
+      try {
+        const obj = JSON.parse(payload) as {
+          choices?: { delta?: { content?: string } }[];
+        };
+        const delta = obj.choices?.[0]?.delta?.content;
+        if (delta) yield delta;
+      } catch {
+        // Skip malformed chunks — keepalives or partial frames.
+      }
+    }
+  }
+}
+
+/**
  * Convert a user query into the format the embedding model expects.
  *
  * Some embedding families (Qwen3-Embedding, BGE, EmbeddingGemma) are

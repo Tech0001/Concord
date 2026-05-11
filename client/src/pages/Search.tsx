@@ -8,7 +8,8 @@ import { TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Calendar, Clock, DatabaseZap, FileText, Loader2, Play, Radio, Search as SearchIcon } from "lucide-react";
+import { Calendar, ChevronDown, Clock, DatabaseZap, FileText, Filter, Loader2, Play, Radio, Search as SearchIcon } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 interface Channel {
   id: string;
@@ -241,11 +242,11 @@ export default function TranscriptSearch() {
   return (
     <div className="mx-auto max-w-7xl px-4 py-4 space-y-4">
       <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <CardHeader className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="flex items-center gap-2">
               <SearchIcon className="h-4 w-4" />
-              Transcript Search
+              Search
             </CardTitle>
             <Button size="sm" variant="outline" onClick={reindex} disabled={reindexing}>
               {reindexing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <DatabaseZap className="h-4 w-4 mr-1" />}
@@ -253,9 +254,13 @@ export default function TranscriptSearch() {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid gap-2 lg:grid-cols-[minmax(240px,1fr)_180px_150px_140px_150px_150px_auto]">
-            <div className="relative flex gap-1">
+        <CardContent className="space-y-2">
+          {/* Primary row: search input (with Words/Meaning toggle), channel,
+              filters popover, search button. Secondary filters (status, type,
+              date range, tag scope, speaker) live behind "More filters" so
+              the toolbar stays scannable. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex flex-1 min-w-[280px] gap-1">
               <div className="relative flex-1">
                 <SearchIcon className="h-4 w-4 absolute left-2 top-2.5 text-muted-foreground" />
                 <Input
@@ -271,7 +276,7 @@ export default function TranscriptSearch() {
                   type="button"
                   onClick={() => setMode("words")}
                   className={`h-full rounded-sm px-2.5 transition-colors ${mode === "words" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                  title="Exact word matching (FTS5)"
+                  title="Exact word matching — FTS5 keyword search"
                 >
                   Words
                 </button>
@@ -279,101 +284,146 @@ export default function TranscriptSearch() {
                   type="button"
                   onClick={() => setMode("meaning")}
                   className={`h-full rounded-sm px-2.5 transition-colors ${mode === "meaning" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                  title="Semantic search by meaning (embeddings)"
+                  title="Semantic search by meaning — embedding similarity"
                 >
                   Meaning
                 </button>
               </div>
             </div>
             <Select value={channelId} onValueChange={setChannelId}>
-              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9 w-[160px]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All channels</SelectItem>
                 {channels.map(channel => <SelectItem key={channel.id} value={channel.id}>{channel.name}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="complete">Complete</SelectItem>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={type} onValueChange={setType}>
-              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All types</SelectItem>
-                <SelectItem value="video">Videos</SelectItem>
-                <SelectItem value="live">Lives</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} className="h-9" />
-            <Input type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} className="h-9" />
+            {(() => {
+              const activeFilterCount =
+                (status !== "complete" ? 1 : 0) +
+                (type !== "all" ? 1 : 0) +
+                (dateFrom ? 1 : 0) +
+                (dateTo ? 1 : 0) +
+                (tagFilter.length > 0 ? 1 : 0) +
+                (speakerFilter !== "all" ? 1 : 0);
+              return (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button size="sm" variant="outline" className="h-9">
+                      <Filter className="h-3.5 w-3.5" />
+                      Filters
+                      {activeFilterCount > 0 && (
+                        <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">{activeFilterCount}</Badge>
+                      )}
+                      <ChevronDown className="h-3 w-3" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80 space-y-2 p-3" align="end">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="col-span-1 space-y-1">
+                        <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Status</label>
+                        <Select value={status} onValueChange={setStatus}>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="complete">Complete</SelectItem>
+                            <SelectItem value="all">All statuses</SelectItem>
+                            <SelectItem value="failed">Failed</SelectItem>
+                            <SelectItem value="pending">Pending</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="col-span-1 space-y-1">
+                        <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Type</label>
+                        <Select value={type} onValueChange={setType}>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All types</SelectItem>
+                            <SelectItem value="video">Videos</SelectItem>
+                            <SelectItem value="live">Lives</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="col-span-1 space-y-1">
+                        <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Date from</label>
+                        <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-8 text-xs" />
+                      </div>
+                      <div className="col-span-1 space-y-1">
+                        <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Date to</label>
+                        <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-8 text-xs" />
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Tag scope</label>
+                      <TagPicker
+                        value={tagFilter}
+                        onChange={setTagFilter}
+                        options={tagOptions}
+                        size="sm"
+                        placeholder="Pick note tags..."
+                        onOpen={loadTagOptions}
+                      />
+                      {tagFilter.length > 0 && (
+                        <p className="text-[10px] text-muted-foreground">
+                          Restricts to videos with at least one note tagged with every selection.
+                        </p>
+                      )}
+                    </div>
+                    {speakerOptions.length > 0 && (
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Speaker</label>
+                        <Select value={speakerFilter} onValueChange={setSpeakerFilter}>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">Anyone</SelectItem>
+                            {speakerOptions.map((s) => (
+                              <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {activeFilterCount > 0 && (
+                      <div className="flex justify-end pt-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs"
+                          onClick={() => {
+                            setStatus("complete"); setType("all");
+                            setDateFrom(""); setDateTo("");
+                            setTagFilter([]); setSpeakerFilter("all");
+                          }}
+                        >
+                          Clear all
+                        </Button>
+                      </div>
+                    )}
+                  </PopoverContent>
+                </Popover>
+              );
+            })()}
             <Button onClick={runSearch} disabled={loading || !query.trim()} className="h-9">
               {loading ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <SearchIcon className="h-4 w-4 mr-1" />}
               Search
             </Button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">Tag scope:</span>
-            <TagPicker
-              value={tagFilter}
-              onChange={setTagFilter}
-              options={tagOptions}
-              size="sm"
-              placeholder="Pick clip tags..."
-              onOpen={loadTagOptions}
-            />
-            {tagFilter.length > 0 && (
-              <>
-                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setTagFilter([])}>
-                  Clear
-                </Button>
-                <span className="text-xs text-muted-foreground">
-                  Restricting to videos that have at least one clip with every selected tag.
-                </span>
-              </>
-            )}
-            {speakerOptions.length > 0 && (
-              <>
-                <span className="text-xs font-medium text-muted-foreground ml-2">Speaker:</span>
-                <Select value={speakerFilter} onValueChange={setSpeakerFilter}>
-                  <SelectTrigger className="h-7 text-xs w-auto min-w-[140px]"><SelectValue/></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Anyone</SelectItem>
-                    {speakerOptions.map(s => (
-                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </>
-            )}
-          </div>
-
-          {mode === "words" && (
-            <p className="text-xs text-muted-foreground">
-              Tip: wrap a phrase in quotes to match exactly &mdash; e.g. <code className="rounded bg-muted px-1 font-mono">"red heifer"</code> finds the exact phrase, while <code className="rounded bg-muted px-1 font-mono">red heifer</code> finds segments containing both words anywhere.
-            </p>
-          )}
-          {mode === "meaning" && (
-            <p className="text-xs text-muted-foreground">
-              Meaning search finds conceptually related segments even when wording differs. {embeddingStats && embeddingStats.totalSegments > 0 ? (
-                <>Searching <span className="font-mono">{embeddingStats.totalSegments}</span> embedded segments across <span className="font-mono">{embeddingStats.totalVideos}</span> videos.</>
-              ) : (
-                <span className="text-amber-600 dark:text-amber-400">No embeddings yet — run <strong>Reindex semantics</strong> on the <a href="/ai" className="underline">AI page</a> first.</span>
-              )}
+          {/* Mode hint — terse, only when it adds value. */}
+          {mode === "meaning" && (!embeddingStats || embeddingStats.totalSegments === 0) && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              No embeddings yet — run <strong>Reindex semantics</strong> on the <a href="/settings" className="underline">Settings page</a> first.
             </p>
           )}
 
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant="secondary">{results.length} matching segments</Badge>
-            <Badge variant="outline">{resultCountByVideo} videos</Badge>
-            <Badge variant="outline">{indexStats.files} indexed files</Badge>
-            <Badge variant="outline">{indexStats.segments} indexed segments</Badge>
-            <Badge variant="outline" className="gap-1"><Clock className="h-3 w-3" /> timestamps included</Badge>
+          {/* One compact stats line. Hover for index breakdown if curious. */}
+          <div
+            className="text-xs text-muted-foreground"
+            title={`${indexStats.files} indexed files · ${indexStats.segments} indexed segments`}
+          >
+            {results.length} {results.length === 1 ? "match" : "matches"}
+            {resultCountByVideo > 0 && <> · across {resultCountByVideo} {resultCountByVideo === 1 ? "video" : "videos"}</>}
+            {mode === "meaning" && embeddingStats && embeddingStats.totalSegments > 0 && (
+              <> · searching {embeddingStats.totalSegments.toLocaleString()} embedded segments</>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -426,17 +476,14 @@ export default function TranscriptSearch() {
                   )}
                   {result.text}
                 </p>
-                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground font-mono">
-                    {result.md_path && <span>{result.md_path}</span>}
-                    {result.video_path && <span>{result.video_path}</span>}
-                  </div>
+                <div className="mt-2 flex items-center justify-end">
                   <Button
                     size="sm"
                     variant="outline"
                     disabled={!result.video_path}
                     onClick={() => openDrawer(result)}
                     className="h-8 w-fit whitespace-nowrap"
+                    title={result.video_path ? `${result.video_path}\n${result.md_path ?? ""}` : "No saved video file for this record"}
                   >
                     <Play className="h-3 w-3" />
                     Open at {formatTimestamp(result.start_seconds)}

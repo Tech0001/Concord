@@ -12,12 +12,14 @@ import { visibleModels, defaultModelForPlatform } from "@/lib/transcription-mode
 import {
   AlertCircle,
   CheckCircle,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
   Database,
   Download,
   FileText,
+  Filter,
   Loader2,
   Mic,
   Play,
@@ -27,6 +29,7 @@ import {
   Search,
   XCircle,
 } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 interface Channel {
   id: string;
@@ -318,120 +321,141 @@ export default function Library() {
   return (
     <div className="mx-auto max-w-7xl px-4 py-4 space-y-4">
       <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <CardHeader className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="flex items-center gap-2">
               <Database className="h-4 w-4" />
-              Transcription Library
+              Library
             </CardTitle>
-            <div className="flex flex-wrap gap-2">
-              <div className="relative">
-                <Search className="h-4 w-4 absolute left-2 top-2.5 text-muted-foreground" />
-                <Input
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                  placeholder="Search title, channel, path"
-                  className="h-9 pl-8 w-full sm:w-72"
-                />
-              </div>
-              <Select value={channelId} onValueChange={setChannelId}>
-                <SelectTrigger className="h-9 w-[170px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All channels</SelectItem>
-                  {channels.map(ch => <SelectItem key={ch.id} value={ch.id}>{ch.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Select value={status} onValueChange={setStatus}>
-                <SelectTrigger className="h-9 w-[145px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All statuses</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="waiting_live">Live wait</SelectItem>
-                  <SelectItem value="downloading">Downloading</SelectItem>
-                  <SelectItem value="transcribing">Transcribing</SelectItem>
-                  <SelectItem value="complete">Complete</SelectItem>
-                  <SelectItem value="failed">Failed</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={type} onValueChange={setType}>
-                <SelectTrigger className="h-9 w-[120px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All types</SelectItem>
-                  <SelectItem value="video">Videos</SelectItem>
-                  <SelectItem value="live">Lives</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={hasTranscript} onValueChange={setHasTranscript}>
-                <SelectTrigger className="h-9 w-[150px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Any transcript</SelectItem>
-                  <SelectItem value="yes">Has transcript</SelectItem>
-                  <SelectItem value="no">No transcript</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={sort} onValueChange={setSort}>
-                <SelectTrigger className="h-9 w-[150px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="upload_desc">Newest upload</SelectItem>
-                  <SelectItem value="upload_asc">Oldest upload</SelectItem>
-                  <SelectItem value="updated_desc">Recently updated</SelectItem>
-                  <SelectItem value="words_desc">Most words</SelectItem>
-                  <SelectItem value="title">Title</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button size="sm" variant="outline" onClick={fetchData} disabled={loading} className="h-9">
-                <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
-                Refresh
-              </Button>
+            <div className="text-xs text-muted-foreground" title={Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join("  ·  ")}>
+              {total.toLocaleString()} {total === 1 ? "video" : "videos"}
+              {counts.complete !== undefined && <> · <span className="text-foreground">{(counts.complete || 0).toLocaleString()}</span> complete</>}
+              {(counts.failed ?? 0) > 0 && <> · <span className="text-amber-600 dark:text-amber-400">{counts.failed} failed</span></>}
+              {(counts.pending ?? 0) > 0 && <> · {counts.pending} pending</>}
             </div>
           </div>
-          <div className="flex flex-wrap gap-2 text-xs">
-            <Badge variant="secondary">{total} matching</Badge>
-            <Badge variant="outline">{entries.length} loaded</Badge>
-            {Object.entries(counts).map(([key, value]) => (
-              <Badge key={key} variant={statusVariant(key)}>{key}: {value}</Badge>
-            ))}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[260px]">
+              <Search className="h-4 w-4 absolute left-2 top-2.5 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Search title, channel, path"
+                className="h-9 pl-8"
+              />
+            </div>
+            <Select value={channelId} onValueChange={setChannelId}>
+              <SelectTrigger className="h-9 w-[170px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All channels</SelectItem>
+                {channels.map(ch => <SelectItem key={ch.id} value={ch.id}>{ch.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+
+            {(() => {
+              const activeFilterCount =
+                (status !== "all" ? 1 : 0) +
+                (type !== "all" ? 1 : 0) +
+                (hasTranscript !== "all" ? 1 : 0) +
+                (sort !== "upload_desc" ? 1 : 0);
+              return (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button size="sm" variant="outline" className="h-9">
+                      <Filter className="h-3.5 w-3.5" />
+                      Filters
+                      {activeFilterCount > 0 && (
+                        <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">{activeFilterCount}</Badge>
+                      )}
+                      <ChevronDown className="h-3 w-3" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-72 space-y-2 p-3" align="end">
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Status</label>
+                      <Select value={status} onValueChange={setStatus}>
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All statuses</SelectItem>
+                          <SelectItem value="pending">Pending</SelectItem>
+                          <SelectItem value="waiting_live">Live wait</SelectItem>
+                          <SelectItem value="downloading">Downloading</SelectItem>
+                          <SelectItem value="transcribing">Transcribing</SelectItem>
+                          <SelectItem value="complete">Complete</SelectItem>
+                          <SelectItem value="failed">Failed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Type</label>
+                      <Select value={type} onValueChange={setType}>
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All types</SelectItem>
+                          <SelectItem value="video">Videos</SelectItem>
+                          <SelectItem value="live">Lives</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Transcript</label>
+                      <Select value={hasTranscript} onValueChange={setHasTranscript}>
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Any transcript</SelectItem>
+                          <SelectItem value="yes">Has transcript</SelectItem>
+                          <SelectItem value="no">No transcript</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Sort</label>
+                      <Select value={sort} onValueChange={setSort}>
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="upload_desc">Newest upload</SelectItem>
+                          <SelectItem value="upload_asc">Oldest upload</SelectItem>
+                          <SelectItem value="updated_desc">Recently updated</SelectItem>
+                          <SelectItem value="words_desc">Most words</SelectItem>
+                          <SelectItem value="title">Title</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {activeFilterCount > 0 && (
+                      <div className="flex justify-end pt-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs"
+                          onClick={() => {
+                            setStatus("all"); setType("all"); setHasTranscript("all"); setSort("upload_desc");
+                          }}
+                        >
+                          Reset
+                        </Button>
+                      </div>
+                    )}
+                  </PopoverContent>
+                </Popover>
+              );
+            })()}
+
+            <Button size="sm" variant="outline" onClick={fetchData} disabled={loading} className="h-9">
+              <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm text-muted-foreground">
-              Showing {startRow}-{endRow} of {total} matching records.
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted-foreground">
-                Page {Math.min(page + 1, pageCount)} of {pageCount}
-              </span>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={page === 0 || loading}
-                onClick={() => setPage(value => Math.max(0, value - 1))}
-              >
-                <ChevronLeft className="h-4 w-4 mr-1" />
-                Previous
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={page + 1 >= pageCount || loading}
-                onClick={() => setPage(value => value + 1)}
-              >
-                Next
-                <ChevronRight className="h-4 w-4 ml-1" />
-              </Button>
-              <span className="text-xs text-muted-foreground">Rows</span>
-              <Select value={String(pageSize)} onValueChange={value => setPageSize(Number(value))}>
-                <SelectTrigger className="h-8 text-xs w-[90px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="50">50</SelectItem>
-                  <SelectItem value="100">100</SelectItem>
-                  <SelectItem value="250">250</SelectItem>
-                </SelectContent>
-              </Select>
-              <span className="text-xs text-muted-foreground">Model</span>
+          {/* Compact status line + per-page model selector. Pagination
+              proper lives below the table (single bar instead of two). */}
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className="text-muted-foreground">
+              Showing <span className="text-foreground font-mono">{startRow}–{endRow}</span> of <span className="text-foreground font-mono">{total.toLocaleString()}</span>
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">Re-transcribe model</span>
               {modelSelector(platform, model, setModel)}
             </div>
           </div>
@@ -446,7 +470,7 @@ export default function Library() {
                   <TableHead className="w-[120px]">Status</TableHead>
                   <TableHead className="w-[95px]">Words</TableHead>
                   <TableHead className="w-[120px]">Files</TableHead>
-                  <TableHead className="w-[330px] text-right">Actions</TableHead>
+                  <TableHead className="w-[200px] text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -506,7 +530,6 @@ export default function Library() {
                       </TableCell>
                       <TableCell className="py-2">
                         <div className="flex justify-end gap-2">
-                          {modelSelector(platform, model, setModel)}
                           <Button
                             size="sm"
                             variant="outline"
@@ -523,6 +546,7 @@ export default function Library() {
                             className="h-8 text-xs whitespace-nowrap"
                             disabled={!canRetranscribe || retranscribing[key]}
                             onClick={() => retranscribe(entry)}
+                            title={`Re-transcribe with: ${model}`}
                           >
                             {retranscribing[key]
                               ? <Loader2 className="h-3 w-3 animate-spin" />
@@ -549,6 +573,16 @@ export default function Library() {
               Page {Math.min(page + 1, pageCount)} of {pageCount}
             </div>
             <div className="flex items-center gap-2">
+              <Select value={String(pageSize)} onValueChange={value => setPageSize(Number(value))}>
+                <SelectTrigger className="h-8 w-[100px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="50">50 / page</SelectItem>
+                  <SelectItem value="100">100 / page</SelectItem>
+                  <SelectItem value="250">250 / page</SelectItem>
+                </SelectContent>
+              </Select>
               <Button
                 size="sm"
                 variant="outline"

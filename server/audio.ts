@@ -112,6 +112,42 @@ export function extractAudio(
 }
 
 /**
+ * Encode an AAC-in-MP4 playback sidecar. Used when the source's container
+ * or codec isn't reliably decoded by Firefox/Safari (Ogg-Speex, Ogg-FLAC,
+ * exotic FLAC variants, etc.). AAC-in-M4A is universally supported by every
+ * browser. Sample rate / channels are preserved at "stereo 44.1k" — good
+ * enough for voice + casual music, small file footprint.
+ */
+export function encodeAacSidecar(
+  sourcePath: string,
+  outputPath: string,
+  bitrate = "128k",
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      "-i", sourcePath,
+      "-vn",
+      "-acodec", "aac",
+      "-b:a", bitrate,
+      "-y", outputPath,
+    ];
+    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+    proc.on("close", (code) => {
+      if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+        console.log(`[audio] Encoded AAC sidecar: ${outputPath}`);
+        resolve();
+      } else {
+        console.error(`[audio] AAC sidecar ffmpeg stderr: ${stderr.slice(-500)}`);
+        reject(new Error(`AAC sidecar encode failed (code ${code})`));
+      }
+    });
+    proc.on("error", (err) => reject(new Error(`ffmpeg error: ${err.message}`)));
+  });
+}
+
+/**
  * Get the duration of a media file in seconds using ffprobe.
  */
 export function getMediaDuration(filePath: string): Promise<number> {

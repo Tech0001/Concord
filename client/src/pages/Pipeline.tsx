@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +20,6 @@ import {
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import FolderInput from "@/components/FolderInput";
 import { visibleModels } from "@/lib/transcription-models";
 
 interface Channel {
@@ -126,16 +126,9 @@ export default function PipelineStatus() {
   const [retransModel, setRetransModel] = useState("large-v3");
   const [retranscribing, setRetranscribing] = useState<Record<string, boolean>>({});
   const [archiveMsg, setArchiveMsg] = useState<Record<string, string>>({});
-  const [editDir, setEditDir] = useState(false);
-  const [videoSaveDir, setVideoSaveDir] = useState("");
-  const [transcriptDir, setTranscriptDir] = useState("");
-  const [videoQuality, setVideoQuality] = useState("1080");
-  const [videoCodec, setVideoCodec] = useState("any");
-  const [youtubeCookies, setYoutubeCookies] = useState("");
-  const [youtubeCookiesFile, setYoutubeCookiesFile] = useState("");
-  const [youtubeSpeed, setYoutubeSpeed] = useState<"fast" | "balanced" | "conservative">("conservative");
-  const [dailyCap, setDailyCap] = useState(200);
-  const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
+  // Config editing now lives on /settings (PipelineSettingsCard) — this
+  // page just displays the resolved config read-only. State for the form
+  // fields was removed; see the Configuration card render below.
   const [ytdlpHealth, setYtdlpHealth] = useState<{ ok: boolean; version: string | null; kind: "native" | "bundled"; path: string; error?: string } | null>(null);
   const [ytdlpHealthChecking, setYtdlpHealthChecking] = useState(false);
 
@@ -206,17 +199,7 @@ export default function PipelineStatus() {
   const fetchConfig = async () => {
     try {
       const r = await apiRequest("GET", "/api/pipeline/config");
-      const c = await r.json();
-      setConfig(c);
-      setVideoSaveDir(c.videoSaveDir || "");
-      setTranscriptDir(c.transcriptDir || "");
-      setVideoQuality(c.videoQuality || "1080");
-      setVideoCodec(c.videoCodec || "any");
-      setYoutubeCookies(c.youtubeCookiesFromBrowser || "");
-      setYoutubeCookiesFile(c.youtubeCookiesFile || "");
-      setYoutubeSpeed(c.youtubeSpeedPreset || "conservative");
-      setDailyCap(typeof c.dailyDownloadCap === "number" ? c.dailyDownloadCap : 200);
-      setTranscriptionModel(c.transcription?.model || "large-v3");
+      setConfig(await r.json());
     } catch {}
   };
 
@@ -337,28 +320,6 @@ export default function PipelineStatus() {
     } catch (e: any) {
       toast({ variant: "destructive", title: "Transcribe failed", description: e.message });
     }
-  };
-
-  const saveDirs = async () => {
-    if (!config) return;
-    await apiRequest("POST", "/api/pipeline/config", {
-      ...config,
-      videoSaveDir,
-      transcriptDir,
-      videoQuality,
-      videoCodec,
-      youtubeCookiesFromBrowser: youtubeCookies,
-      youtubeCookiesFile: youtubeCookiesFile.trim(),
-      youtubeSpeedPreset: youtubeSpeed,
-      dailyDownloadCap: dailyCap,
-      transcription: {
-        ...config.transcription,
-        model: transcriptionModel,
-      },
-    });
-    setEditDir(false);
-    fetchConfig();
-    toast({ title: "Pipeline settings updated" });
   };
 
   const statusBadge = (status: string) => {
@@ -485,154 +446,39 @@ export default function PipelineStatus() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
-            <CardTitle className="flex items-center gap-1.5"><HardDrive className="h-4 w-4"/>Settings</CardTitle>
-            <Button size="sm" variant="ghost" onClick={() => setEditDir(!editDir)}>{editDir ? "Cancel" : "Edit"}</Button>
+            <CardTitle className="flex items-center gap-1.5"><HardDrive className="h-4 w-4"/>Configuration</CardTitle>
+            <Link href="/settings">
+              <Button size="sm" variant="ghost">Configure in Settings →</Button>
+            </Link>
           </div>
         </CardHeader>
         <CardContent className="space-y-2 text-xs">
-          {editDir ? (
-            <>
-              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <span className="text-muted-foreground">Working (temp)</span>
-                <code className="font-mono text-foreground">{config?.workingDir}</code>
-              </div>
-              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <label className="text-muted-foreground" htmlFor="videoSaveDir">Video save</label>
-                <FolderInput id="videoSaveDir" value={videoSaveDir} onChange={setVideoSaveDir} prompt="Pick the parent folder — saved_videos will be created inside" appendSubfolder="saved_videos" className="h-8 font-mono"/>
-              </div>
-              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <label className="text-muted-foreground" htmlFor="transcriptDir">Transcripts</label>
-                <FolderInput id="transcriptDir" value={transcriptDir} onChange={setTranscriptDir} prompt="Pick the parent folder — transcripts will be created inside" appendSubfolder="transcripts" className="h-8 font-mono"/>
-              </div>
-              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <label className="text-muted-foreground">Download quality</label>
-                <Select value={videoQuality} onValueChange={setVideoQuality}>
-                  <SelectTrigger className="h-8">
-                    <SelectValue placeholder="Quality" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="480">480p</SelectItem>
-                    <SelectItem value="720">720p</SelectItem>
-                    <SelectItem value="1080">1080p</SelectItem>
-                    <SelectItem value="best">Best available</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <label className="text-muted-foreground">Video codec</label>
-                <Select value={videoCodec} onValueChange={setVideoCodec}>
-                  <SelectTrigger className="h-8">
-                    <SelectValue placeholder="Codec" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CODEC_OPTIONS.map(option => (
-                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <label className="text-muted-foreground" htmlFor="dailyCap">Daily cap</label>
-                <Input
-                  id="dailyCap"
-                  type="number"
-                  min={0}
-                  value={dailyCap}
-                  onChange={e => setDailyCap(Number(e.target.value) || 0)}
-                  className="h-8 font-mono"
-                  placeholder="200 (0 = disabled)"
-                />
-              </div>
-              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <label className="text-muted-foreground">Download speed</label>
-                <Select value={youtubeSpeed} onValueChange={v => setYoutubeSpeed(v as "fast" | "balanced" | "conservative")}>
-                  <SelectTrigger className="h-8">
-                    <SelectValue placeholder="Speed preset" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="fast">Fast (1-3s — risky, use with cookies)</SelectItem>
-                    <SelectItem value="balanced">Balanced (3-8s)</SelectItem>
-                    <SelectItem value="conservative">Conservative (30-90s — safest)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <label className="text-muted-foreground">YouTube cookies</label>
-                <Select value={youtubeCookies || "none"} onValueChange={v => setYoutubeCookies(v === "none" ? "" : v)}>
-                  <SelectTrigger className="h-8">
-                    <SelectValue placeholder="Cookies source" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">None (anonymous)</SelectItem>
-                    <SelectItem value="chrome">Chrome</SelectItem>
-                    <SelectItem value="firefox">Firefox</SelectItem>
-                    <SelectItem value="safari">Safari</SelectItem>
-                    <SelectItem value="brave">Brave</SelectItem>
-                    <SelectItem value="edge">Edge</SelectItem>
-                    <SelectItem value="chromium">Chromium</SelectItem>
-                    <SelectItem value="opera">Opera</SelectItem>
-                    <SelectItem value="vivaldi">Vivaldi</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-[140px_1fr] items-start gap-2">
-                <label className="text-muted-foreground pt-1.5" htmlFor="cookiesFile">Cookies file</label>
-                <div className="space-y-1">
-                  <Input
-                    id="cookiesFile"
-                    value={youtubeCookiesFile}
-                    onChange={e => setYoutubeCookiesFile(e.target.value)}
-                    className="h-8 font-mono"
-                    placeholder="/path/to/cookies.txt (overrides browser dropdown when set)"
-                  />
-                  <p className="text-[10px] text-muted-foreground leading-tight">
-                    Netscape-format cookies.txt. Export via a browser extension
-                    like "Get cookies.txt LOCALLY". Overrides the browser dropdown
-                    above. Skips Keychain prompts.
-                  </p>
-                </div>
-              </div>
-              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <label className="text-muted-foreground">Transcription model</label>
-                <Select value={transcriptionModel} onValueChange={setTranscriptionModel}>
-                  <SelectTrigger className="h-8">
-                    <SelectValue placeholder="Model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {visibleModels(platform, transcriptionModel).map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button size="sm" onClick={saveDirs}>Save</Button>
-            </>
-          ) : (
-            <div className="grid grid-cols-[140px_1fr] gap-x-2 gap-y-1">
-              <span className="text-muted-foreground">Working</span>
-              <code className="font-mono text-foreground">{config?.workingDir}</code>
-              <span className="text-muted-foreground">Videos</span>
-              <code className="font-mono text-foreground">{config?.videoSaveDir}</code>
-              <span className="text-muted-foreground">Transcripts</span>
-              <code className="font-mono text-foreground">{config?.transcriptDir}</code>
-              <span className="text-muted-foreground">Download quality</span>
-              <code className="font-mono text-foreground">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code>
-              <span className="text-muted-foreground">Video codec</span>
-              <code className="font-mono text-foreground">{codecLabel(config?.videoCodec || "any")}</code>
-              <span className="text-muted-foreground">Daily cap</span>
-              <code className="font-mono text-foreground">{config?.dailyDownloadCap ?? 200}{config?.dailyDownloadCap === 0 ? " (disabled)" : ""}</code>
-              <span className="text-muted-foreground">Download speed</span>
-              <code className="font-mono text-foreground">{config?.youtubeSpeedPreset || "conservative"}</code>
-              <span className="text-muted-foreground">YouTube cookies</span>
-              <code className="font-mono text-foreground">
-                {config?.youtubeCookiesFile
-                  ? `file: ${config.youtubeCookiesFile}`
-                  : (config?.youtubeCookiesFromBrowser || "none")}
-              </code>
-              <span className="text-muted-foreground">Transcription model</span>
-              <code className="font-mono text-foreground">{config?.transcription?.model || "large-v3"}</code>
-            </div>
-          )}
+          <div className="grid grid-cols-[140px_1fr] gap-x-2 gap-y-1">
+            <span className="text-muted-foreground">Working</span>
+            <code className="font-mono text-foreground">{config?.workingDir}</code>
+            <span className="text-muted-foreground">Videos</span>
+            <code className="font-mono text-foreground">{config?.videoSaveDir}</code>
+            <span className="text-muted-foreground">Transcripts</span>
+            <code className="font-mono text-foreground">{config?.transcriptDir}</code>
+            <span className="text-muted-foreground">Download quality</span>
+            <code className="font-mono text-foreground">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code>
+            <span className="text-muted-foreground">Video codec</span>
+            <code className="font-mono text-foreground">{codecLabel(config?.videoCodec || "any")}</code>
+            <span className="text-muted-foreground">Daily cap</span>
+            <code className="font-mono text-foreground">{config?.dailyDownloadCap ?? 200}{config?.dailyDownloadCap === 0 ? " (disabled)" : ""}</code>
+            <span className="text-muted-foreground">Check interval</span>
+            <code className="font-mono text-foreground">{config?.checkIntervalMinutes ?? 60} min</code>
+            <span className="text-muted-foreground">Download speed</span>
+            <code className="font-mono text-foreground">{config?.youtubeSpeedPreset || "conservative"}</code>
+            <span className="text-muted-foreground">YouTube cookies</span>
+            <code className="font-mono text-foreground">
+              {config?.youtubeCookiesFile
+                ? `file: ${config.youtubeCookiesFile}`
+                : (config?.youtubeCookiesFromBrowser || "none")}
+            </code>
+            <span className="text-muted-foreground">Transcription model</span>
+            <code className="font-mono text-foreground">{config?.transcription?.model || "large-v3"}</code>
+          </div>
         </CardContent>
       </Card>
 

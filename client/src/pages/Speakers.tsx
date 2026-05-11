@@ -7,7 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { SpeakerLabelDialog } from "@/components/SpeakerLabelDialog";
-import { Mic, Play, UserPlus, Trash2, Pencil, X, Check, Users, RefreshCw, Search, VolumeX } from "lucide-react";
+import { Mic, Play, UserPlus, Trash2, Pencil, X, Check, Users, RefreshCw, Search, VolumeX, GitMerge } from "lucide-react";
 
 interface Speaker {
   id: string;
@@ -74,6 +74,9 @@ export default function Speakers() {
   const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editColor, setEditColor] = useState<string | null>(null);
+  const [mergingSpeaker, setMergingSpeaker] = useState<Speaker | null>(null);
+  const [notesDraft, setNotesDraft] = useState<Record<string, string>>({});
+  const [savingNotes, setSavingNotes] = useState<Record<string, boolean>>({});
 
   // Assignment workflow — uses shared SpeakerLabelDialog component
   const [assignTarget, setAssignTarget] = useState<UnidentifiedAssignment | null>(null);
@@ -224,6 +227,44 @@ export default function Speakers() {
     }
   };
 
+  const mergeSpeaker = async (source: Speaker, target: Speaker) => {
+    if (source.id === target.id) {
+      toast({ variant: "destructive", title: "Can't merge", description: "Pick a different target speaker." });
+      return;
+    }
+    if (!confirm(`Merge "${source.name}" into "${target.name}"?\n\nAll videos labeled "${source.name}" will be relabeled "${target.name}". Their voice fingerprints will be combined. "${source.name}" will be deleted.`)) {
+      return;
+    }
+    try {
+      const r = await apiRequest("POST", `/api/speakers/${source.id}/merge`, { targetId: target.id });
+      const data = await r.json() as { reassigned: number; centroidUpdated: boolean };
+      toast({
+        title: `Merged "${source.name}" → "${target.name}"`,
+        description: `${data.reassigned} video assignment${data.reassigned === 1 ? "" : "s"} reassigned${data.centroidUpdated ? "; centroid combined" : ""}.`,
+      });
+      setMergingSpeaker(null);
+      fetchAll();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Merge failed", description: e.message });
+    }
+  };
+
+  const saveSpeakerNotes = async (s: Speaker) => {
+    const next = notesDraft[s.id] ?? "";
+    if ((next || "") === (s.notes || "")) return;
+    setSavingNotes((m) => ({ ...m, [s.id]: true }));
+    try {
+      await apiRequest("PATCH", `/api/speakers/${s.id}`, { notes: next.trim() || null });
+      // Patch in-place to avoid a full refetch flicker
+      setSpeakers((arr) => arr.map((x) => x.id === s.id ? { ...x, notes: next.trim() || null } : x));
+      toast({ title: "Speaker notes saved" });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Notes save failed", description: e.message });
+    } finally {
+      setSavingNotes((m) => ({ ...m, [s.id]: false }));
+    }
+  };
+
   const removeSpeaker = async (s: Speaker) => {
     if (!confirm(`Delete speaker "${s.name}"?\nAny videos labeled with this speaker will become unidentified again.`)) return;
     try {
@@ -355,31 +396,52 @@ export default function Speakers() {
                       >
                         <VolumeX className={`h-3.5 w-3.5 ${s.is_noise === 1 ? "text-foreground" : "text-muted-foreground"}`}/>
                       </Button>
-                      <Button size="icon" variant="ghost" className="h-7 w-7" onClick={e => { e.stopPropagation(); beginEdit(s); }}>
+                      <Button size="icon" variant="ghost" className="h-7 w-7" onClick={e => { e.stopPropagation(); beginEdit(s); }} title="Edit name and color">
                         <Pencil className="h-3.5 w-3.5"/>
                       </Button>
-                      <Button size="icon" variant="ghost" className="h-7 w-7" onClick={e => { e.stopPropagation(); removeSpeaker(s); }}>
+                      <Button size="icon" variant="ghost" className="h-7 w-7" onClick={e => { e.stopPropagation(); setMergingSpeaker(s); }} title="Merge into another speaker">
+                        <GitMerge className="h-3.5 w-3.5"/>
+                      </Button>
+                      <Button size="icon" variant="ghost" className="h-7 w-7" onClick={e => { e.stopPropagation(); removeSpeaker(s); }} title="Delete speaker">
                         <Trash2 className="h-3.5 w-3.5 text-destructive"/>
                       </Button>
                     </>
                   )}
                 </div>
                 {isExpanded && (
-                  <div className="border-t px-2 py-2 space-y-1 bg-muted/10">
-                    {(appearances[s.id] || []).length === 0 && (
-                      <p className="text-xs text-muted-foreground p-2">No appearances yet.</p>
-                    )}
-                    {(appearances[s.id] || []).map(ap => (
-                      <div key={`${ap.video_id}|${ap.local_speaker}`} className="flex items-center gap-2 text-xs p-1">
-                        <span className="font-mono text-[10px] rounded bg-secondary px-1 py-0.5">{ap.local_speaker}</span>
-                        <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" disabled={ap.sample_start == null} onClick={() => playSample(ap)}>
-                          <Play className="h-3 w-3"/>
-                        </Button>
-                        <span className="flex-1 truncate" title={ap.title}>{ap.title}</span>
-                        <span className="text-muted-foreground shrink-0">{ap.channel_name}</span>
-                        <Badge variant="outline" className="text-[10px] shrink-0">{fmtAirtime(ap.airtime_seconds)}</Badge>
+                  <div className="border-t px-2 py-2 space-y-2 bg-muted/10">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Notes</label>
+                        {savingNotes[s.id] && <span className="text-[10px] text-muted-foreground">saving…</span>}
                       </div>
-                    ))}
+                      <textarea
+                        value={notesDraft[s.id] ?? s.notes ?? ""}
+                        onChange={(e) => setNotesDraft((m) => ({ ...m, [s.id]: e.target.value }))}
+                        onBlur={() => saveSpeakerNotes(s)}
+                        rows={2}
+                        placeholder="Notes about this speaker (saved on blur)…"
+                        className="flex w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Appearances</div>
+                      {(appearances[s.id] || []).length === 0 && (
+                        <p className="text-xs text-muted-foreground p-1">No appearances yet.</p>
+                      )}
+                      {(appearances[s.id] || []).map(ap => (
+                        <div key={`${ap.video_id}|${ap.local_speaker}`} className="flex items-center gap-2 text-xs p-1">
+                          <span className="font-mono text-[10px] rounded bg-secondary px-1 py-0.5">{ap.local_speaker}</span>
+                          <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" disabled={ap.sample_start == null} onClick={() => playSample(ap)}>
+                            <Play className="h-3 w-3"/>
+                          </Button>
+                          <span className="flex-1 truncate" title={ap.title}>{ap.title}</span>
+                          <span className="text-muted-foreground shrink-0">{ap.channel_name}</span>
+                          <Badge variant="outline" className="text-[10px] shrink-0">{fmtAirtime(ap.airtime_seconds)}</Badge>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -438,6 +500,75 @@ export default function Speakers() {
         video={drawerVideo}
         initialSeconds={drawerSeconds}
       />
+
+      {mergingSpeaker && (
+        <MergeSpeakerDialog
+          source={mergingSpeaker}
+          candidates={speakers.filter((s) => s.id !== mergingSpeaker.id && s.is_noise === 0)}
+          onClose={() => setMergingSpeaker(null)}
+          onConfirm={(target) => mergeSpeaker(mergingSpeaker, target)}
+        />
+      )}
+    </div>
+  );
+}
+
+function MergeSpeakerDialog({
+  source, candidates, onClose, onConfirm,
+}: {
+  source: Speaker;
+  candidates: Speaker[];
+  onClose: () => void;
+  onConfirm: (target: Speaker) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return candidates;
+    return candidates.filter((c) => c.name.toLowerCase().includes(q));
+  }, [candidates, search]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm" onClick={onClose}>
+      <Card className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <GitMerge className="h-4 w-4" /> Merge "{source.name}" into…
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Pick the speaker to merge "{source.name}" into. All videos labeled "{source.name}" will be relabeled, voice fingerprints combined, and "{source.name}" deleted.
+          </p>
+          <Input
+            autoFocus
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search speakers…"
+            className="h-8 text-sm"
+          />
+          <div className="max-h-64 overflow-y-auto rounded-md border">
+            {filtered.length === 0 && (
+              <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                {candidates.length === 0 ? "No other speakers to merge into." : "No speakers match."}
+              </div>
+            )}
+            {filtered.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => onConfirm(c)}
+                className="flex w-full items-center gap-2 border-b px-2.5 py-1.5 text-left text-sm last:border-0 hover:bg-secondary"
+              >
+                <span className="h-3 w-3 shrink-0 rounded-full border" style={{ background: c.display_color || "transparent" }} aria-hidden />
+                <span className="min-w-0 flex-1 truncate font-medium">{c.name}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex justify-end pt-1">
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

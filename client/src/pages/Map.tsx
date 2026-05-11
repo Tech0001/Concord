@@ -29,7 +29,8 @@ import { TagChip, TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import { Calendar, Clock, GitBranch, Link2, Loader2, Map as MapIcon, Play, RefreshCw, Search, X } from "lucide-react";
+import { Calendar, ChevronDown, Clock, GitBranch, LayoutGrid, Link2, Loader2, Map as MapIcon, Play, RefreshCw, Scaling, Search, Spline, StickyNote, Trash2, X, Zap } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 
 interface Channel {
@@ -42,6 +43,17 @@ interface Channel {
 interface TagOption {
   tag: string;
   count: number;
+}
+
+interface GraphAnchorData {
+  ordinal: number;
+  videoId: string;
+  channelId: string;
+  channelName: string | null;
+  videoTitle: string | null;
+  uploadDate: string | null;
+  startSeconds: number | null;
+  endSeconds: number | null;
 }
 
 interface GraphNodeData extends Record<string, unknown> {
@@ -63,6 +75,7 @@ interface GraphNodeData extends Record<string, unknown> {
   isLive: number;
   duration: number | null;
   degree: number;
+  anchors: GraphAnchorData[];
 }
 
 interface GraphEdgeData {
@@ -160,7 +173,10 @@ function edgeColor(kind: GraphEdgeData["kind"]): string {
   return "var(--ring)";
 }
 
-function channelColor(channelId: string): string {
+function channelColor(channelId: string | null | undefined): string {
+  // Standalone notes have no channel — use a neutral muted color so they're
+  // visually distinguishable from channel-anchored notes.
+  if (!channelId) return "#9ca3af";
   const palette = ["#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5"];
   let hash = 0;
   for (const char of channelId) hash = (hash * 31 + char.charCodeAt(0)) | 0;
@@ -234,6 +250,13 @@ function edgeStyles(edge: GraphEdgeData): Partial<Edge> {
 }
 
 function ClipNode({ data, selected }: { data: GraphNodeData; selected?: boolean }) {
+  // Multi-anchor notes show their anchor list inline so the map surface
+  // reveals the cross-video reach of a single thought. Standalone notes
+  // (zero anchors) render the note body instead.
+  const anchors = Array.isArray(data.anchors) ? data.anchors : [];
+  const multiAnchor = anchors.length > 1;
+  const standalone = anchors.length === 0;
+
   return (
     <div
       className={cn(
@@ -246,11 +269,36 @@ function ClipNode({ data, selected }: { data: GraphNodeData; selected?: boolean 
       <Handle type="source" position={Position.Right} className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
       <div className="line-clamp-2 text-xs font-medium leading-4">{data.title}</div>
       <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
-        <span>{data.channelName || data.channelId}</span>
-        <span>{formatTimestamp(data.startSeconds)}</span>
-        <span>{data.degree} links</span>
+        {standalone
+          ? <span>standalone</span>
+          : multiAnchor
+            ? <span>{anchors.length} anchors · {data.degree} links</span>
+            : <>
+                <span>{data.channelName || data.channelId}</span>
+                <span>{formatTimestamp(data.startSeconds)}</span>
+                <span>{data.degree} links</span>
+              </>
+        }
       </div>
-      <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">{data.quote}</p>
+      {data.note && (
+        <p className="mt-1 line-clamp-2 text-[11px] leading-4">{data.note}</p>
+      )}
+      {!multiAnchor && !standalone && (
+        <p className="mt-1 line-clamp-2 text-[11px] italic leading-4 text-muted-foreground">"{data.quote}"</p>
+      )}
+      {multiAnchor && (
+        <ul className="mt-1 space-y-0.5 text-[10px] text-muted-foreground">
+          {anchors.slice(0, 4).map((a) => (
+            <li key={a.ordinal} className="flex items-baseline gap-1.5">
+              <span className="truncate" title={a.videoTitle ?? ""}>{a.channelName || a.channelId}</span>
+              <span className="font-mono">{a.startSeconds == null ? "all" : formatTimestamp(a.startSeconds)}</span>
+            </li>
+          ))}
+          {anchors.length > 4 && (
+            <li className="text-[10px] italic">+ {anchors.length - 4} more</li>
+          )}
+        </ul>
+      )}
       {!!data.tags.length && (
         <div className="mt-1 flex flex-wrap gap-1">
           {data.tags.slice(0, 3).map(tag => <TagChip key={tag} tag={tag} variant="outline" />)}
@@ -280,13 +328,17 @@ function VideoNode({ data, selected }: { data: VideoNodeData; selected?: boolean
         <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
           <span>{data.channelName || data.channelId}</span>
           <span>{formatUploadDate(data.uploadDate)}</span>
-          <span>{data.clips.length} clips</span>
+          <span>{data.clips.length} {data.clips.length === 1 ? "anchor" : "anchors"}</span>
         </div>
       </div>
       <div className="nodrag nowheel flex-1 space-y-2 overflow-auto p-2">
-        {data.clips.map(clip => (
+        {data.clips.map((clip, idx) => (
           <div
-            key={clip.id}
+            // Multi-anchor notes can appear more than once per video (one row
+            // per anchor). anchorOrdinal disambiguates; the array index is a
+            // belt-and-suspenders fallback for the rare legacy single-anchor
+            // case where ordinal is missing.
+            key={`${clip.id}-${typeof clip.anchorOrdinal === "number" ? clip.anchorOrdinal : idx}`}
             role="button"
             tabIndex={0}
             className={cn(
@@ -309,13 +361,13 @@ function VideoNode({ data, selected }: { data: VideoNodeData; selected?: boolean
             }}
           >
             <Handle
-              id={clip.id}
+              id={`${clip.id}:${typeof clip.anchorOrdinal === "number" ? clip.anchorOrdinal : 1}`}
               type="target"
               position={Position.Left}
               className="!left-2 !h-5 !w-5 !border-2 !border-background !bg-primary"
             />
             <Handle
-              id={clip.id}
+              id={`${clip.id}:${typeof clip.anchorOrdinal === "number" ? clip.anchorOrdinal : 1}`}
               type="source"
               position={Position.Right}
               className="!right-2 !h-5 !w-5 !border-2 !border-background !bg-primary"
@@ -429,31 +481,78 @@ export default function MapPage() {
 
   const generatedFlowNodes = useMemo<Node[]>(() => {
     if (mode === "video") {
+      // Bucket by EVERY anchor. A multi-anchor note appears under each of
+      // its anchored videos with the per-anchor timestamp — that's the
+      // killer surface of the map for cross-video research.
+      //
+      // Standalone notes (zero anchors with no video link) fall through to
+      // freestanding clip nodes alongside the video containers.
       const videos = new Map<string, GraphNodeData[]>();
+      const standaloneClips: GraphNodeData[] = [];
       for (const clip of graph.nodes) {
-        const id = videoNodeId(clip);
-        const list = videos.get(id);
-        if (list) list.push(clip);
-        else videos.set(id, [clip]);
+        const anchors = Array.isArray(clip.anchors) ? clip.anchors : [];
+        if (anchors.length === 0) {
+          // Defensive: an older note that predates anchor backfill might have
+          // no anchors[] but still carry the legacy single-anchor columns.
+          if (clip.videoId && clip.channelId) {
+            const id = videoNodeId(clip);
+            const list = videos.get(id);
+            if (list) list.push(clip);
+            else videos.set(id, [clip]);
+          } else {
+            standaloneClips.push(clip);
+          }
+          continue;
+        }
+        for (const anchor of anchors as Array<{ ordinal: number; videoId: string; channelId: string; startSeconds: number | null; endSeconds: number | null }>) {
+          if (!anchor.videoId || !anchor.channelId) continue;
+          // Project a per-anchor view: same note, but startSeconds/endSeconds
+          // overridden so the row inside the video container shows the right
+          // moment. anchorOrdinal lets the React key disambiguate when one
+          // note has multiple anchors in the same video.
+          const view: GraphNodeData = {
+            ...clip,
+            startSeconds: anchor.startSeconds ?? 0,
+            endSeconds: anchor.endSeconds ?? anchor.startSeconds ?? 0,
+            anchorOrdinal: anchor.ordinal,
+          };
+          const id = `video:${anchor.channelId}:${anchor.videoId}`;
+          const list = videos.get(id);
+          if (list) list.push(view);
+          else videos.set(id, [view]);
+        }
       }
 
       const entries = Array.from(videos.entries()).map(([id, clips]) => {
         clips.sort((a, b) => a.startSeconds - b.startSeconds);
         return [id, clips] as const;
       });
-      const columns = Math.max(1, Math.ceil(Math.sqrt(entries.length)));
-      return entries.map(([id, clips], index) => {
+      const totalCells = entries.length + standaloneClips.length;
+      const columns = Math.max(1, Math.ceil(Math.sqrt(totalCells)));
+      const videoNodes: Node[] = entries.map(([id, clips], index) => {
         const first = clips[0];
+        // The bucket id is `video:${channelId}:${videoId}` — parse it so the
+        // header uses THIS video's title (joined from video_queue on the
+        // anchor row) rather than the first note's title. For new AI-derived
+        // notes the note title is e.g. "Bob's claim about X" — useless as a
+        // video-container header.
+        const [, bucketChannelId, bucketVideoId] = id.split(":");
+        const anchorForThisVideo = first.anchors?.find((a) =>
+          a.videoId === bucketVideoId && a.channelId === bucketChannelId,
+        );
+        const headerTitle = anchorForThisVideo?.videoTitle ?? first.title;
+        const headerChannel = anchorForThisVideo?.channelName ?? first.channelName;
+        const headerUpload = anchorForThisVideo?.uploadDate ?? first.uploadDate;
         const saved = layoutById.get(id);
         const width = saved?.width ?? DEFAULT_VIDEO_WIDTH;
         const height = saved?.height ?? Math.max(DEFAULT_VIDEO_HEIGHT, Math.min(520, 170 + clips.length * 88));
         const data: VideoNodeData = {
           id,
-          videoId: first.videoId,
-          channelId: first.channelId,
-          channelName: first.channelName,
-          title: first.title,
-          uploadDate: first.uploadDate,
+          videoId: bucketVideoId,
+          channelId: bucketChannelId,
+          channelName: headerChannel,
+          title: headerTitle,
+          uploadDate: headerUpload,
           duration: first.duration,
           clips,
           width,
@@ -474,6 +573,21 @@ export default function MapPage() {
           style: { width, height },
         };
       });
+      const standaloneNodes: Node[] = standaloneClips.map((node, idx) => {
+        const offset = entries.length + idx;
+        const saved = layoutById.get(node.id);
+        return {
+          id: node.id,
+          type: "clip",
+          data: node,
+          position: saved ? { x: saved.x, y: saved.y } : {
+            x: (offset % columns) * 430,
+            y: Math.floor(offset / columns) * 380,
+          },
+          style: { width: saved?.width ?? DEFAULT_CLIP_WIDTH, height: saved?.height ?? DEFAULT_CLIP_HEIGHT },
+        };
+      });
+      return [...videoNodes, ...standaloneNodes];
     }
 
     const columns = Math.max(1, Math.ceil(Math.sqrt(graph.nodes.length)));
@@ -497,28 +611,58 @@ export default function MapPage() {
     setFlowNodesState(generatedFlowNodes);
   }, [generatedFlowNodes]);
 
-  const flowEdges = useMemo<Edge[]>(() => graph.edges.map(edge => {
+  const flowEdges = useMemo<Edge[]>(() => graph.edges.flatMap(edge => {
     if (mode === "video") {
       const source = clipById.get(edge.source);
       const target = clipById.get(edge.target);
-      if (!source || !target) return null;
-      return {
-        id: edge.id,
-        source: videoNodeId(source),
-        target: videoNodeId(target),
-        sourceHandle: source.id,
-        targetHandle: target.id,
-        ...edgeStyles(edge),
-      };
+      if (!source || !target) return [];
+      // For each link between two notes, emit one Flow edge per
+      // (sourceAnchor, targetAnchor) pair — multi-anchor notes appear in
+      // every anchored video's container, and the link should connect ALL
+      // appearances, not just the primary. Standalone notes (zero anchors)
+      // pass through with no handle (they render as freestanding ClipNodes
+      // with default Handles).
+      const srcAppearances = source.anchors?.length
+        ? source.anchors.map((a) => ({
+            nodeId: `video:${a.channelId}:${a.videoId}`,
+            handle: `${source.id}:${a.ordinal}`,
+            key: `${a.ordinal}`,
+          }))
+        : [{ nodeId: source.id, handle: undefined as string | undefined, key: "0" }];
+      const tgtAppearances = target.anchors?.length
+        ? target.anchors.map((a) => ({
+            nodeId: `video:${a.channelId}:${a.videoId}`,
+            handle: `${target.id}:${a.ordinal}`,
+            key: `${a.ordinal}`,
+          }))
+        : [{ nodeId: target.id, handle: undefined as string | undefined, key: "0" }];
+
+      const out: Edge[] = [];
+      for (const s of srcAppearances) {
+        for (const t of tgtAppearances) {
+          // Skip self-loops where both appearances live in the same node —
+          // they'd render as tiny loop arcs that just add noise.
+          if (s.nodeId === t.nodeId) continue;
+          out.push({
+            id: `${edge.id}:${s.key}->${t.key}`,
+            source: s.nodeId,
+            target: t.nodeId,
+            sourceHandle: s.handle,
+            targetHandle: t.handle,
+            ...edgeStyles(edge),
+          });
+        }
+      }
+      return out;
     }
 
-    return {
+    return [{
       id: edge.id,
       source: edge.source,
       target: edge.target,
       ...edgeStyles(edge),
-    };
-  }).filter((edge): edge is Edge => !!edge), [clipById, graph.edges, mode]);
+    }];
+  }), [clipById, graph.edges, mode]);
 
   const loadFilters = async () => {
     try {
@@ -609,7 +753,15 @@ export default function MapPage() {
 
   const resolveConnectionClip = (nodeId: string | null, handleId: string | null | undefined): GraphNodeData | undefined => {
     if (!nodeId) return undefined;
-    if (mode === "video") return handleId ? clipById.get(handleId) : undefined;
+    if (mode === "video") {
+      // Handle id is `${clipId}:${anchorOrdinal}` for video-container rows;
+      // standalone notes pass no handle (the freestanding ClipNode uses
+      // the bare node id as the clip id).
+      if (!handleId) return clipById.get(nodeId);
+      const colon = handleId.lastIndexOf(":");
+      const clipKey = colon > 0 ? handleId.slice(0, colon) : handleId;
+      return clipById.get(clipKey);
+    }
     return clipById.get(nodeId);
   };
 
@@ -620,7 +772,7 @@ export default function MapPage() {
         kind: linkKind,
         note: linkNote.trim() || null,
       });
-      toast({ title: "Clip link created", description: `${source.title} → ${target.title}` });
+      toast({ title: "Note link created", description: `${source.title} → ${target.title}` });
       setLinkSource(null);
       setLinkNote("");
       await loadGraph();
@@ -635,7 +787,7 @@ export default function MapPage() {
     if (!graphEdge || graphEdge.kind !== "manual" || !graphEdge.manualKind) return;
     try {
       await apiRequest("DELETE", `/api/clips/${graphEdge.source}/links/${graphEdge.target}/${graphEdge.manualKind}`);
-      toast({ title: "Clip link removed", description: graphEdge.label.replace("_", " ") });
+      toast({ title: "Note link removed", description: graphEdge.label.replace("_", " ") });
       await loadGraph();
     } catch (error: any) {
       toast({ variant: "destructive", title: "Remove link failed", description: error.message });
@@ -725,11 +877,11 @@ export default function MapPage() {
   return (
     <div className="px-4 py-4 space-y-4">
       <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <CardHeader className="space-y-2">
+          <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <CardTitle className="flex items-center gap-2">
               <MapIcon className="h-4 w-4" />
-              Clip Map
+              Notes Map
             </CardTitle>
             <div className="flex flex-wrap gap-2">
               <div className="relative">
@@ -738,12 +890,12 @@ export default function MapPage() {
                   value={query}
                   onChange={event => setQuery(event.target.value)}
                   onKeyDown={event => { if (event.key === "Enter") refreshGraph(); }}
-                  placeholder="Search clips"
-                  className="h-9 w-full pl-8 sm:w-64"
+                  placeholder="Search notes"
+                  className="h-9 w-full pl-8 sm:w-56"
                 />
               </div>
               <Select value={channelId} onValueChange={setChannelId}>
-                <SelectTrigger className="h-9 w-[170px]"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9 w-[150px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All channels</SelectItem>
                   {channels.map(channel => <SelectItem key={channel.id} value={channel.id}>{channel.name}</SelectItem>)}
@@ -752,120 +904,153 @@ export default function MapPage() {
               <Select value={String(limit)} onValueChange={value => setLimit(Number(value))}>
                 <SelectTrigger className="h-9 w-[110px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="50">50 clips</SelectItem>
-                  <SelectItem value="150">150 clips</SelectItem>
-                  <SelectItem value="300">300 clips</SelectItem>
-                  <SelectItem value="500">500 clips</SelectItem>
+                  <SelectItem value="50">50 notes</SelectItem>
+                  <SelectItem value="150">150 notes</SelectItem>
+                  <SelectItem value="300">300 notes</SelectItem>
+                  <SelectItem value="500">500 notes</SelectItem>
                 </SelectContent>
               </Select>
+              <TagPicker
+                value={tagFilter}
+                onChange={setTagFilter}
+                options={tagOptions}
+                size="sm"
+                placeholder="Filter tags..."
+                onOpen={loadFilters}
+                className="min-w-[180px]"
+              />
               <Button variant="outline" size="sm" className="h-9" onClick={refreshGraph} disabled={loading}>
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 Refresh
               </Button>
             </div>
           </div>
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant={mode === "video" ? "default" : "outline"} onClick={() => setMode("video")}>
-                Videos
-              </Button>
-              <Button size="sm" variant={mode === "clip" ? "default" : "outline"} onClick={() => setMode("clip")}>
-                Clips
-              </Button>
-              <Button size="sm" variant={mode === "arc" ? "default" : "outline"} onClick={() => setMode("arc")}>
-                Arc
-              </Button>
-              <Button size="sm" variant={mode === "force" ? "default" : "outline"} onClick={() => setMode("force")}>
-                Force
-              </Button>
-              {mode === "arc" && (
-                <Select value={arcOrder} onValueChange={value => setArcOrder(value as ArcOrder)}>
-                  <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="tag">Order by tag</SelectItem>
-                    <SelectItem value="date">Order by date</SelectItem>
-                    <SelectItem value="channel">Order by channel</SelectItem>
-                    <SelectItem value="title">Order by title</SelectItem>
-                    <SelectItem value="connections">Order by links</SelectItem>
-                  </SelectContent>
-                </Select>
-              )}
-              {(mode === "video" ? ["manual", "shared_tag"] : ["manual", "shared_tag", "same_video"]).map(edgeType => (
-                <Button
-                  key={edgeType}
-                  size="sm"
-                  variant={edgeTypes.includes(edgeType) ? "secondary" : "outline"}
-                  onClick={() => toggleEdgeType(edgeType)}
-                  className="capitalize"
-                >
-                  {edgeType.replace("_", " ")}
-                </Button>
-              ))}
+
+          {/* Mode row: icon-labeled mode buttons + edge filter dropdown +
+              compact stats. Mode tooltips explain what each mode is best for. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">View</div>
+            <Button size="sm" variant={mode === "video" ? "default" : "outline"} onClick={() => setMode("video")} title="Notes grouped under each video they anchor">
+              <LayoutGrid className="h-3.5 w-3.5" /> Videos
+            </Button>
+            <Button size="sm" variant={mode === "clip" ? "default" : "outline"} onClick={() => setMode("clip")} title="Notes as freestanding cards you can arrange freely">
+              <StickyNote className="h-3.5 w-3.5" /> Cards
+            </Button>
+            <Button size="sm" variant={mode === "arc" ? "default" : "outline"} onClick={() => setMode("arc")} title="Notes in a vertical line with arcs showing links — good for spotting cross-cluster connections">
+              <Spline className="h-3.5 w-3.5" /> Arc
+            </Button>
+            <Button size="sm" variant={mode === "force" ? "default" : "outline"} onClick={() => setMode("force")} title="Physics-driven layout that clusters tightly-linked notes — good for exploring groups">
+              <Zap className="h-3.5 w-3.5" /> Cluster
+            </Button>
+
+            {mode === "arc" && (
+              <Select value={arcOrder} onValueChange={value => setArcOrder(value as ArcOrder)}>
+                <SelectTrigger className="h-8 w-[140px] text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="tag">Order by tag</SelectItem>
+                  <SelectItem value="date">Order by date</SelectItem>
+                  <SelectItem value="channel">Order by channel</SelectItem>
+                  <SelectItem value="title">Order by title</SelectItem>
+                  <SelectItem value="connections">Order by links</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+
+            <div className="ml-auto flex items-center gap-2 text-xs">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button size="sm" variant="outline" className="h-8">
+                    Edges
+                    <ChevronDown className="ml-1 h-3 w-3" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-56 p-2" align="end">
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">Show which edges</div>
+                  {(mode === "video" ? ["manual", "shared_tag"] : ["manual", "shared_tag", "same_video"]).map((edgeType) => {
+                    const label = edgeType === "manual" ? "Your links"
+                      : edgeType === "shared_tag" ? "Shared tags"
+                      : "Same video";
+                    const active = edgeTypes.includes(edgeType);
+                    return (
+                      <label key={edgeType} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-secondary">
+                        <input
+                          type="checkbox"
+                          checked={active}
+                          onChange={() => toggleEdgeType(edgeType)}
+                          className="h-3.5 w-3.5"
+                        />
+                        <span>{label}</span>
+                      </label>
+                    );
+                  })}
+                </PopoverContent>
+              </Popover>
+              <span className="text-muted-foreground">{graph.stats.nodeCount} notes · {graph.stats.edgeCount} edges</span>
             </div>
-            <TagPicker
-              value={tagFilter}
-              onChange={setTagFilter}
-              options={tagOptions}
-              size="sm"
-              placeholder="Filter tags..."
-              onOpen={loadFilters}
-              className="min-w-[260px]"
-            />
           </div>
-          <div className="flex flex-col gap-2 rounded-md border bg-muted/30 p-2 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-wrap items-center gap-2">
+
+          {/* Active-mode hint — one line so users know what they're looking at. */}
+          <div className="text-[11px] text-muted-foreground">
+            {mode === "video" && "Each box is a video; rows inside are notes anchored at that moment. Multi-anchor notes appear in every video they touch."}
+            {mode === "clip" && "Each card is a note. Drag to arrange. Drag the right dot of one card to the left dot of another to link them."}
+            {mode === "arc" && "Notes ordered along a vertical line; arcs show how they connect. Order with the dropdown above."}
+            {mode === "force" && "Tightly-linked notes pull together into clusters. Scroll to zoom, drag to pan."}
+          </div>
+
+          {/* Linking controls — only when a note is selected. Collapses when
+              not linking so it stays out of the way most of the time. */}
+          {selectedClip && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 p-2 text-xs">
               <Button
                 size="sm"
                 variant={linkSource ? "default" : "outline"}
-                disabled={!selectedClip}
                 onClick={() => setLinkSource(value => value ? null : selectedClip)}
               >
                 {linkSource ? <X className="h-3.5 w-3.5" /> : <Link2 className="h-3.5 w-3.5" />}
-                {linkSource ? "Cancel link" : "Link selected"}
+                {linkSource ? "Cancel link" : `Link "${selectedClip.title.length > 24 ? selectedClip.title.slice(0, 24) + "…" : selectedClip.title}"`}
               </Button>
-              <Select value={linkKind} onValueChange={value => setLinkKind(value as ClipLinkKind)}>
-                <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {LINK_KINDS.map(kind => <SelectItem key={kind.value} value={kind.value}>{kind.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Input
-                value={linkNote}
-                onChange={event => setLinkNote(event.target.value)}
-                placeholder="Optional link note"
-                className="h-8 w-full text-xs sm:w-72"
-              />
+              {linkSource && (
+                <>
+                  <Select value={linkKind} onValueChange={value => setLinkKind(value as ClipLinkKind)}>
+                    <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {LINK_KINDS.map(kind => <SelectItem key={kind.value} value={kind.value}>{kind.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    value={linkNote}
+                    onChange={event => setLinkNote(event.target.value)}
+                    placeholder="Optional note about this link"
+                    className="h-8 flex-1 min-w-[160px] text-xs"
+                  />
+                  <span className="text-muted-foreground">Click another note to connect.</span>
+                </>
+              )}
+              {!linkSource && (
+                <span className="text-muted-foreground">Selected: <span className="text-foreground">{selectedClip.title}</span></span>
+              )}
             </div>
-            <div className="text-xs text-muted-foreground">
-              {mode === "video"
-                ? "Drag the right dot of one clip to the left dot of another. Select a manual line to delete it."
-                : linkSource
-                  ? `Linking from "${linkSource.title}". Click another node to connect.`
-                  : "Drag nodes to arrange them. Drag from a card's right connector to another card."}
-            </div>
-          </div>
+          )}
+
+          {/* Selected-edge floating toolbar — appears when an edge is clicked.
+              Compact, single-line. Delete only enabled for manual edges. */}
           {selectedEdge && (
             <div className="flex items-center justify-between rounded-md border border-primary/30 bg-primary/5 p-2 text-xs">
               <span>
-                Selected line: {(selectedEdge.data as GraphEdgeData | undefined)?.label?.replace("_", " ") || selectedEdge.id}
+                Selected edge: <span className="text-foreground">{(selectedEdge.data as GraphEdgeData | undefined)?.label?.replace("_", " ") || selectedEdge.id}</span>
               </span>
               <Button
                 size="sm"
                 variant="destructive"
+                className="h-7 text-xs"
                 disabled={(selectedEdge.data as GraphEdgeData | undefined)?.kind !== "manual"}
                 onClick={() => deleteManualEdge(selectedEdge)}
               >
-                Delete selected line
+                <Trash2 className="mr-1 h-3 w-3" />
+                Delete
               </Button>
             </div>
           )}
-          <div className="flex flex-wrap gap-2 text-xs">
-            <Badge variant="secondary">{graph.stats.nodeCount} clips</Badge>
-            <Badge variant="outline">{graph.stats.edgeCount} edges</Badge>
-            <Badge variant="outline">{graph.stats.manualEdgeCount} manual</Badge>
-            <Badge variant="outline">{graph.stats.sharedTagEdgeCount} shared tag</Badge>
-            <Badge variant="outline">{graph.stats.sameVideoEdgeCount} same video</Badge>
-          </div>
         </CardHeader>
       </Card>
 
@@ -875,7 +1060,7 @@ export default function MapPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Card className="min-h-[calc(100vh-300px)] overflow-hidden">
           <CardContent className="h-[calc(100vh-300px)] min-h-[760px] p-0">
             {loading ? (

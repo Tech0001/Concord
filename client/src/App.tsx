@@ -19,16 +19,18 @@ import Clips from "@/pages/Clips";
 import AI from "@/pages/AI";
 import Speakers from "@/pages/Speakers";
 import Status from "@/pages/Status";
+import Settings from "@/pages/Settings";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
   Activity,
-  Bookmark,
   Database,
   Gauge,
   Map as MapIcon,
   Moon,
+  NotebookText,
   Search as SearchIcon,
+  Settings as SettingsIcon,
   Sparkles,
   Sun,
   Users,
@@ -40,7 +42,7 @@ const NAV_ITEMS = [
   { href: "/status", label: "Status", icon: Gauge },
   { href: "/library", label: "Library", icon: Database },
   { href: "/search", label: "Search", icon: SearchIcon },
-  { href: "/clips", label: "Clips", icon: Bookmark },
+  { href: "/notes", label: "Notes", icon: NotebookText },
   { href: "/speakers", label: "Speakers", icon: Users },
   { href: "/map", label: "Map", icon: MapIcon },
   { href: "/pipeline", label: "Pipeline", icon: Activity },
@@ -82,6 +84,9 @@ function TopBar() {
         </nav>
         <div className="flex items-center gap-1">
           <LlmStatusDot />
+          <Link href="/settings" aria-label="Settings" title="Settings" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground">
+            <SettingsIcon className="h-3.5 w-3.5" />
+          </Link>
           <Select value={themeName} onValueChange={setThemeName}>
             <SelectTrigger className="h-8 w-[120px] text-xs" aria-label="Theme">
               <SelectValue />
@@ -163,9 +168,11 @@ function Router() {
       <Route path="/pipeline" component={Pipeline} />
       <Route path="/library" component={Library} />
       <Route path="/search" component={Search} />
+      <Route path="/notes" component={Clips} />
       <Route path="/clips" component={Clips} />
       <Route path="/speakers" component={Speakers} />
       <Route path="/ai" component={AI} />
+      <Route path="/settings" component={Settings} />
       <Route path="/map">
         <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading map...</div>}>
           <MapPage />

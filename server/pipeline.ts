@@ -12,7 +12,7 @@ import {
   ChannelVideo,
 } from "./channel-monitor";
 import { getYouTubeVideoInfo } from "./youtube-dl";
-import { extractAudio, copyAudioTrack } from "./audio";
+import { extractAudio, copyAudioTrack, encodeAacSidecar } from "./audio";
 import { transcribeAudio, TranscriptionResult } from "./transcribe";
 import { embedSegmentsForVideo } from "./embed-segments";
 import { summarizeVideo } from "./summarize-video";
@@ -250,6 +250,28 @@ function mtimeToYYYYMMDD(mtimeMs: number): string {
   return `${y}${m}${dd}`;
 }
 
+/** Pick the earliest meaningful timestamp on a file. Prefers birthtime
+ *  (filesystem creation) when present and sane, then mtime. Guards
+ *  against the classic trap where some filesystems / network mounts
+ *  return 0 for birthtime — that would otherwise map to 1970-01-01 and
+ *  bucket every such file under the Unix epoch in the upload-date
+ *  filters. The "sane" floor is the year 2000 — earlier than any
+ *  realistic YouTube/local recording. */
+const SANE_TIMESTAMP_FLOOR_MS = Date.UTC(2000, 0, 1);
+function pickFileDate(stat: fs.Stats): number {
+  const m = Number(stat.mtimeMs) || 0;
+  const b = Number(stat.birthtimeMs) || 0;
+  const bSane = b > SANE_TIMESTAMP_FLOOR_MS;
+  const mSane = m > SANE_TIMESTAMP_FLOOR_MS;
+  if (bSane && mSane) return Math.min(b, m);
+  if (bSane) return b;
+  if (mSane) return m;
+  // Both unreliable — fall back to mtime (even if pre-2000) rather than
+  // synthesize a fake "now". A truly broken stat will format as e.g.
+  // 19700101 and at least surfaces the problem to the user.
+  return m;
+}
+
 /** Recursively walk a folder and return one ChannelVideo per media file
  *  found. Doesn't ffprobe (would be slow on big folders); duration is
  *  resolved later during processing. */
@@ -285,7 +307,7 @@ function scanLocalFolder(folderUrl: string): ChannelVideo[] {
             duration: null,
             isLive: false,
             isShorts: false,
-            uploadDate: mtimeToYYYYMMDD(stat.mtimeMs),
+            uploadDate: mtimeToYYYYMMDD(pickFileDate(stat)),
             thumbnail: null,
           });
         } catch (err) {
@@ -891,7 +913,33 @@ export class Pipeline extends EventEmitter {
       const m4aPath = path.join(workChannelDir, `${safeName}.m4a`);
       const audioPath = path.join(workChannelDir, `${safeName}.wav`);
 
+      // Some audio containers/codecs Firefox can't decode (Ogg-Speex,
+      // Ogg-FLAC, etc.). Pre-encode an AAC sidecar for browser playback.
+      // Cheap: ffmpeg encodes in < 1× realtime; happens once at ingestion.
+      let playbackPath: string | null = null;
+      const BROWSER_FRIENDLY_AUDIO_EXTS = new Set([".mp3", ".m4a", ".aac"]);
+
       if (audioOnlyLocal) {
+        const srcExt = path.extname(workVideoPath).toLowerCase();
+        if (!BROWSER_FRIENDLY_AUDIO_EXTS.has(srcExt)) {
+          // Pre-transcode to .m4a (AAC) so the drawer can stream it
+          // universally. Live next to the source file — for a local file
+          // /media/.../2025-09-11.ogg the sidecar is /media/.../2025-09-11.playback.m4a.
+          // Keeps related files together and makes the app's working dir
+          // pure scratch space. Falls back to workChannelDir if the source
+          // folder isn't writable (read-only mount, permission denied).
+          const sourceStem = path.basename(workVideoPath, srcExt);
+          const beside = path.join(path.dirname(workVideoPath), `${sourceStem}.playback.m4a`);
+          const fallback = path.join(workChannelDir, `${safeName}.playback.m4a`);
+          try {
+            if (!fs.existsSync(beside)) await encodeAacSidecar(workVideoPath, beside);
+            playbackPath = beside;
+          } catch (err) {
+            console.warn(`[audio] Could not write sidecar beside source (${err instanceof Error ? err.message : err}); using ${fallback}`);
+            if (!fs.existsSync(fallback)) await encodeAacSidecar(workVideoPath, fallback);
+            playbackPath = fallback;
+          }
+        }
         // The "video" file is already audio (mp3/m4a/wav/flac/etc).
         // Skip the demux step and re-encode straight to whisper-ready WAV.
         await extractAudio(workVideoPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
@@ -992,6 +1040,7 @@ export class Pipeline extends EventEmitter {
       updateQueueStatus(video.id, channel.id, {
         status: "complete",
         videoPath: job.videoPath || null,
+        playbackPath,
         mdPath: job.mdPath || null,
         wordCount: result.word_count,
       });
@@ -1313,12 +1362,21 @@ export class Pipeline extends EventEmitter {
         const workChannelDir = path.join(this.config.workingDir, channelFolder);
         if (!fs.existsSync(workChannelDir)) fs.mkdirSync(workChannelDir, { recursive: true });
 
-        const m4aRetPath = retainedM4aPath || path.join(workChannelDir, `${safeName}.m4a`);
-        if (!fs.existsSync(m4aRetPath)) {
-          await copyAudioTrack(videoPath, m4aRetPath);
+        // If the source is already audio (mp3 / ogg / flac / etc.), the
+        // m4a stream-copy step doesn't apply — m4a containers only carry
+        // AAC, so demuxing Vorbis/Opus/FLAC into m4a fails. Skip straight
+        // to whisper-ready WAV from the source.
+        if (isAudioOnlyPath(videoPath)) {
+          audioPath = path.join(workChannelDir, `${safeName}.wav`);
+          await extractAudio(videoPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
+        } else {
+          const m4aRetPath = retainedM4aPath || path.join(workChannelDir, `${safeName}.m4a`);
+          if (!fs.existsSync(m4aRetPath)) {
+            await copyAudioTrack(videoPath, m4aRetPath);
+          }
+          audioPath = replaceExtension(m4aRetPath, ".wav");
+          await extractAudio(m4aRetPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
         }
-        audioPath = replaceExtension(m4aRetPath, ".wav");
-        await extractAudio(m4aRetPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
       }
 
       // Transcribe
@@ -1437,25 +1495,29 @@ export class Pipeline extends EventEmitter {
         if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
       });
 
-      // Step 1: Fast extract audio — stream-copy an m4a temp, then convert to wav
-      const m4aPath = replaceExtension(filePath, ".m4a");
-      
-      // Check if an m4a already exists (from a previous download)
-      let sourceAudioPath = m4aPath;
-      if (!fs.existsSync(m4aPath)) {
-        // Stream-copy from the video (nearly instant, just demuxes)
-        await copyAudioTrack(filePath, m4aPath);
-      } else {
-        console.log(`[pipeline] Using existing audio track: ${m4aPath}`);
-      }
-
-      // Convert m4a to 16kHz mono WAV for whisper
       job.status = "extracting_audio";
       this.emit("jobUpdated", job);
 
-      const audioPath = replaceExtension(m4aPath, ".wav");
-      // Extract from the m4a (audio-only, much faster than re-decoding the full video)
-      await extractAudio(m4aPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
+      const audioPath = replaceExtension(filePath, ".wav");
+      // m4aPath: only meaningful for video sources (where we stream-copy a
+      // demuxed AAC track to skip re-decoding the full video). Audio
+      // sources go straight to WAV — m4a containers can only carry AAC, so
+      // demuxing Vorbis/Opus/FLAC into m4a fails. Downstream cleanup code
+      // checks for null before touching it.
+      const m4aPath: string | null = isAudioOnlyPath(filePath)
+        ? null
+        : replaceExtension(filePath, ".m4a");
+
+      if (m4aPath === null) {
+        await extractAudio(filePath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
+      } else {
+        if (!fs.existsSync(m4aPath)) {
+          await copyAudioTrack(filePath, m4aPath);
+        } else {
+          console.log(`[pipeline] Using existing audio track: ${m4aPath}`);
+        }
+        await extractAudio(m4aPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
+      }
 
       job.audioPath = audioPath;
       job.progress = 40;
@@ -1506,14 +1568,14 @@ export class Pipeline extends EventEmitter {
       } else {
         job.videoPath = destVideoPath;
       }
-      if (this.config.processing.keepAudio && m4aPath !== destM4aPath && fs.existsSync(m4aPath)) {
+      if (m4aPath && this.config.processing.keepAudio && m4aPath !== destM4aPath && fs.existsSync(m4aPath)) {
         fs.copyFileSync(m4aPath, destM4aPath);
         try { fs.unlinkSync(m4aPath); } catch {}
         job.audioPath = destM4aPath;
         console.log(`[pipeline] Moved audio to: ${destM4aPath}`);
       } else if (fs.existsSync(destM4aPath)) {
         job.audioPath = destM4aPath;
-      } else if (fs.existsSync(m4aPath)) {
+      } else if (m4aPath && fs.existsSync(m4aPath)) {
         try { fs.unlinkSync(m4aPath); } catch {}
       }
 
@@ -1617,6 +1679,7 @@ export class Pipeline extends EventEmitter {
       upload_date: video.uploadDate,
       status: "pending",
       video_path: null,
+      playback_path: null,
       md_path: null,
       word_count: 0,
       error: null,

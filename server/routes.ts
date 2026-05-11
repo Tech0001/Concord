@@ -17,16 +17,22 @@ import { summarizeVideo } from "./summarize-video";
 import { chat as llmChat } from "./llm";
 import {
   getEmbeddingStats, clearAllEmbeddings, setVideoAiSummary, hasVideoEmbeddings,
-  getSpeakersWithStats, getSpeakerById, createSpeaker, updateSpeaker, deleteSpeaker,
+  getCoveredVideoKeysForModel,
+  getSpeakersWithStats, getSpeakerById, createSpeaker, updateSpeaker, deleteSpeaker, mergeSpeakers,
   getUnidentifiedAssignments, getSpeakerAppearances, assignVideoSpeakerToGlobal,
   getVideoSpeakerSummary, getVideoSpeakerSummariesBatch,
   backfillVideoSpeakerMetadata, backfillAllZeroAirtimeAssignments,
   autoMatchUnidentifiedAgainstSpeaker, autoMatchAllUnidentified,
   getOrCreateNoiseSpeaker, pruneAllOrphanedAssignments,
   getArchiveStatus,
+  listChatConversations, createChatConversation, getChatConversation,
+  deleteChatConversation, updateChatConversation, appendChatMessage,
+  setChatMessageStarred, getChatMessage,
 } from "./db";
+import { askArchive, type ContextSource } from "./rag-chat";
 import {
   addClipLink,
+  addNoteAnchor,
   countByStatus,
   createTranscriptClip,
   CLIP_LINK_KINDS,
@@ -43,6 +49,9 @@ import {
   getQueueEntryByVideoId,
   getQueueList,
   listAllClipTags,
+  removeNoteAnchor,
+  syncLegacyAnchorColumns,
+  updateTranscriptClip,
   listRelatedTranscriptClips,
   getTranscriptSegmentsForVideo,
   getTranscriptSearchIndexStats,
@@ -56,7 +65,7 @@ import {
   setVideoNotes,
   updateQueueStatus,
 } from "./db";
-import { copyAudioTrack, getVideoStreamInfo } from "./audio";
+import { copyAudioTrack, encodeAacSidecar, getVideoStreamInfo } from "./audio";
 import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
 import path from "path";
 import fs from "fs";
@@ -890,18 +899,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders();
 
-    // Default behavior: catch-up only — skip videos that already have
-    // embeddings for this model. Wipe forces a full re-embed (used when
-    // changing models or rebuilding from scratch).
-    const allVideos = getQueueList({ status: "complete", limit: 100000 }).rows;
-    const videos = wipe
-      ? allVideos
-      : allVideos.filter((v) => !hasVideoEmbeddings(v.video_id, v.channel_id, model));
-    const alreadyCovered = allVideos.length - videos.length;
     const sse = (event: string, data: unknown) => {
       res.write(`event: ${event}\n`);
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
+
+    // Fire a "preparing" event immediately so the UI knows the request is
+    // alive while we compute the work list. Without this, the user sees
+    // nothing happen for a few seconds and assumes the connection died.
+    sse("preparing", { model });
+
+    // Default behavior: catch-up only — skip videos that already have
+    // embeddings for this model. Wipe forces a full re-embed (used when
+    // changing models or rebuilding from scratch). Single SQL query for
+    // the covered set instead of N round-trips through hasVideoEmbeddings.
+    const allVideos = getQueueList({ status: "complete", limit: 100000 }).rows;
+    let videos = allVideos;
+    if (!wipe) {
+      const covered = new Set(
+        getCoveredVideoKeysForModel(model).map(({ videoId, channelId }) => `${videoId}|${channelId}`),
+      );
+      videos = allVideos.filter((v) => !covered.has(`${v.video_id}|${v.channel_id}`));
+    }
+    const alreadyCovered = allVideos.length - videos.length;
 
     sse("start", { total: videos.length, model, alreadyCovered });
 
@@ -911,8 +931,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     for (const v of videos) {
       try {
         const r = await embedSegmentsForVideo(v.video_id, v.channel_id, model);
-        if (r.skipped) skipped++;
-        else totalSegments += r.segmentCount;
+        if (r.skipped) {
+          skipped++;
+          // Server log echo for debuggability — the SSE event also carries
+          // the reason, but having it in the dev log makes "why was THIS
+          // video skipped?" answerable without diffing the browser.
+          console.log(`[reindex] skipped ${v.video_id}: ${r.skipped}`);
+        } else {
+          totalSegments += r.segmentCount;
+        }
         sse("video", { ...r, done: ++done, total: videos.length });
       } catch (err) {
         sse("video", {
@@ -924,6 +951,179 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     sse("done", { total: videos.length, totalSegments, skipped, model });
+    res.end();
+  });
+
+  // ---- AI chat (RAG over the archive) ----
+
+  app.get("/api/chat/conversations", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ conversations: listChatConversations() });
+  });
+
+  app.get("/api/chat/conversations/:id", (req: Request<{ id: string }>, res: Response) => {
+    res.setHeader("Cache-Control", "no-store");
+    const conv = getChatConversation(req.params.id);
+    if (!conv) return res.status(404).json({ error: "Conversation not found" });
+    res.json(conv);
+  });
+
+  app.delete("/api/chat/conversations/:id", (req: Request<{ id: string }>, res: Response) => {
+    const ok = deleteChatConversation(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Conversation not found" });
+    res.json({ success: true });
+  });
+
+  app.patch("/api/chat/conversations/:id", (req: Request<{ id: string }>, res: Response) => {
+    const { title, pinned } = req.body || {};
+    const updates: { title?: string | null; pinned?: boolean } = {};
+    if (title !== undefined) updates.title = title === null ? null : String(title);
+    if (pinned !== undefined) updates.pinned = !!pinned;
+    const meta = updateChatConversation(req.params.id, updates);
+    if (!meta) return res.status(404).json({ error: "Conversation not found" });
+    res.json({ conversation: meta });
+  });
+
+  app.patch("/api/chat/messages/:id/star", (req: Request<{ id: string }>, res: Response) => {
+    const starred = !!req.body?.starred;
+    const ok = setChatMessageStarred(req.params.id, starred);
+    if (!ok) return res.status(404).json({ error: "Message not found" });
+    res.json({ success: true, starred });
+  });
+
+  // Streaming RAG ask endpoint. Body:
+  //   { question, conversationId?, channelIds?, topK?, perVideoCap? }
+  // Behavior:
+  //   - Creates a conversation if none provided (title from first ~60 chars)
+  //   - Persists the user message immediately (so refresh-mid-stream still
+  //     shows the question)
+  //   - Streams: context → delta… → done (or error)
+  //   - On stream completion, persists the assistant message + sources atomically
+  app.post("/api/llm/ask", async (req, res) => {
+    const cfg = pipeline.getConfig().llm;
+    if (!cfg.chatModel) {
+      return res.status(400).json({ error: "No chat model configured (set on the AI page first)" });
+    }
+    if (!cfg.embeddingModel) {
+      return res.status(400).json({ error: "No embedding model configured (needed for retrieval)" });
+    }
+
+    const question = String(req.body?.question || "").trim();
+    if (!question) return res.status(400).json({ error: "question is required" });
+
+    let conversationId: string = req.body?.conversationId ? String(req.body.conversationId) : "";
+    const channelIds: string[] | undefined = Array.isArray(req.body?.channelIds)
+      ? req.body.channelIds.map(String)
+      : undefined;
+    const topK = req.body?.topK ? Number(req.body.topK) : undefined;
+    const perVideoCap = req.body?.perVideoCap ? Number(req.body.perVideoCap) : undefined;
+
+    // History for multi-turn — pass last 4 turns (2 exchanges) verbatim.
+    let history: { role: "user" | "assistant"; content: string }[] = [];
+
+    if (conversationId) {
+      const existing = getChatConversation(conversationId);
+      if (!existing) return res.status(404).json({ error: "Conversation not found" });
+      history = existing.messages
+        .slice(-4)
+        .map((m) => ({ role: m.role, content: m.content }));
+    } else {
+      // Auto-title: first question, first ~60 chars, hard-trimmed at a word boundary.
+      const trimmed = question.length <= 60 ? question : question.slice(0, 57).replace(/\s+\S*$/, "") + "…";
+      conversationId = nanoid();
+      createChatConversation({ id: conversationId, title: trimmed });
+    }
+
+    // Persist user message immediately so the conversation reflects state
+    // even if the stream errors out mid-flight.
+    const userMessageId = nanoid();
+    appendChatMessage({
+      id: userMessageId,
+      conversationId,
+      role: "user",
+      content: question,
+    });
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const sse = (event: string, data: unknown) => {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    sse("conversation", { conversationId, userMessageId });
+
+    let assistantText = "";
+    let sources: ContextSource[] = [];
+    let errored = false;
+
+    // Cancel the upstream generator if the client disconnects mid-stream.
+    const abortCtl = new AbortController();
+    res.on("close", () => { if (!res.writableEnded) abortCtl.abort(); });
+
+    try {
+      for await (const evt of askArchive({
+        question,
+        history,
+        channelIds,
+        topK,
+        perVideoCap,
+        chatModel: cfg.chatModel,
+        embeddingModel: cfg.embeddingModel,
+        signal: abortCtl.signal,
+      })) {
+        if (evt.type === "context") {
+          sources = evt.sources;
+          sse("context", { sources, weakRetrieval: evt.weakRetrieval });
+        } else if (evt.type === "delta") {
+          assistantText += evt.text;
+          sse("delta", { text: evt.text });
+        } else if (evt.type === "done") {
+          sse("done", {});
+        } else if (evt.type === "error") {
+          errored = true;
+          sse("error", { error: evt.error });
+        }
+      }
+    } catch (err) {
+      errored = true;
+      sse("error", { error: err instanceof Error ? err.message : String(err) });
+    }
+
+    // Persist the assistant turn (+ sources) regardless of whether the
+    // stream completed cleanly — even partial answers are worth keeping
+    // when the user manually aborts or the LLM errors mid-generation.
+    if (assistantText.length > 0 || sources.length > 0) {
+      const assistantMessageId = nanoid();
+      try {
+        appendChatMessage({
+          id: assistantMessageId,
+          conversationId,
+          role: "assistant",
+          content: assistantText,
+          model: cfg.chatModel,
+          sources: sources.map((s) => ({
+            sourceIndex: s.sourceIndex,
+            videoId: s.videoId,
+            channelId: s.channelId,
+            segmentIndex: s.segmentIndex,
+            startSeconds: s.startSeconds,
+            endSeconds: s.endSeconds,
+            speaker: s.speaker,
+            excerpt: s.excerpt,
+            score: s.score,
+          })),
+        });
+        sse("persisted", { assistantMessageId });
+      } catch (err) {
+        sse("error", { error: `Failed to persist assistant message: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    }
+
+    if (!errored) sse("end", {});
     res.end();
   });
 
@@ -1404,6 +1604,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ speaker: updated });
   });
 
+  // Merge a duplicate speaker into another. Reassigns every
+  // video_speaker_assignments row from source → target, folds the source
+  // centroid into the target via count-weighted average, then deletes the
+  // source. Atomic.
+  app.post("/api/speakers/:id/merge", (req: Request<{ id: string }>, res) => {
+    try {
+      const targetId = String(req.body?.targetId || "");
+      if (!targetId) return res.status(400).json({ error: "targetId required" });
+      const result = mergeSpeakers(req.params.id, targetId);
+      res.json({ success: true, ...result });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Merge failed" });
+    }
+  });
+
   // "Mark as noise" — assigns one or more video-locals in a video to the
   // singleton noise speaker (creating it on first use). Doesn't take a
   // name/color from the user; the noise speaker is a fixed grey "(noise)"
@@ -1567,14 +1782,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/videos/library/:channelId/:videoId/stream", (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
+  app.get("/api/videos/library/:channelId/:videoId/stream", async (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
     try {
       const entry = getQueueEntry(req.params.videoId, req.params.channelId);
       if (!entry?.video_path) {
         return res.status(404).json({ error: "Video file is not recorded in the library" });
       }
 
-      const videoPath = path.resolve(entry.video_path);
+      // Prefer the browser-friendly playback sidecar when one exists (set
+      // at ingestion for Ogg-Speex / Ogg-FLAC / other codecs Firefox can't
+      // decode). Falls back to the original if the sidecar's missing on
+      // disk (e.g. workingDir was cleaned).
+      let sidecar = entry.playback_path ? path.resolve(entry.playback_path) : null;
+      let usingSidecar = !!sidecar && fs.existsSync(sidecar);
+
+      // Lazy fallback for entries that predate the playback-sidecar feature.
+      // If the source is an extension Firefox / Safari may not decode (Ogg,
+      // Opus standalone, etc.), generate a sidecar on first stream and save
+      // the path so subsequent streams are instant. Sidecar lives next to
+      // the source file; falls back to the app's working dir if the source
+      // folder is read-only.
+      const NEEDS_SIDECAR_EXTS = new Set([".ogg", ".oga", ".opus", ".flac", ".webm"]);
+      const sourceExt = path.extname(entry.video_path).toLowerCase();
+      if (!usingSidecar && NEEDS_SIDECAR_EXTS.has(sourceExt) && fs.existsSync(entry.video_path)) {
+        const sourceStem = path.basename(entry.video_path, sourceExt);
+        const beside = path.join(path.dirname(entry.video_path), `${sourceStem}.playback.m4a`);
+        const cacheDir = path.join(pipeline.getConfig().workingDir, "playback-cache");
+        const fallback = path.join(cacheDir, `${entry.video_id}.playback.m4a`);
+        let sidecarPath: string | null = null;
+        try {
+          if (fs.existsSync(beside)) {
+            sidecarPath = beside;
+          } else {
+            await encodeAacSidecar(entry.video_path, beside);
+            sidecarPath = beside;
+          }
+        } catch (err) {
+          console.warn(`[stream] Cannot write sidecar beside source for ${entry.video_id}; using ${fallback}:`, err);
+          try {
+            if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+            if (!fs.existsSync(fallback)) await encodeAacSidecar(entry.video_path, fallback);
+            sidecarPath = fallback;
+          } catch (err2) {
+            console.error(`[stream] Sidecar fallback also failed for ${entry.video_id}:`, err2);
+          }
+        }
+        if (sidecarPath) {
+          updateQueueStatus(entry.video_id, entry.channel_id, { playbackPath: sidecarPath });
+          sidecar = sidecarPath;
+          usingSidecar = true;
+        }
+      }
+
+      const videoPath = usingSidecar ? sidecar! : path.resolve(entry.video_path);
       if (!fs.existsSync(videoPath)) {
         return res.status(404).json({ error: "Video file not found on disk" });
       }
@@ -1870,43 +2130,132 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Create a note. Two input shapes accepted:
+  //   1. Legacy single-anchor: { videoId, channelId, startSeconds, endSeconds,
+  //      quote, title, note, tags } — back-compat for existing UI paths.
+  //   2. Multi-anchor: { title, note, tags, anchors: [{ videoId, channelId,
+  //      startSeconds, endSeconds, excerpt }, ...] } — used by AI chat
+  //      "save citation as note" and the future Notes page anchor picker.
   app.post("/api/clips", (req, res) => {
     try {
       const {
-        videoId,
-        channelId,
-        startSeconds,
-        endSeconds,
-        quote,
-        note,
-        title,
-        channelName,
-        uploadDate,
-        tags,
+        videoId, channelId, startSeconds, endSeconds, quote,
+        note, title, channelName, uploadDate, tags, anchors,
       } = req.body;
 
-      if (!videoId || !channelId || !quote) {
-        return res.status(400).json({ error: "videoId, channelId, and quote are required" });
+      // Three valid input shapes:
+      //   1. Standalone note: { title, note?, tags? } — anchors omitted or []
+      //   2. Single-anchor legacy: { videoId, channelId, quote, ... }
+      //   3. Multi-anchor: { title, anchors: [...], ... }
+      const hasAnchorsField = Array.isArray(anchors);
+      const multiAnchor = hasAnchorsField && anchors.length > 0;
+      const legacySingleAnchor = !hasAnchorsField && videoId && channelId && quote;
+      const standalone = hasAnchorsField && anchors.length === 0;
+
+      if (!multiAnchor && !legacySingleAnchor && !standalone) {
+        return res.status(400).json({
+          error: "Provide `anchors: []` for a standalone note, `anchors: [...]` for multi-anchor, or (videoId, channelId, quote) for legacy single-anchor input",
+        });
       }
 
-      const entry = getQueueEntry(String(videoId), String(channelId));
+      const normalizedAnchors = hasAnchorsField
+        ? anchors.map((a: any) => ({
+            videoId: String(a.videoId),
+            channelId: String(a.channelId),
+            startSeconds: a.startSeconds != null ? Number(a.startSeconds) : null,
+            endSeconds:   a.endSeconds   != null ? Number(a.endSeconds)   : null,
+            excerpt:      a.excerpt      != null ? String(a.excerpt)      : null,
+          }))
+        : undefined;
+
+      // Resolve a title fallback from the first anchor's video (if there is one).
+      let entryForFallback: ReturnType<typeof getQueueEntry> | undefined;
+      if (multiAnchor) {
+        entryForFallback = getQueueEntry(normalizedAnchors![0].videoId, normalizedAnchors![0].channelId);
+      } else if (legacySingleAnchor) {
+        entryForFallback = getQueueEntry(String(videoId), String(channelId));
+      }
+
+      const resolvedTitle = String(title || entryForFallback?.title || "Untitled note");
+
       const clip = createTranscriptClip({
         id: nanoid(),
-        videoId: String(videoId),
-        channelId: String(channelId),
-        title: String(title || entry?.title || "Untitled video"),
+        title: resolvedTitle,
         channelName: channelName !== undefined ? String(channelName) : null,
-        uploadDate: uploadDate || entry?.upload_date || null,
-        startSeconds: Number(startSeconds) || 0,
-        endSeconds: Number(endSeconds) || Number(startSeconds) || 0,
-        quote: String(quote),
+        uploadDate: uploadDate || entryForFallback?.upload_date || null,
         note: note ? String(note) : null,
         tags: Array.isArray(tags) ? tags.map(String) : undefined,
+        ...(hasAnchorsField
+          ? { anchors: normalizedAnchors }
+          : {
+              videoId: String(videoId),
+              channelId: String(channelId),
+              startSeconds: Number(startSeconds) || 0,
+              endSeconds: Number(endSeconds) || Number(startSeconds) || 0,
+              quote: String(quote),
+            }),
       });
 
       res.json({ success: true, clip });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed to save clip" });
+    }
+  });
+
+  // Edit a note's title or body. Tags are managed by the existing
+  // PATCH /api/clips/:clipId/tags endpoint; anchors via POST/DELETE
+  // .../anchors[/ordinal]. Body: { title?, note? }
+  app.patch("/api/clips/:clipId", (req: Request<{ clipId: string }>, res: Response) => {
+    try {
+      const { title, note } = req.body || {};
+      const fields: { title?: string; note?: string | null } = {};
+      if (title !== undefined) fields.title = String(title);
+      if (note !== undefined)  fields.note  = note === null ? null : String(note);
+      const updated = updateTranscriptClip(req.params.clipId, fields);
+      if (!updated) return res.status(404).json({ error: "Note not found" });
+      res.json({ note: updated });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Failed to update note" });
+    }
+  });
+
+  // Append an anchor to an existing note. Body: { videoId, channelId,
+  // startSeconds?, endSeconds?, excerpt? }. Returns the new anchor's
+  // ordinal so the client can address it later (e.g. for delete).
+  app.post("/api/clips/:clipId/anchors", (req: Request<{ clipId: string }>, res: Response) => {
+    try {
+      const { videoId, channelId, startSeconds, endSeconds, excerpt } = req.body || {};
+      if (!videoId || !channelId) {
+        return res.status(400).json({ error: "videoId and channelId are required" });
+      }
+      const ordinal = addNoteAnchor(req.params.clipId, {
+        videoId: String(videoId),
+        channelId: String(channelId),
+        startSeconds: startSeconds != null ? Number(startSeconds) : null,
+        endSeconds:   endSeconds   != null ? Number(endSeconds)   : null,
+        excerpt:      excerpt      != null ? String(excerpt)      : null,
+      });
+      res.json({ success: true, ordinal });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to add anchor" });
+    }
+  });
+
+  // Remove an anchor by ordinal. Refuses if it would leave the note with
+  // zero anchors (v1 schema requires ≥1).
+  app.delete("/api/clips/:clipId/anchors/:ordinal", (req: Request<{ clipId: string; ordinal: string }>, res: Response) => {
+    try {
+      const ordinal = Number(req.params.ordinal);
+      if (!Number.isInteger(ordinal) || ordinal < 1) {
+        return res.status(400).json({ error: "ordinal must be a positive integer" });
+      }
+      const removed = removeNoteAnchor(req.params.clipId, ordinal);
+      if (!removed) return res.status(404).json({ error: "Anchor not found" });
+      // Keep legacy single-anchor columns in sync with the new first anchor.
+      syncLegacyAnchorColumns(req.params.clipId);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Failed to remove anchor" });
     }
   });
 

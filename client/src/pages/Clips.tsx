@@ -10,12 +10,14 @@ import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Bookmark,
   Calendar,
   ChevronDown,
   ChevronUp,
   Clock,
   Link as LinkIcon,
+  NotebookText,
+  Pencil,
+  Plus,
   Play,
   RefreshCw,
   Search,
@@ -29,6 +31,24 @@ interface Channel {
   name: string;
   url: string;
   enabled: boolean;
+}
+
+interface ClipAnchor {
+  ordinal: number;
+  video_id: string;
+  channel_id: string;
+  channel_name: string | null;
+  video_title: string | null;
+  upload_date: string | null;
+  start_seconds: number | null;
+  end_seconds: number | null;
+  excerpt: string | null;
+  video_path: string | null;
+  md_path: string | null;
+  status: string | null;
+  is_live: number | null;
+  duration: number | null;
+  word_count: number | null;
 }
 
 interface ClipEntry {
@@ -50,6 +70,7 @@ interface ClipEntry {
   duration: number | null;
   status: string;
   tags: string[];
+  anchors: ClipAnchor[];
 }
 
 interface TagCount {
@@ -190,7 +211,7 @@ export default function Clips() {
       setChannels(configData.channels || []);
       await Promise.all([loadTags(), loadLinksFor(rows.map(r => r.id))]);
     } catch (error: any) {
-      toast({ variant: "destructive", title: "Clips load failed", description: error.message });
+      toast({ variant: "destructive", title: "Notes load failed", description: error.message });
     } finally {
       setLoading(false);
     }
@@ -249,7 +270,7 @@ export default function Clips() {
   };
 
   const deleteTagGlobal = async (tag: string, includeDescendants = false) => {
-    if (!window.confirm(`Remove tag "${tag}"${includeDescendants ? " (with descendants)" : ""} from all clips?`)) return;
+    if (!window.confirm(`Remove tag "${tag}"${includeDescendants ? " (with descendants)" : ""} from all notes?`)) return;
     try {
       const response = await apiRequest(
         "DELETE",
@@ -342,6 +363,104 @@ export default function Clips() {
     setDrawerOpen(true);
   };
 
+  const openAnchor = (anchor: ClipAnchor) => {
+    setDrawerVideo({
+      video_id: anchor.video_id,
+      channel_id: anchor.channel_id,
+      channel_name: anchor.channel_name || anchor.channel_id,
+      title: anchor.video_title || "Source video",
+      upload_date: anchor.upload_date,
+      duration: anchor.duration,
+      status: anchor.status ?? undefined,
+      is_live: anchor.is_live ?? undefined,
+      video_path: anchor.video_path,
+      md_path: anchor.md_path,
+      word_count: anchor.word_count ?? 0,
+    });
+    setDrawerSeconds(anchor.start_seconds ?? 0);
+    setDrawerOpen(true);
+  };
+
+  const removeAnchor = async (clip: ClipEntry, anchor: ClipAnchor) => {
+    const willBeStandalone = clip.anchors.length === 1;
+    const prompt = willBeStandalone
+      ? `Remove the last anchor on "${clip.title}"? The note will become standalone (no video link).`
+      : `Remove this anchor from "${clip.title}"?`;
+    if (!confirm(prompt)) return;
+    try {
+      await apiRequest("DELETE", `/api/clips/${clip.id}/anchors/${anchor.ordinal}`);
+      await loadData();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Remove anchor failed", description: error.message });
+    }
+  };
+
+  const [addAnchorFor, setAddAnchorFor] = useState<ClipEntry | null>(null);
+  const [newNoteOpen, setNewNoteOpen] = useState(false);
+  const [editingNote, setEditingNote] = useState<ClipEntry | null>(null);
+
+  // 2-pane state — which note is currently selected in the sidebar.
+  // Auto-select first note when list loads; null = empty detail pane.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  type SortMode = "recent" | "created" | "title" | "anchors";
+  const [sortMode, setSortMode] = useState<SortMode>("recent");
+  type AnchorFilter = "all" | "standalone" | "anchored";
+  const [anchorFilter, setAnchorFilter] = useState<AnchorFilter>("all");
+
+  // Per-detail inline-edit drafts so the user types into the pane and we
+  // save on blur. Keyed by note id so switching notes doesn't trample.
+  const [titleDraft, setTitleDraft] = useState<Record<string, string>>({});
+  const [bodyDraft, setBodyDraft] = useState<Record<string, string>>({});
+
+  const visibleClips = useMemo(() => {
+    let list = clips.slice();
+    if (anchorFilter === "standalone") list = list.filter((c) => c.anchors.length === 0);
+    else if (anchorFilter === "anchored") list = list.filter((c) => c.anchors.length > 0);
+    switch (sortMode) {
+      case "recent": list.sort((a, b) => b.created_at.localeCompare(a.created_at)); break;
+      case "created": list.sort((a, b) => a.created_at.localeCompare(b.created_at)); break;
+      case "title": list.sort((a, b) => a.title.localeCompare(b.title)); break;
+      case "anchors": list.sort((a, b) => b.anchors.length - a.anchors.length || b.created_at.localeCompare(a.created_at)); break;
+    }
+    return list;
+  }, [clips, anchorFilter, sortMode]);
+
+  // Auto-select the first visible note when the list changes and the
+  // current selection is no longer visible (or none is selected yet).
+  useEffect(() => {
+    if (visibleClips.length === 0) { setSelectedId(null); return; }
+    if (!selectedId || !visibleClips.find((c) => c.id === selectedId)) {
+      setSelectedId(visibleClips[0].id);
+    }
+  }, [visibleClips, selectedId]);
+
+  const selectedClip = useMemo(
+    () => clips.find((c) => c.id === selectedId) ?? null,
+    [clips, selectedId],
+  );
+
+  const saveTitleInline = async (clip: ClipEntry) => {
+    const next = (titleDraft[clip.id] ?? clip.title).trim();
+    if (!next || next === clip.title) return;
+    try {
+      await apiRequest("PATCH", `/api/clips/${clip.id}`, { title: next });
+      setClips((arr) => arr.map((c) => c.id === clip.id ? { ...c, title: next } : c));
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Save failed", description: e.message });
+    }
+  };
+
+  const saveBodyInline = async (clip: ClipEntry) => {
+    const next = (bodyDraft[clip.id] ?? clip.note ?? "").trim();
+    if ((next || null) === (clip.note || null)) return;
+    try {
+      await apiRequest("PATCH", `/api/clips/${clip.id}`, { note: next || null });
+      setClips((arr) => arr.map((c) => c.id === clip.id ? { ...c, note: next || null } : c));
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Save failed", description: e.message });
+    }
+  };
+
   const popularTags = allTags.slice(0, POPULAR_LIMIT);
 
   return (
@@ -350,8 +469,8 @@ export default function Clips() {
         <CardHeader>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <CardTitle className="flex items-center gap-2">
-              <Bookmark className="h-4 w-4" />
-              Clips
+              <NotebookText className="h-4 w-4" />
+              Notes
             </CardTitle>
             <div className="flex flex-wrap gap-2">
               <div className="relative">
@@ -360,7 +479,7 @@ export default function Clips() {
                   value={query}
                   onChange={event => setQuery(event.target.value)}
                   onKeyDown={event => { if (event.key === "Enter") loadData(); }}
-                  placeholder="Search clips and notes"
+                  placeholder="Search notes"
                   className="h-9 pl-8 w-full sm:w-80"
                 />
               </div>
@@ -371,6 +490,10 @@ export default function Clips() {
                   {channels.map(channel => <SelectItem key={channel.id} value={channel.id}>{channel.name}</SelectItem>)}
                 </SelectContent>
               </Select>
+              <Button size="sm" onClick={() => setNewNoteOpen(true)} className="h-9">
+                <Plus className="h-4 w-4 mr-1" />
+                New note
+              </Button>
               <Button size="sm" variant="outline" onClick={loadData} disabled={loading} className="h-9">
                 <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
                 Refresh
@@ -418,7 +541,7 @@ export default function Clips() {
           )}
 
           <div className="flex flex-wrap gap-2 text-xs">
-            <Badge variant="secondary">{clips.length} clips</Badge>
+            <Badge variant="secondary">{clips.length} notes</Badge>
             <Badge variant="outline">{clipCountByVideo} videos</Badge>
             <Badge variant="outline">{allTags.length} tags</Badge>
             <Button
@@ -479,7 +602,7 @@ export default function Clips() {
                       <button
                         type="button"
                         onClick={() => deleteTagGlobal(tag, false)}
-                        title="Remove tag from all clips"
+                        title="Remove tag from all notes"
                         className="-mr-0.5 inline-flex h-3 w-3 items-center justify-center rounded-sm text-destructive hover:bg-destructive/10"
                         aria-label={`Remove tag ${tag} globally`}
                       >
@@ -495,100 +618,98 @@ export default function Clips() {
         )}
       </Card>
 
-      <div className="space-y-3">
-        {clips.map(clip => {
-          const editingThis = editingTagsForClipId === clip.id;
-          return (
-            <Card key={clip.id}>
-              <CardContent className="p-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div className="min-w-0 space-y-2">
-                    <div>
-                      <div className="font-medium line-clamp-2">{clip.title}</div>
-                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                        <span>{clip.channel_name || clip.channel_id}</span>
-                        <span className="inline-flex items-center gap-1">
-                          <Calendar className="h-3 w-3" />
-                          {formatUploadDate(clip.upload_date)}
-                        </span>
-                        <span className="inline-flex items-center gap-1">
-                          <Clock className="h-3 w-3" />
-                          {formatTimestamp(clip.start_seconds)} - {formatTimestamp(clip.end_seconds)}
-                        </span>
-                      </div>
-                    </div>
-                    <p className="text-sm leading-6">{clip.quote}</p>
-                    {clip.note && (
-                      <p className="rounded-md border bg-muted/50 p-2 text-sm text-muted-foreground">{clip.note}</p>
-                    )}
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {clip.tags.map(tag => (
-                        <TagChip
-                          key={tag}
-                          tag={tag}
-                          variant="outline"
-                          onClick={() => toggleTagFilter(tag)}
-                        />
-                      ))}
-                      {editingThis ? (
-                        <TagPicker
-                          value={clip.tags}
-                          onChange={tags => updateClipTags(clip, tags)}
-                          options={allTags}
-                          size="sm"
-                          onOpen={loadTags}
-                          quote={clip.quote}
-                        />
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-6 px-2 text-[11px] text-muted-foreground"
-                          onClick={() => setEditingTagsForClipId(clip.id)}
-                        >
-                          {clip.tags.length ? "Edit tags" : "+ Add tags"}
-                        </Button>
-                      )}
-                      {editingThis && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-6 px-2 text-[11px]"
-                          onClick={() => setEditingTagsForClipId(null)}
-                        >
-                          Done
-                        </Button>
-                      )}
-                    </div>
+      {/* 2-pane: sidebar list + detail pane. On narrow widths stacks
+          vertically — the user picks a note from the top list, the detail
+          renders below. */}
+      <div className="grid gap-3 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className="space-y-2">
+          <div className="flex items-center gap-1.5">
+            <Select value={sortMode} onValueChange={(v) => setSortMode(v as SortMode)}>
+              <SelectTrigger className="h-8 flex-1 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="recent" className="text-xs">Recent first</SelectItem>
+                <SelectItem value="created" className="text-xs">Oldest first</SelectItem>
+                <SelectItem value="title" className="text-xs">Title A–Z</SelectItem>
+                <SelectItem value="anchors" className="text-xs">Most anchors</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={anchorFilter} onValueChange={(v) => setAnchorFilter(v as AnchorFilter)}>
+              <SelectTrigger className="h-8 w-[140px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all" className="text-xs">All notes</SelectItem>
+                <SelectItem value="anchored" className="text-xs">Anchored only</SelectItem>
+                <SelectItem value="standalone" className="text-xs">Standalone only</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1 max-h-[calc(100vh-260px)] overflow-y-auto rounded-md border bg-card p-1">
+            {visibleClips.length === 0 && (
+              <div className="p-4 text-center text-xs text-muted-foreground">No notes match these filters.</div>
+            )}
+            {visibleClips.map((c) => {
+              const active = c.id === selectedId;
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => setSelectedId(c.id)}
+                  className={`block w-full rounded px-2 py-1.5 text-left transition-colors hover:bg-secondary ${active ? "bg-secondary" : ""}`}
+                >
+                  <div className="line-clamp-2 text-sm font-medium leading-tight">{c.title}</div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                    <span>
+                      {c.anchors.length === 0
+                        ? "standalone"
+                        : c.anchors.length === 1
+                          ? "1 anchor"
+                          : `${c.anchors.length} anchors`}
+                    </span>
+                    {c.tags.length > 0 && <span>· {c.tags.length} tag{c.tags.length === 1 ? "" : "s"}</span>}
+                    <span className="ml-auto opacity-60">{c.created_at.slice(5, 10)}</span>
+                  </div>
+                  {c.note && (
+                    <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{c.note}</div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </aside>
 
-                    <ClipLinks
-                      clipId={clip.id}
-                      links={linksByClipId[clip.id] || []}
-                      onRemove={link => removeLink(link, clip.id)}
-                      onAdd={() => openLinkPicker(clip)}
-                    />
-                  </div>
-                  <div className="flex shrink-0 gap-2 md:justify-end">
-                    <Button size="sm" variant="outline" disabled={!clip.video_path} onClick={() => openClip(clip)}>
-                      <Play className="h-3 w-3" />
-                      Open
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => deleteClip(clip)}>
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
+        <section className="min-w-0">
+          {!selectedClip ? (
+            <Card>
+              <CardContent className="p-6 text-center text-sm text-muted-foreground">
+                {clips.length === 0
+                  ? <>No notes yet. Click <strong>+ New note</strong> above to write one — or save a citation from the AI page.</>
+                  : "Pick a note on the left."}
               </CardContent>
             </Card>
-          );
-        })}
-        {!clips.length && (
-          <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
-              No clips match these filters.
-            </CardContent>
-          </Card>
-        )}
+          ) : (
+            <NoteDetailPane
+              clip={selectedClip}
+              titleDraft={titleDraft[selectedClip.id] ?? selectedClip.title}
+              bodyDraft={bodyDraft[selectedClip.id] ?? selectedClip.note ?? ""}
+              onTitleChange={(v) => setTitleDraft((m) => ({ ...m, [selectedClip.id]: v }))}
+              onBodyChange={(v) => setBodyDraft((m) => ({ ...m, [selectedClip.id]: v }))}
+              onTitleBlur={() => saveTitleInline(selectedClip)}
+              onBodyBlur={() => saveBodyInline(selectedClip)}
+              editingTags={editingTagsForClipId === selectedClip.id}
+              onEditTagsStart={() => setEditingTagsForClipId(selectedClip.id)}
+              onEditTagsDone={() => setEditingTagsForClipId(null)}
+              onTagsChange={(tags) => updateClipTags(selectedClip, tags)}
+              allTags={allTags}
+              onLoadTags={loadTags}
+              onTagChipClick={toggleTagFilter}
+              onPlayAnchor={openAnchor}
+              onRemoveAnchor={(a) => removeAnchor(selectedClip, a)}
+              onAddAnchor={() => setAddAnchorFor(selectedClip)}
+              links={linksByClipId[selectedClip.id] || []}
+              onRemoveLink={(link) => removeLink(link, selectedClip.id)}
+              onAddLink={() => openLinkPicker(selectedClip)}
+              onDelete={() => deleteClip(selectedClip)}
+            />
+          )}
+        </section>
       </div>
 
       <VideoDrawer
@@ -597,6 +718,47 @@ export default function Clips() {
         initialSeconds={drawerSeconds}
         onOpenChange={setDrawerOpen}
       />
+
+      {addAnchorFor && (
+        <AddAnchorDialog
+          note={addAnchorFor}
+          onClose={() => setAddAnchorFor(null)}
+          onSaved={() => {
+            setAddAnchorFor(null);
+            loadData();
+            toast({ title: "Anchor added" });
+          }}
+        />
+      )}
+
+      {newNoteOpen && (
+        <NoteEditorDialog
+          mode="create"
+          allTags={allTags}
+          onLoadTags={loadTags}
+          onClose={() => setNewNoteOpen(false)}
+          onSaved={() => {
+            setNewNoteOpen(false);
+            loadData();
+            toast({ title: "Note created" });
+          }}
+        />
+      )}
+
+      {editingNote && (
+        <NoteEditorDialog
+          mode="edit"
+          note={editingNote}
+          allTags={allTags}
+          onLoadTags={loadTags}
+          onClose={() => setEditingNote(null)}
+          onSaved={() => {
+            setEditingNote(null);
+            loadData();
+            toast({ title: "Note updated" });
+          }}
+        />
+      )}
 
       <Sheet open={!!linkPickerSourceId} onOpenChange={open => { if (!open) closeLinkPicker(); }}>
         <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
@@ -665,10 +827,10 @@ export default function Clips() {
                     <p className="p-3 text-sm text-muted-foreground">Searching…</p>
                   )}
                   {!linkPickerSearching && linkPickerResults.length === 0 && linkPickerQuery && (
-                    <p className="p-3 text-sm text-muted-foreground">No clips match.</p>
+                    <p className="p-3 text-sm text-muted-foreground">No notes match.</p>
                   )}
                   {!linkPickerSearching && !linkPickerQuery && (
-                    <p className="p-3 text-sm text-muted-foreground">Type to search your saved clips.</p>
+                    <p className="p-3 text-sm text-muted-foreground">Type to search your saved notes.</p>
                   )}
                   {linkPickerResults.map(target => (
                     <button
@@ -750,5 +912,466 @@ function ClipLinks({ links, onRemove, onAdd }: ClipLinksProps) {
         {links.length ? "Add another link" : "+ Link to another clip"}
       </Button>
     </div>
+  );
+}
+
+interface AnchorListProps {
+  anchors: ClipAnchor[];
+  onPlay: (anchor: ClipAnchor) => void;
+  onRemove: (anchor: ClipAnchor) => void;
+  onAdd: () => void;
+}
+
+function AnchorList({ anchors, onPlay, onRemove, onAdd }: AnchorListProps) {
+  return (
+    <div className="space-y-1.5">
+      {anchors.length > 1 && (
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          {anchors.length} anchors
+        </div>
+      )}
+      {anchors.length === 0 && (
+        <div className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+          Standalone note — no anchors yet. Add one to link this thought to a video moment.
+        </div>
+      )}
+      {anchors.map((a) => (
+        <div key={a.ordinal} className="rounded-md border bg-muted/30 px-2.5 py-1.5">
+          <div className="flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium" title={a.video_title ?? ""}>
+              {a.video_title ?? "(unknown video)"}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2"
+              disabled={!a.video_path}
+              onClick={() => onPlay(a)}
+              title={a.video_path ? "Play at this moment" : "No saved video file"}
+            >
+              <Play className="h-3 w-3" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-muted-foreground hover:text-destructive"
+              onClick={() => onRemove(a)}
+              title="Remove this anchor"
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+          <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+            <span>{a.channel_name || a.channel_id}</span>
+            {a.upload_date && (
+              <span className="inline-flex items-center gap-1">
+                <Calendar className="h-3 w-3" />
+                {formatUploadDate(a.upload_date)}
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              {a.start_seconds == null ? "whole video" : `${formatTimestamp(a.start_seconds)} - ${formatTimestamp(a.end_seconds ?? a.start_seconds)}`}
+            </span>
+          </div>
+          {a.excerpt && (
+            <p className="mt-1 text-[12px] italic leading-5 text-muted-foreground">"{a.excerpt}"</p>
+          )}
+        </div>
+      ))}
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-6 px-2 text-[11px] text-muted-foreground"
+        onClick={onAdd}
+      >
+        <Plus className="h-3 w-3" />
+        Add anchor
+      </Button>
+    </div>
+  );
+}
+
+interface VideoOption {
+  video_id: string;
+  channel_id: string;
+  title: string;
+  channel_name: string | null;
+  upload_date: string | null;
+}
+
+interface AddAnchorDialogProps {
+  note: ClipEntry;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+function AddAnchorDialog({ note, onClose, onSaved }: AddAnchorDialogProps) {
+  const { toast } = useToast();
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<VideoOption[]>([]);
+  const [picked, setPicked] = useState<VideoOption | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [excerpt, setExcerpt] = useState("");
+  const [whole, setWhole] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Lightweight video search via the existing pipeline queue list.
+  // Filters on the title field; capped at 25 results to keep the dropdown
+  // tidy on archives with hundreds of videos.
+  useEffect(() => {
+    const handle = setTimeout(async () => {
+      if (!query.trim()) { setResults([]); return; }
+      setSearching(true);
+      try {
+        const r = await apiRequest("GET", `/api/pipeline/queue?status=complete&q=${encodeURIComponent(query.trim())}&limit=25`);
+        const data = await r.json() as { recent: Array<VideoOption> };
+        setResults(data.recent ?? []);
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 200);
+    return () => clearTimeout(handle);
+  }, [query]);
+
+  const save = async () => {
+    if (!picked) return;
+    setSaving(true);
+    try {
+      const startNum = whole ? null : (start.trim() ? Number(start) : 0);
+      const endNum = whole ? null : (end.trim() ? Number(end) : startNum);
+      await apiRequest("POST", `/api/clips/${note.id}/anchors`, {
+        videoId: picked.video_id,
+        channelId: picked.channel_id,
+        startSeconds: startNum,
+        endSeconds: endNum,
+        excerpt: excerpt.trim() || null,
+      });
+      onSaved();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Add anchor failed", description: error.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm" onClick={onClose}>
+      <Card className="w-full max-w-xl" onClick={(e) => e.stopPropagation()}>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Plus className="h-4 w-4" /> Add anchor to "{note.title}"
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Search videos</label>
+            <Input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Type part of the video title…"
+              className="text-sm"
+            />
+          </div>
+
+          {results.length > 0 && !picked && (
+            <div className="max-h-48 overflow-y-auto rounded-md border">
+              {results.map((v) => (
+                <button
+                  key={`${v.channel_id}:${v.video_id}`}
+                  onClick={() => setPicked(v)}
+                  className="block w-full border-b px-2.5 py-1.5 text-left last:border-0 hover:bg-secondary"
+                >
+                  <div className="truncate text-sm">{v.title}</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {v.channel_name || v.channel_id} {v.upload_date ? `· ${formatUploadDate(v.upload_date)}` : ""}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {searching && <div className="text-xs text-muted-foreground">Searching…</div>}
+
+          {picked && (
+            <div className="space-y-3 rounded-md border bg-muted/30 p-2.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{picked.title}</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {picked.channel_name || picked.channel_id}
+                  </div>
+                </div>
+                <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setPicked(null)}>
+                  Change
+                </Button>
+              </div>
+
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" checked={whole} onChange={(e) => setWhole(e.target.checked)} />
+                Anchor to the whole video (no specific moment)
+              </label>
+
+              {!whole && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Start (seconds)</label>
+                    <Input
+                      type="number"
+                      value={start}
+                      onChange={(e) => setStart(e.target.value)}
+                      placeholder="0"
+                      className="text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">End (seconds)</label>
+                    <Input
+                      type="number"
+                      value={end}
+                      onChange={(e) => setEnd(e.target.value)}
+                      placeholder="optional"
+                      className="text-sm"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Excerpt (optional — transcript text at this moment)</label>
+                <textarea
+                  value={excerpt}
+                  onChange={(e) => setExcerpt(e.target.value)}
+                  rows={3}
+                  className="flex w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+            <Button onClick={save} disabled={!picked || saving}>
+              {saving ? "Adding…" : "Add anchor"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+interface NoteEditorDialogProps {
+  mode: "create" | "edit";
+  note?: ClipEntry;
+  allTags: TagCount[];
+  onLoadTags: () => void;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+function NoteEditorDialog({ mode, note, allTags, onLoadTags, onClose, onSaved }: NoteEditorDialogProps) {
+  const { toast } = useToast();
+  const [title, setTitle] = useState(note?.title ?? "");
+  const [body, setBody] = useState(note?.note ?? "");
+  const [tags, setTags] = useState<string[]>(note?.tags ?? []);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!title.trim()) {
+      toast({ variant: "destructive", title: "Title required" });
+      return;
+    }
+    setSaving(true);
+    try {
+      if (mode === "create") {
+        // Standalone note — no anchors. Add them later via "+ Add anchor"
+        // on the note card or via "+ Add to note" in the VideoDrawer.
+        await apiRequest("POST", "/api/clips", {
+          title: title.trim(),
+          note: body.trim() || null,
+          tags,
+          anchors: [],
+        });
+      } else if (note) {
+        await apiRequest("PATCH", `/api/clips/${note.id}`, {
+          title: title.trim(),
+          note: body.trim() || null,
+        });
+        // Tags update is its own endpoint.
+        const sameTags = tags.length === note.tags.length && tags.every((t) => note.tags.includes(t));
+        if (!sameTags) {
+          await apiRequest("PATCH", `/api/clips/${note.id}/tags`, { tags });
+        }
+      }
+      onSaved();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Save failed", description: error.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm" onClick={onClose}>
+      <Card className="w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            {mode === "create" ? <Plus className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+            {mode === "create" ? "New note" : "Edit note"}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Title</label>
+            <Input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} className="text-sm" placeholder="Short summary of the thought" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Body</label>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={8}
+              placeholder="Type the thought here. Anchor it to videos later as evidence."
+              className="flex w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Tags</label>
+            <TagPicker value={tags} onChange={setTags} options={allTags} size="sm" placeholder="Pick or add tags…" onOpen={onLoadTags} />
+          </div>
+          {mode === "create" && (
+            <div className="text-[11px] text-muted-foreground">
+              You can save without anchoring to a video. Add anchors later from the note card, or from the VideoDrawer's "+ Add to note" button while watching.
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+            <Button onClick={save} disabled={saving || !title.trim()}>
+              {saving ? "Saving…" : (mode === "create" ? "Create" : "Save")}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+interface NoteDetailPaneProps {
+  clip: ClipEntry;
+  titleDraft: string;
+  bodyDraft: string;
+  onTitleChange: (v: string) => void;
+  onBodyChange: (v: string) => void;
+  onTitleBlur: () => void;
+  onBodyBlur: () => void;
+  editingTags: boolean;
+  onEditTagsStart: () => void;
+  onEditTagsDone: () => void;
+  onTagsChange: (tags: string[]) => void;
+  allTags: TagCount[];
+  onLoadTags: () => void;
+  onTagChipClick: (tag: string) => void;
+  onPlayAnchor: (anchor: ClipAnchor) => void;
+  onRemoveAnchor: (anchor: ClipAnchor) => void;
+  onAddAnchor: () => void;
+  links: ClipLink[];
+  onRemoveLink: (link: ClipLink) => void;
+  onAddLink: () => void;
+  onDelete: () => void;
+}
+
+function NoteDetailPane({
+  clip, titleDraft, bodyDraft, onTitleChange, onBodyChange, onTitleBlur, onBodyBlur,
+  editingTags, onEditTagsStart, onEditTagsDone, onTagsChange, allTags, onLoadTags, onTagChipClick,
+  onPlayAnchor, onRemoveAnchor, onAddAnchor,
+  links, onRemoveLink, onAddLink,
+  onDelete,
+}: NoteDetailPaneProps) {
+  return (
+    <Card>
+      <CardContent className="space-y-4 p-4">
+        <div className="flex items-start gap-2">
+          <Input
+            value={titleDraft}
+            onChange={(e) => onTitleChange(e.target.value)}
+            onBlur={onTitleBlur}
+            placeholder="Note title"
+            className="border-transparent bg-transparent px-2 text-base font-semibold focus-visible:border-input"
+          />
+          <Button size="sm" variant="ghost" onClick={onDelete} title="Delete note">
+            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+          </Button>
+        </div>
+
+        <textarea
+          value={bodyDraft}
+          onChange={(e) => onBodyChange(e.target.value)}
+          onBlur={onBodyBlur}
+          rows={6}
+          placeholder="Type your thought here. Anchor it to videos as evidence below."
+          className="flex w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm leading-6 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          {clip.tags.map((tag) => (
+            <TagChip key={tag} tag={tag} variant="outline" onClick={() => onTagChipClick(tag)} />
+          ))}
+          {editingTags ? (
+            <>
+              <TagPicker
+                value={clip.tags}
+                onChange={onTagsChange}
+                options={allTags}
+                size="sm"
+                onOpen={onLoadTags}
+                quote={clip.quote}
+              />
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={onEditTagsDone}>
+                Done
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-[11px] text-muted-foreground"
+              onClick={onEditTagsStart}
+            >
+              {clip.tags.length ? "Edit tags" : "+ Add tags"}
+            </Button>
+          )}
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+            {clip.anchors.length === 0 ? "Anchors (none)" : `Anchors (${clip.anchors.length})`}
+          </div>
+          <AnchorList
+            anchors={clip.anchors}
+            onPlay={onPlayAnchor}
+            onRemove={onRemoveAnchor}
+            onAdd={onAddAnchor}
+          />
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+            Linked notes {links.length > 0 && <span className="opacity-60">({links.length})</span>}
+          </div>
+          <ClipLinks
+            clipId={clip.id}
+            links={links}
+            onRemove={onRemoveLink}
+            onAdd={onAddLink}
+          />
+        </div>
+      </CardContent>
+    </Card>
   );
 }

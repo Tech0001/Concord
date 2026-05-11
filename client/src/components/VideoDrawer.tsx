@@ -13,7 +13,8 @@ import {
 import { TagChip, TagPicker } from "@/components/TagPicker";
 import { SpeakerLabelDialog } from "@/components/SpeakerLabelDialog";
 import { apiRequest } from "@/lib/queryClient";
-import { Bookmark, BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, Download, FileText, Loader2, Play, Radio, RefreshCw, Scissors, Search, Sparkles, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Bookmark, BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, Download, FileText, Loader2, Play, Plus, Radio, RefreshCw, Scissors, Search, Sparkles, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 export interface VideoDrawerEntry {
@@ -947,8 +948,27 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                           className="h-8 text-xs"
                         />
                         <Button size="sm" className="h-8 whitespace-nowrap text-xs" disabled={savingClip} onClick={saveSelectedRange}>
-                          Save selected clip
+                          Save as new
                         </Button>
+                        {video && rangeBounds && (
+                          <AddAnchorToNotePopover
+                            anchor={{
+                              videoId: video.video_id,
+                              channelId: video.channel_id,
+                              startSeconds: segments[rangeBounds.start]?.start ?? 0,
+                              endSeconds: segments[rangeBounds.end]?.end ?? 0,
+                              excerpt: segments.slice(rangeBounds.start, rangeBounds.end + 1).map((s) => s.text).join("\n\n"),
+                            }}
+                            onSaved={() => {
+                              setSelectionStartIndex(null);
+                              setSelectionEndIndex(null);
+                              setRangeNote("");
+                              setRangeClipTags([]);
+                              loadRelatedClips();
+                              toast({ title: "Anchor added to note" });
+                            }}
+                          />
+                        )}
                       </div>
                       <TagPicker
                         value={rangeClipTags}
@@ -1102,8 +1122,27 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                                 disabled={savingClip}
                                 onClick={() => saveClip(segment, index)}
                               >
-                                Save
+                                Save as new
                               </Button>
+                              {video && (
+                                <AddAnchorToNotePopover
+                                  size="sm"
+                                  anchor={{
+                                    videoId: video.video_id,
+                                    channelId: video.channel_id,
+                                    startSeconds: segment.start,
+                                    endSeconds: segment.end,
+                                    excerpt: segment.text,
+                                  }}
+                                  onSaved={() => {
+                                    setClipSegmentIndex(null);
+                                    setClipNote("");
+                                    setSegClipTags([]);
+                                    loadRelatedClips();
+                                    toast({ title: "Anchor added to note" });
+                                  }}
+                                />
+                              )}
                             </>
                           )}
                         </div>
@@ -1135,11 +1174,11 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
               </div>
 
               <RelatedClipSection
-                heading="Related Clips · By tag"
-                description="From other videos that share at least one tag"
+                heading="Related notes · By tag"
+                description="Notes from other videos that share at least one tag"
                 clips={byTagClips}
                 loading={loadingRelated}
-                emptyMessage="No tagged clips elsewhere match. Add tags when saving to surface cross-video links."
+                emptyMessage="No tagged notes elsewhere match. Add tags when saving to surface cross-video links."
                 showOverlap
                 onSelect={clip => {
                   if (clip.video_id === video.video_id && clip.channel_id === video.channel_id) {
@@ -1154,11 +1193,11 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
               />
 
               <RelatedClipSection
-                heading="Same video"
+                heading="Notes on this video"
                 description={null}
                 clips={sameVideoClips}
                 loading={loadingRelated}
-                emptyMessage="No saved clips for this video yet."
+                emptyMessage="No saved notes anchored to this video yet."
                 onSelect={seekRelatedClip}
               />
 
@@ -1239,7 +1278,7 @@ function ClipTimeline({ duration, clips, currentSeconds, onSeek }: ClipTimelineP
         aria-valuemin={0}
         aria-valuemax={duration}
         aria-valuenow={currentSeconds}
-        aria-label="Click to scrub. Markers represent saved clips."
+        aria-label="Click to scrub. Markers represent saved note anchors."
         onClick={handleStripClick}
         className="relative h-5 w-full cursor-pointer overflow-hidden rounded-md border bg-muted"
       >
@@ -1399,3 +1438,116 @@ function RelatedClipSection({
     </div>
   );
 }
+
+interface AnchorPayload {
+  videoId: string;
+  channelId: string;
+  startSeconds: number;
+  endSeconds: number;
+  excerpt: string;
+}
+
+interface NoteOption {
+  id: string;
+  title: string;
+  anchorCount: number;
+}
+
+/**
+ * "+ Add to existing note" button. Opens a popover showing the user's notes
+ * (most recent first, filterable by title). Picking a note POSTs the anchor
+ * via /api/clips/:id/anchors. Used in two places in this drawer: per-segment
+ * save row and range-select save toolbar.
+ */
+function AddAnchorToNotePopover({
+  anchor, onSaved, size = "default",
+}: {
+  anchor: AnchorPayload;
+  onSaved: () => void;
+  size?: "sm" | "default";
+}) {
+  const [open, setOpen] = useState(false);
+  const [notes, setNotes] = useState<NoteOption[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+  const { toast } = useToast();
+
+  // Load notes when the popover opens — cheap; refresh each time so the
+  // list reflects any notes the user just made elsewhere in this session.
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    apiRequest("GET", "/api/clips?limit=200")
+      .then((r) => r.json())
+      .then((data: { rows: { id: string; title: string; anchors: unknown[] }[] }) => {
+        setNotes((data.rows ?? []).map((n) => ({
+          id: n.id, title: n.title, anchorCount: Array.isArray(n.anchors) ? n.anchors.length : 1,
+        })));
+      })
+      .catch(() => setNotes([]))
+      .finally(() => setLoading(false));
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return notes;
+    return notes.filter((n) => n.title.toLowerCase().includes(q));
+  }, [notes, search]);
+
+  const pick = async (noteId: string) => {
+    setSaving(true);
+    try {
+      await apiRequest("POST", `/api/clips/${noteId}/anchors`, anchor);
+      setOpen(false);
+      setSearch("");
+      onSaved();
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Add anchor failed", description: err?.message ?? String(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const triggerClass = size === "sm" ? "h-7 text-xs" : "h-8 whitespace-nowrap text-xs";
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="outline" className={triggerClass} disabled={saving}>
+          <Plus className="h-3 w-3" />
+          Add to note
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-2" align="end">
+        <Input
+          autoFocus
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search your notes…"
+          className="h-8 text-xs"
+        />
+        <div className="mt-2 max-h-64 overflow-y-auto">
+          {loading && <div className="px-2 py-3 text-center text-xs text-muted-foreground">Loading…</div>}
+          {!loading && filtered.length === 0 && (
+            <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+              {notes.length === 0 ? "No notes yet. Use 'Save as new' to create one." : "No notes match."}
+            </div>
+          )}
+          {!loading && filtered.map((n) => (
+            <button
+              key={n.id}
+              onClick={() => pick(n.id)}
+              disabled={saving}
+              className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-secondary disabled:opacity-50"
+            >
+              <div className="truncate font-medium">{n.title}</div>
+              <div className="text-[10px] text-muted-foreground">{n.anchorCount} anchor{n.anchorCount === 1 ? "" : "s"}</div>
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+

@@ -157,6 +157,69 @@ const SCHEMA = `
     PRIMARY KEY (map_key, node_id)
   );
 
+  -- ---- Multi-anchor notes ----
+  --
+  -- Conceptual model: a "note" (stored in transcript_clips for legacy ID
+  -- continuity) is the user's first-class research entity. Each note can
+  -- have many (video, timestamp range) anchors as evidence. Phase 1
+  -- backfills every existing clip with exactly one anchor (ordinal=1)
+  -- mirroring the single-anchor columns on transcript_clips. Subsequent
+  -- phases shift reads/writes to source anchors from this table; the
+  -- legacy columns stay populated for back-compat.
+  CREATE TABLE IF NOT EXISTS note_anchors (
+    clip_id        TEXT NOT NULL REFERENCES transcript_clips(id) ON DELETE CASCADE,
+    ordinal        INTEGER NOT NULL,
+    video_id       TEXT NOT NULL,
+    channel_id     TEXT NOT NULL,
+    start_seconds  REAL,
+    end_seconds    REAL,
+    excerpt        TEXT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (clip_id, ordinal)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_note_anchors_video ON note_anchors(video_id, channel_id);
+
+  -- ---- AI chat persistence ----
+  --
+  -- Conversations group user/assistant turns. Each assistant message
+  -- carries the K retrieved sources (segments) it was grounded on, so the
+  -- citation chips ([1], [2], ...) in the message body can resolve back
+  -- to clickable VideoDrawer entries even after refresh.
+  CREATE TABLE IF NOT EXISTS chat_conversations (
+    id          TEXT PRIMARY KEY,
+    title       TEXT,
+    pinned      INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    role            TEXT NOT NULL,            -- 'user' | 'assistant'
+    content         TEXT NOT NULL,
+    model           TEXT,                     -- chat model used (assistant only)
+    is_starred      INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_conv ON chat_messages(conversation_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS chat_message_sources (
+    message_id     TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+    source_index   INTEGER NOT NULL,         -- 1-based, matches [N] in body
+    video_id       TEXT NOT NULL,
+    channel_id     TEXT NOT NULL,
+    segment_index  INTEGER,
+    start_seconds  REAL,
+    end_seconds    REAL,
+    speaker        TEXT,
+    excerpt        TEXT,
+    score          REAL,
+    PRIMARY KEY (message_id, source_index)
+  );
+
   -- ---- Voice profiles (cross-video speaker identity) ----
   --
   -- Each row = one named voice (e.g. "Joe Rogan"). Stays stable across
@@ -219,6 +282,11 @@ export interface QueueEntry {
   upload_date: string | null;
   status: string;
   video_path: string | null;
+  /** Optional playback sidecar — set when video_path is in a container/codec
+   *  Firefox/Safari can't decode (e.g. Ogg-Speex). Server prefers this for
+   *  the /stream endpoint when present. Transcription still uses the
+   *  original. */
+  playback_path: string | null;
   md_path: string | null;
   word_count: number;
   error: string | null;
@@ -314,11 +382,42 @@ function runMigrations(database: Database.Database) {
   ensureColumn("channels", "diarize", "INTEGER NOT NULL DEFAULT 1");
   ensureColumn("channels", "include_shorts", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("speakers", "is_noise", "INTEGER NOT NULL DEFAULT 0");
+  // Optional sidecar path: for source files whose codec the browser may not
+  // decode (Ogg with Speex/FLAC, etc.), we transcode to .m4a at ingestion
+  // time. The /stream endpoint prefers this path so playback is universal.
+  // NULL = use video_path directly (the original is browser-compatible).
+  ensureColumn("video_queue", "playback_path", "TEXT");
 
   // Renamed link kind: same_scripture → same_topic. Migrate any existing rows.
   database
     .prepare("UPDATE clip_links SET kind = 'same_topic' WHERE kind = 'same_scripture'")
     .run();
+
+  // Backfill note_anchors from existing transcript_clips. Each clip gets
+  // exactly one anchor (ordinal=1) mirroring its legacy single-anchor
+  // columns. Idempotent — only inserts for clips that don't already have
+  // any anchors. Skips standalone notes (NULL video_id/channel_id) since
+  // they legitimately have no anchors and the note_anchors table NOT-NULLs
+  // both columns.
+  const backfilledAnchors = database.prepare(`
+    INSERT INTO note_anchors (clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds, excerpt)
+    SELECT id, 1, video_id, channel_id, start_seconds, end_seconds, quote
+    FROM transcript_clips
+    WHERE id NOT IN (SELECT clip_id FROM note_anchors)
+      AND video_id IS NOT NULL
+      AND channel_id IS NOT NULL
+  `).run();
+  if (backfilledAnchors.changes > 0) {
+    console.log(`[db] Backfilled ${backfilledAnchors.changes} note_anchors from existing clips`);
+  }
+
+  // Relax NOT NULL on transcript_clips' legacy single-anchor columns so
+  // standalone "just a thought" notes (zero anchors) can be created. SQLite
+  // can't ALTER COLUMN DROP NOT NULL, so the only path is recreate-the-table.
+  // Idempotent: detected by reading pragma_table_info; foreign keys from
+  // clip_tags / clip_links re-attach by name after RENAME, so existing tag
+  // and link data survives untouched.
+  relaxClipAnchorNotNull(database);
 
   // Add `speaker` column to transcript_segments_fts. FTS5 has no
   // ALTER TABLE — the only path is DROP + CREATE. Existing transcripts on
@@ -414,6 +513,52 @@ function runMigrations(database: Database.Database) {
       `[db] Migrated ${migrated} embeddings → sqlite-vec vec_segments`
       + (skippedDim > 0 ? ` (skipped ${skippedDim} with mismatched dim — re-embed via AI page reindex)` : ""),
     );
+  }
+}
+
+function relaxClipAnchorNotNull(database: Database.Database): void {
+  const cols = database.prepare(`PRAGMA table_info(transcript_clips)`).all() as Array<{ name: string; notnull: number }>;
+  const videoIdCol = cols.find((c) => c.name === "video_id");
+  // Skip when the table is already relaxed, or when the column simply
+  // doesn't exist (shouldn't happen, but defensive against future schema
+  // drift).
+  if (!videoIdCol || videoIdCol.notnull === 0) return;
+
+  console.log("[db] Relaxing transcript_clips NOT NULL constraints (enables standalone notes)…");
+  database.pragma("foreign_keys = OFF");
+  try {
+    database.transaction(() => {
+      database.exec(`
+        CREATE TABLE transcript_clips_new (
+          id            TEXT PRIMARY KEY,
+          video_id      TEXT,
+          channel_id    TEXT,
+          title         TEXT NOT NULL,
+          channel_name  TEXT,
+          upload_date   TEXT,
+          start_seconds REAL,
+          end_seconds   REAL,
+          quote         TEXT,
+          note          TEXT,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO transcript_clips_new
+          (id, video_id, channel_id, title, channel_name, upload_date,
+           start_seconds, end_seconds, quote, note, created_at, updated_at)
+        SELECT
+          id, video_id, channel_id, title, channel_name, upload_date,
+          start_seconds, end_seconds, quote, note, created_at, updated_at
+        FROM transcript_clips;
+        DROP TABLE transcript_clips;
+        ALTER TABLE transcript_clips_new RENAME TO transcript_clips;
+        CREATE INDEX IF NOT EXISTS idx_clips_video ON transcript_clips(video_id, channel_id);
+        CREATE INDEX IF NOT EXISTS idx_clips_created ON transcript_clips(created_at);
+      `);
+    })();
+    console.log("[db] transcript_clips relaxed — standalone notes are now allowed.");
+  } finally {
+    database.pragma("foreign_keys = ON");
   }
 }
 
@@ -702,6 +847,7 @@ export function updateQueueStatus(
   updates: {
     status?: string;
     videoPath?: string | null;
+    playbackPath?: string | null;
     mdPath?: string | null;
     wordCount?: number;
     error?: string | null;
@@ -713,6 +859,7 @@ export function updateQueueStatus(
 
   if (updates.status !== undefined)  { sets.push("status = ?"); params.push(updates.status); }
   if (updates.videoPath !== undefined) { sets.push("video_path = ?"); params.push(updates.videoPath); }
+  if (updates.playbackPath !== undefined) { sets.push("playback_path = ?"); params.push(updates.playbackPath); }
   if (updates.mdPath !== undefined)   { sets.push("md_path = ?"); params.push(updates.mdPath); }
   if (updates.wordCount !== undefined) { sets.push("word_count = ?"); params.push(updates.wordCount); }
   if (updates.error !== undefined)     { sets.push("error = ?"); params.push(updates.error); }
@@ -881,8 +1028,39 @@ export interface TranscriptSearchResult {
   rank: number;
 }
 
+export interface NoteAnchor {
+  ordinal: number;
+  video_id: string;
+  channel_id: string;
+  /** Channel display name + video title resolved from video_queue (joined
+   *  on read). Null when the referenced video has been deleted from the
+   *  archive — the anchor still points at a stable (video_id, channel_id)
+   *  pair, the UI just can't pretty-print it. */
+  channel_name: string | null;
+  video_title: string | null;
+  upload_date: string | null;
+  /** NULL means "the whole video, no specific moment" (whole-video anchor). */
+  start_seconds: number | null;
+  end_seconds: number | null;
+  /** Snapshot of transcript text at the time the anchor was saved.
+   *  Stable even if the underlying transcript is regenerated. */
+  excerpt: string | null;
+  /** Playback metadata re-resolved on read so the UI can hand the anchor
+   *  straight to VideoDrawer without an extra round-trip. Not stored on
+   *  the anchor row — paths can change. */
+  video_path: string | null;
+  md_path: string | null;
+  status: string | null;
+  is_live: number | null;
+  duration: number | null;
+  word_count: number | null;
+}
+
 export interface TranscriptClip {
   id: string;
+  /** Legacy single-anchor mirror (video_id, channel_id, start_seconds,
+   *  end_seconds, quote, channel_name, upload_date) — populated from the
+   *  first anchor for back-compat. New code should prefer `anchors`. */
   video_id: string;
   channel_id: string;
   title: string;
@@ -901,6 +1079,10 @@ export interface TranscriptClip {
   duration: number | null;
   status: string;
   tags: string[];
+  /** Multi-anchor evidence list. Always at least 1 in v1 (standalone
+   *  zero-anchor notes deferred to a future schema migration). Sorted by
+   *  ordinal ascending. */
+  anchors: NoteAnchor[];
 }
 
 export interface TagCount {
@@ -1217,6 +1399,18 @@ export function hasVideoEmbeddings(videoId: string, channelId: string, model: st
   return !!row;
 }
 
+/** Bulk variant of hasVideoEmbeddings — returns the full distinct list of
+ *  (videoId, channelId) pairs that have any embeddings for this model.
+ *  Used by the reindex endpoint so it doesn't pay N round-trips when
+ *  filtering "which videos still need embedding" across hundreds of rows. */
+export function getCoveredVideoKeysForModel(model: string): Array<{ videoId: string; channelId: string }> {
+  const rows = getDb().prepare(`
+    SELECT DISTINCT video_id, channel_id
+    FROM vec_segments WHERE model = ?
+  `).all(model) as Array<{ video_id: string; channel_id: string }>;
+  return rows.map((r) => ({ videoId: r.video_id, channelId: r.channel_id }));
+}
+
 // ---------------------------------------------------------------
 // Archive status snapshot (powers the Status page)
 // ---------------------------------------------------------------
@@ -1524,6 +1718,41 @@ function attachTagsToClips<T extends { id: string }>(clips: T[]): (T & { tags: s
   return clips.map(clip => ({ ...clip, tags: byClip.get(clip.id) ?? [] }));
 }
 
+/** Bulk-load anchors for many clips and attach as `anchors[]`. Joined to
+ *  video_queue + channels so each anchor carries display-friendly title /
+ *  channel name / upload date for the UI. */
+function attachAnchorsToClips<T extends { id: string }>(clips: T[]): (T & { anchors: NoteAnchor[] })[] {
+  if (!clips.length) return [] as (T & { anchors: NoteAnchor[] })[];
+  const ids = clips.map(c => c.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = getDb().prepare(`
+    SELECT a.clip_id, a.ordinal, a.video_id, a.channel_id,
+           a.start_seconds, a.end_seconds, a.excerpt,
+           q.title AS video_title, q.upload_date,
+           q.video_path, q.md_path, q.status, q.is_live, q.duration, q.word_count,
+           c.name AS channel_name
+    FROM note_anchors a
+    LEFT JOIN video_queue q ON q.video_id = a.video_id AND q.channel_id = a.channel_id
+    LEFT JOIN channels c    ON c.id       = a.channel_id
+    WHERE a.clip_id IN (${placeholders})
+    ORDER BY a.clip_id, a.ordinal ASC
+  `).all(...ids) as (NoteAnchor & { clip_id: string })[];
+
+  const byClip = new Map<string, NoteAnchor[]>();
+  for (const r of rows) {
+    const { clip_id, ...anchor } = r;
+    const list = byClip.get(clip_id);
+    if (list) list.push(anchor);
+    else byClip.set(clip_id, [anchor]);
+  }
+  return clips.map(clip => ({ ...clip, anchors: byClip.get(clip.id) ?? [] }));
+}
+
+/** Tags + anchors in one pass — what every clip read path wants. */
+function hydrateClips<T extends { id: string }>(clips: T[]): (T & { tags: string[]; anchors: NoteAnchor[] })[] {
+  return attachAnchorsToClips(attachTagsToClips(clips));
+}
+
 export function listAllClipTags(): TagCount[] {
   return getDb()
     .prepare(`
@@ -1590,21 +1819,53 @@ export function deleteClipTag(tag: string, includeDescendants = false): number {
   return getDb().prepare("DELETE FROM clip_tags WHERE tag = ?").run(tagN).changes;
 }
 
-export function createTranscriptClip(clip: {
-  id: string;
+export interface CreateNoteAnchorInput {
   videoId: string;
   channelId: string;
-  title: string;
+  startSeconds?: number | null;
+  endSeconds?: number | null;
+  excerpt?: string | null;
+}
+
+export function createTranscriptClip(clip: {
+  id: string;
+  /** Single-anchor convenience fields — used when `anchors` is omitted. */
+  videoId?: string;
+  channelId?: string;
   channelName?: string | null;
   uploadDate?: string | null;
-  startSeconds: number;
-  endSeconds: number;
-  quote: string;
+  startSeconds?: number;
+  endSeconds?: number;
+  quote?: string;
+  /** Multi-anchor input. If provided, takes precedence; the legacy
+   *  single-anchor columns on transcript_clips are mirrored from
+   *  anchors[0]. Must contain at least 1 anchor for v1. */
+  anchors?: CreateNoteAnchorInput[];
+  title: string;
   note?: string | null;
   tags?: string[];
 }): TranscriptClip {
+  // Normalize input: build a unified anchors[] list.
+  // anchors[] can be empty — standalone "just a thought" notes are allowed.
+  const anchors: CreateNoteAnchorInput[] = clip.anchors !== undefined
+    ? clip.anchors
+    : (clip.videoId && clip.channelId
+        ? [{
+            videoId: clip.videoId,
+            channelId: clip.channelId,
+            startSeconds: clip.startSeconds ?? 0,
+            endSeconds: clip.endSeconds ?? 0,
+            excerpt: clip.quote ?? "",
+          }]
+        : []);
+  const primary = anchors[0];
+
   const db = getDb();
   db.transaction(() => {
+    // Legacy single-anchor columns mirror the FIRST anchor for back-compat
+    // with code paths that still read them directly. When there are no
+    // anchors (standalone note) these columns are simply left NULL — the
+    // table was relaxed in the migration to allow that.
     db.prepare(`
       INSERT INTO transcript_clips (
         id, video_id, channel_id, title, channel_name, upload_date,
@@ -1613,22 +1874,126 @@ export function createTranscriptClip(clip: {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `).run(
       clip.id,
-      clip.videoId,
-      clip.channelId,
+      primary?.videoId ?? null,
+      primary?.channelId ?? null,
       clip.title,
       clip.channelName ?? null,
       clip.uploadDate ?? null,
-      clip.startSeconds,
-      clip.endSeconds,
-      clip.quote,
+      primary?.startSeconds ?? null,
+      primary?.endSeconds ?? null,
+      primary?.excerpt ?? null,
       clip.note?.trim() || null,
     );
+    if (anchors.length > 0) {
+      const insertAnchor = db.prepare(`
+        INSERT INTO note_anchors (clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds, excerpt)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      anchors.forEach((a, idx) => {
+        insertAnchor.run(
+          clip.id,
+          idx + 1,
+          a.videoId,
+          a.channelId,
+          a.startSeconds ?? null,
+          a.endSeconds ?? null,
+          a.excerpt ?? null,
+        );
+      });
+    }
     if (clip.tags?.length) setClipTags(clip.id, clip.tags);
   })();
 
   const created = getTranscriptClip(clip.id);
-  if (!created) throw new Error("Clip was not created");
+  if (!created) throw new Error("Note was not created");
   return created;
+}
+
+/** Edit a note's title and/or body text. Anchors and tags are managed
+ *  separately via their own endpoints. Returns the updated note. */
+export function updateTranscriptClip(
+  id: string,
+  fields: { title?: string; note?: string | null },
+): TranscriptClip | undefined {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (fields.title !== undefined) {
+    if (!fields.title.trim()) throw new Error("Title cannot be empty");
+    sets.push("title = ?");
+    params.push(fields.title.trim());
+  }
+  if (fields.note !== undefined) {
+    sets.push("note = ?");
+    params.push(fields.note?.trim() || null);
+  }
+  if (sets.length === 0) return getTranscriptClip(id);
+  sets.push("updated_at = datetime('now')");
+  params.push(id);
+  getDb().prepare(`UPDATE transcript_clips SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+  return getTranscriptClip(id);
+}
+
+/** Append an anchor to an existing note. Returns the new anchor's ordinal. */
+export function addNoteAnchor(noteId: string, input: CreateNoteAnchorInput): number {
+  const db = getDb();
+  const exists = db.prepare("SELECT 1 FROM transcript_clips WHERE id = ?").get(noteId);
+  if (!exists) throw new Error(`Note ${noteId} not found`);
+  const maxRow = db.prepare(
+    "SELECT COALESCE(MAX(ordinal), 0) AS max_ord FROM note_anchors WHERE clip_id = ?"
+  ).get(noteId) as { max_ord: number };
+  const nextOrdinal = maxRow.max_ord + 1;
+  db.prepare(`
+    INSERT INTO note_anchors (clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds, excerpt)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    noteId,
+    nextOrdinal,
+    input.videoId,
+    input.channelId,
+    input.startSeconds ?? null,
+    input.endSeconds ?? null,
+    input.excerpt ?? null,
+  );
+  db.prepare("UPDATE transcript_clips SET updated_at = datetime('now') WHERE id = ?").run(noteId);
+  return nextOrdinal;
+}
+
+/** Remove an anchor by ordinal. Notes with zero anchors are valid
+ *  (standalone "just a thought" notes) — no minimum-anchor restriction. */
+export function removeNoteAnchor(noteId: string, ordinal: number): boolean {
+  const db = getDb();
+  const removed = db.prepare(
+    "DELETE FROM note_anchors WHERE clip_id = ? AND ordinal = ?"
+  ).run(noteId, ordinal).changes > 0;
+  if (removed) {
+    db.prepare("UPDATE transcript_clips SET updated_at = datetime('now') WHERE id = ?").run(noteId);
+  }
+  return removed;
+}
+
+/** Re-mirror legacy single-anchor columns on transcript_clips from the
+ *  current first anchor — invoke after add/remove so legacy readers keep
+ *  showing something sensible. When zero anchors remain (standalone note),
+ *  clears the legacy columns to NULL. */
+export function syncLegacyAnchorColumns(noteId: string): void {
+  const db = getDb();
+  const first = db.prepare(`
+    SELECT video_id, channel_id, start_seconds, end_seconds, excerpt
+    FROM note_anchors WHERE clip_id = ?
+    ORDER BY ordinal ASC LIMIT 1
+  `).get(noteId) as { video_id: string; channel_id: string; start_seconds: number | null; end_seconds: number | null; excerpt: string | null } | undefined;
+  db.prepare(`
+    UPDATE transcript_clips
+    SET video_id = ?, channel_id = ?, start_seconds = ?, end_seconds = ?, quote = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(
+    first?.video_id ?? null,
+    first?.channel_id ?? null,
+    first?.start_seconds ?? null,
+    first?.end_seconds ?? null,
+    first?.excerpt ?? null,
+    noteId,
+  );
 }
 
 export function getTranscriptClip(id: string): TranscriptClip | undefined {
@@ -1644,9 +2009,9 @@ export function getTranscriptClip(id: string): TranscriptClip | undefined {
     FROM transcript_clips clip
     LEFT JOIN video_queue q ON q.video_id = clip.video_id AND q.channel_id = clip.channel_id
     WHERE clip.id = ?
-  `).get(id) as Omit<TranscriptClip, "tags"> | undefined;
+  `).get(id) as Omit<TranscriptClip, "tags" | "anchors"> | undefined;
   if (!row) return undefined;
-  return { ...row, tags: getClipTags(id) };
+  return hydrateClips([row])[0];
 }
 
 /**
@@ -1714,9 +2079,9 @@ export function listTranscriptClips(filters: {
     ${whereSql}
     ORDER BY clip.created_at DESC
     LIMIT ? OFFSET ?
-  `).all(...params, limit, offset) as Omit<TranscriptClip, "tags">[];
+  `).all(...params, limit, offset) as Omit<TranscriptClip, "tags" | "anchors">[];
 
-  return { rows: attachTagsToClips(rows), total: totalRow?.count ?? 0 };
+  return { rows: hydrateClips(rows), total: totalRow?.count ?? 0 };
 }
 
 /**
@@ -1738,23 +2103,29 @@ export function listRelatedTranscriptClips(
     excludeSql = "AND clip.id != ?";
     sameVideoParams.push(excludeId);
   }
+  // "Same video" now means: a note has at least one anchor on this video.
+  // Sourced from note_anchors so multi-anchor notes appear here whenever
+  // ANY of their anchors lands on the requested video.
   const sameVideoRows = db.prepare(`
-    SELECT
+    SELECT DISTINCT
       clip.*,
       q.video_path,
       q.md_path,
       q.word_count,
       q.is_live,
       q.duration,
-      q.status
+      q.status,
+      MIN(a.start_seconds) AS _anchor_start
     FROM transcript_clips clip
+    JOIN note_anchors a ON a.clip_id = clip.id
     LEFT JOIN video_queue q ON q.video_id = clip.video_id AND q.channel_id = clip.channel_id
-    WHERE clip.video_id = ? AND clip.channel_id = ?
+    WHERE a.video_id = ? AND a.channel_id = ?
     ${excludeSql}
-    ORDER BY clip.start_seconds ASC, clip.created_at DESC
+    GROUP BY clip.id
+    ORDER BY _anchor_start ASC, clip.created_at DESC
     LIMIT 50
-  `).all(...sameVideoParams) as Omit<TranscriptClip, "tags">[];
-  const sameVideo = attachTagsToClips(sameVideoRows);
+  `).all(...sameVideoParams) as Omit<TranscriptClip, "tags" | "anchors">[];
+  const sameVideo = hydrateClips(sameVideoRows);
 
   const sourceTags = (db.prepare(`
     SELECT DISTINCT t.tag
@@ -1768,6 +2139,10 @@ export function listRelatedTranscriptClips(
   }
 
   const tagPlaceholders = sourceTags.map(() => "?").join(",");
+  // Exclude clips whose ONLY anchors land on the source video — avoids the
+  // "same video" set bleeding into the cross-video "by tags" set. Anchors
+  // are checked via NOT EXISTS rather than the legacy single-anchor column
+  // so multi-anchor notes are scoped correctly.
   const byTagsRows = db.prepare(`
     SELECT
       clip.*,
@@ -1784,17 +2159,21 @@ export function listRelatedTranscriptClips(
       ) AS overlap
     FROM transcript_clips clip
     LEFT JOIN video_queue q ON q.video_id = clip.video_id AND q.channel_id = clip.channel_id
-    WHERE NOT (clip.video_id = ? AND clip.channel_id = ?)
+    WHERE EXISTS (
+        SELECT 1 FROM note_anchors a2
+        WHERE a2.clip_id = clip.id
+          AND NOT (a2.video_id = ? AND a2.channel_id = ?)
+      )
       AND EXISTS (
         SELECT 1 FROM clip_tags t
         WHERE t.clip_id = clip.id AND t.tag IN (${tagPlaceholders})
       )
     ORDER BY overlap DESC, clip.created_at DESC
     LIMIT 50
-  `).all(...sourceTags, videoId, channelId, ...sourceTags) as (Omit<TranscriptClip, "tags"> & { overlap: number })[];
+  `).all(...sourceTags, videoId, channelId, ...sourceTags) as (Omit<TranscriptClip, "tags" | "anchors"> & { overlap: number })[];
 
   return {
-    byTags: attachTagsToClips(byTagsRows) as (TranscriptClip & { overlap: number })[],
+    byTags: hydrateClips(byTagsRows) as (TranscriptClip & { overlap: number })[],
     sameVideo,
   };
 }
@@ -1958,6 +2337,17 @@ export function getClipLinks(clipId: string): ClipLinkWithClip[] {
 
 export type GraphEdgeType = "manual" | "shared_tag" | "same_video";
 
+export interface GraphNodeAnchor {
+  ordinal: number;
+  videoId: string;
+  channelId: string;
+  channelName: string | null;
+  videoTitle: string | null;
+  uploadDate: string | null;
+  startSeconds: number | null;
+  endSeconds: number | null;
+}
+
 export interface GraphNode {
   id: string;
   clipId: string;
@@ -1977,6 +2367,10 @@ export interface GraphNode {
   isLive: number;
   duration: number | null;
   degree: number;
+  /** Anchor list for multi-anchor visualization. Always at least one entry
+   *  for migrated single-anchor notes (mirrored from legacy columns).
+   *  Empty for standalone notes (zero anchors). */
+  anchors: GraphNodeAnchor[];
 }
 
 export interface GraphEdge {
@@ -2172,26 +2566,50 @@ export function getClipGraph(filters: {
     }
   }
 
-  // Same-video adjacency. Within each (channel_id, video_id) bucket of
-  // candidate clips, sort by start time and connect consecutive pairs.
+  // Same-video adjacency. Now anchor-aware: within each (channel_id, video_id)
+  // bucket, all of a clip's anchors that touch this video count as anchor
+  // points — multi-anchor notes can show up in multiple buckets, and any
+  // pair sharing a bucket gets connected. Sorting by anchor start gives a
+  // deterministic order; we connect consecutive pairs to keep edge count
+  // O(N) rather than O(N²) within a busy video.
   if (edgeTypes.has("same_video")) {
-    const byVideo = new Map<string, TranscriptClip[]>();
+    type AnchorPoint = { clipId: string; startSeconds: number };
+    const byVideo = new Map<string, AnchorPoint[]>();
     for (const clip of clips) {
-      const key = `${clip.channel_id}|${clip.video_id}`;
-      const list = byVideo.get(key);
-      if (list) list.push(clip);
-      else byVideo.set(key, [clip]);
+      // Iterate every anchor (multi-anchor notes contribute multiple points)
+      // — fall back to the legacy single-anchor columns when anchors[] is
+      // empty (defensive: should not happen post-Phase-1 backfill).
+      const points = clip.anchors?.length
+        ? clip.anchors.map((a) => ({
+            videoKey: `${a.channel_id}|${a.video_id}`,
+            startSeconds: a.start_seconds ?? 0,
+          }))
+        : [{
+            videoKey: `${clip.channel_id}|${clip.video_id}`,
+            startSeconds: clip.start_seconds,
+          }];
+      for (const p of points) {
+        const list = byVideo.get(p.videoKey);
+        const point: AnchorPoint = { clipId: clip.id, startSeconds: p.startSeconds };
+        if (list) list.push(point);
+        else byVideo.set(p.videoKey, [point]);
+      }
     }
-    Array.from(byVideo.values()).forEach(list => {
+    const seenPair = new Set<string>();
+    Array.from(byVideo.values()).forEach((list) => {
       if (list.length < 2) return;
-      list.sort((a, b) => a.start_seconds - b.start_seconds);
+      list.sort((a, b) => a.startSeconds - b.startSeconds);
       for (let i = 0; i < list.length - 1; i += 1) {
         const a = list[i];
         const b = list[i + 1];
+        if (a.clipId === b.clipId) continue; // same note's two anchors in one video
+        const key = a.clipId < b.clipId ? `${a.clipId}:${b.clipId}` : `${b.clipId}:${a.clipId}`;
+        if (seenPair.has(key)) continue;
+        seenPair.add(key);
         edges.push({
-          id: `same_video:${a.id}:${b.id}`,
-          source: a.id,
-          target: b.id,
+          id: `same_video:${key}`,
+          source: a.clipId,
+          target: b.clipId,
           kind: "same_video",
           label: "same video",
           weight: 1,
@@ -2226,6 +2644,16 @@ export function getClipGraph(filters: {
     isLive: c.is_live,
     duration: c.duration,
     degree: degreeByClip.get(c.id) ?? 0,
+    anchors: (c.anchors ?? []).map((a) => ({
+      ordinal: a.ordinal,
+      videoId: a.video_id,
+      channelId: a.channel_id,
+      channelName: a.channel_name,
+      videoTitle: a.video_title,
+      uploadDate: a.upload_date,
+      startSeconds: a.start_seconds,
+      endSeconds: a.end_seconds,
+    })),
   }));
 
   const tagSet = new Set<string>();
@@ -2478,6 +2906,59 @@ export function updateSpeaker(id: string, fields: { name?: string; displayColor?
 /** Returns the singleton noise speaker, creating one with a fixed name
  *  + grey color if none exists yet. Used by the "Mark as noise" flow.
  *  ID is generated by caller (db.ts can't import nanoid cleanly). */
+/**
+ * Merge two global speakers: repoint every video_speaker_assignments row
+ * from `sourceId` to `targetId`, fold the source centroid into the target
+ * via count-weighted average, and delete the source speaker row.
+ *
+ * Returns counts so the UI can report what happened. Atomic — all-or-nothing.
+ */
+export function mergeSpeakers(
+  sourceId: string,
+  targetId: string,
+): { reassigned: number; centroidUpdated: boolean } {
+  if (sourceId === targetId) {
+    throw new Error("Cannot merge a speaker into itself");
+  }
+  const db = getDb();
+  const source = getSpeakerById(sourceId);
+  const target = getSpeakerById(targetId);
+  if (!source) throw new Error(`Source speaker ${sourceId} not found`);
+  if (!target) throw new Error(`Target speaker ${targetId} not found`);
+
+  let centroidUpdated = false;
+  const result = db.transaction(() => {
+    const r = db.prepare(`
+      UPDATE video_speaker_assignments
+      SET speaker_id = ?, updated_at = datetime('now')
+      WHERE speaker_id = ?
+    `).run(targetId, sourceId);
+
+    const sourceEmb = getSpeakerEmbedding(sourceId);
+    const targetEmb = getSpeakerEmbedding(targetId);
+    if (sourceEmb && targetEmb && sourceEmb.embedding.length === targetEmb.embedding.length) {
+      const total = sourceEmb.sample_count + targetEmb.sample_count;
+      const merged = new Float32Array(targetEmb.embedding.length);
+      for (let i = 0; i < merged.length; i++) {
+        merged[i] = (
+          sourceEmb.embedding[i] * sourceEmb.sample_count
+          + targetEmb.embedding[i] * targetEmb.sample_count
+        ) / total;
+      }
+      setSpeakerEmbedding(targetId, merged, total);
+      centroidUpdated = true;
+    } else if (sourceEmb && !targetEmb) {
+      setSpeakerEmbedding(targetId, sourceEmb.embedding, sourceEmb.sample_count);
+      centroidUpdated = true;
+    }
+
+    db.prepare("DELETE FROM speakers WHERE id = ?").run(sourceId);
+
+    return { reassigned: r.changes, centroidUpdated };
+  })();
+  return result;
+}
+
 export function getOrCreateNoiseSpeaker(generatedIdIfMissing: string): Speaker {
   const existing = getDb().prepare(`
     SELECT id, name, display_color, notes, is_noise, created_at, updated_at
@@ -2705,7 +3186,13 @@ export function getVideoSpeakerSummary(videoId: string, channelId: string): Vide
 
 /** Batched version of getVideoSpeakerSummary for the Library list view.
  *  Returns a map keyed by `video_id|channel_id` so the client can do
- *  one fetch per page-load instead of N per visible row. */
+ *  one fetch per page-load instead of N per visible row.
+ *
+ *  Aggregates per global speaker — diarization often splits one real
+ *  voice into multiple local clusters (S0, S1, S2), and the user typically
+ *  labels all of them as the same global speaker. Summing airtime by
+ *  speaker_id means the Library badges show each person once with their
+ *  full airtime across all their fingerprints. */
 export function getVideoSpeakerSummariesBatch(
   pairs: { video_id: string; channel_id: string }[],
 ): Record<string, VideoSpeakerSummary[]> {
@@ -2719,13 +3206,15 @@ export function getVideoSpeakerSummariesBatch(
     SELECT
       vsa.video_id, vsa.channel_id,
       s.id AS speaker_id, s.name, s.display_color,
-      vsa.airtime_seconds, vsa.local_speaker
+      SUM(vsa.airtime_seconds) AS airtime_seconds,
+      MIN(vsa.local_speaker)   AS local_speaker
     FROM video_speaker_assignments vsa
     JOIN speakers s ON s.id = vsa.speaker_id
     WHERE s.is_noise = 0 AND (vsa.video_id, vsa.channel_id) IN (${
       Array.from({ length: count }, () => "(?, ?)").join(", ")
     })
-    ORDER BY vsa.airtime_seconds DESC
+    GROUP BY vsa.video_id, vsa.channel_id, s.id
+    ORDER BY airtime_seconds DESC
   `);
 
   for (let i = 0; i < pairs.length; i += CHUNK) {
@@ -2988,6 +3477,274 @@ export function backfillAllZeroAirtimeAssignments(): { backfilled: number; skipp
     if (r && r.airtime > 0) backfilled++; else skipped++;
   }
   return { backfilled, skipped };
+}
+
+// ---------------------------------------------------------------
+// AI chat persistence helpers
+// ---------------------------------------------------------------
+
+export interface ChatConversationMeta {
+  id: string;
+  title: string | null;
+  pinned: boolean;
+  message_count: number;
+  last_message_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  conversation_id: string;
+  role: "user" | "assistant";
+  content: string;
+  model: string | null;
+  is_starred: boolean;
+  created_at: string;
+  sources: ChatMessageSource[];
+}
+
+export interface ChatMessageSource {
+  source_index: number;
+  video_id: string;
+  channel_id: string;
+  segment_index: number | null;
+  start_seconds: number | null;
+  end_seconds: number | null;
+  speaker: string | null;
+  speaker_name: string | null;     // resolved from speakers table when available
+  excerpt: string | null;
+  score: number | null;
+  video_title: string | null;       // joined from video_queue
+  channel_name: string | null;      // joined from channels
+  upload_date: string | null;
+  /** Playback metadata, re-resolved on read (not stored in chat_message_sources
+   *  — state can drift). Lets the client open the VideoDrawer at the cited
+   *  timestamp without an extra round-trip. */
+  video_path: string | null;
+  md_path: string | null;
+  status: string | null;
+  is_live: number | null;
+  duration: number | null;
+  word_count: number | null;
+}
+
+export interface ChatConversationDetail extends ChatConversationMeta {
+  messages: ChatMessage[];
+}
+
+export function listChatConversations(): ChatConversationMeta[] {
+  return getDb().prepare(`
+    SELECT
+      c.id,
+      c.title,
+      c.pinned,
+      c.created_at,
+      c.updated_at,
+      COUNT(m.id) AS message_count,
+      MAX(m.created_at) AS last_message_at
+    FROM chat_conversations c
+    LEFT JOIN chat_messages m ON m.conversation_id = c.id
+    GROUP BY c.id
+    ORDER BY c.pinned DESC, COALESCE(MAX(m.created_at), c.created_at) DESC
+  `).all().map((r: any) => ({
+    id: r.id,
+    title: r.title,
+    pinned: !!r.pinned,
+    message_count: r.message_count ?? 0,
+    last_message_at: r.last_message_at,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+  }));
+}
+
+export function createChatConversation(args: { id: string; title?: string | null }): ChatConversationMeta {
+  getDb().prepare(`
+    INSERT INTO chat_conversations (id, title) VALUES (?, ?)
+  `).run(args.id, args.title ?? null);
+  return getChatConversationMeta(args.id)!;
+}
+
+export function getChatConversationMeta(id: string): ChatConversationMeta | undefined {
+  const row = getDb().prepare(`
+    SELECT
+      c.id, c.title, c.pinned, c.created_at, c.updated_at,
+      COUNT(m.id) AS message_count,
+      MAX(m.created_at) AS last_message_at
+    FROM chat_conversations c
+    LEFT JOIN chat_messages m ON m.conversation_id = c.id
+    WHERE c.id = ?
+    GROUP BY c.id
+  `).get(id) as any;
+  if (!row) return undefined;
+  return {
+    id: row.id,
+    title: row.title,
+    pinned: !!row.pinned,
+    message_count: row.message_count ?? 0,
+    last_message_at: row.last_message_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export function getChatConversation(id: string): ChatConversationDetail | undefined {
+  const meta = getChatConversationMeta(id);
+  if (!meta) return undefined;
+
+  const messages = getDb().prepare(`
+    SELECT id, conversation_id, role, content, model, is_starred, created_at
+    FROM chat_messages
+    WHERE conversation_id = ?
+    ORDER BY created_at ASC, id ASC
+  `).all(id) as Array<Omit<ChatMessage, "is_starred" | "sources"> & { is_starred: number }>;
+
+  if (messages.length === 0) {
+    return { ...meta, messages: [] };
+  }
+
+  // Bulk-load sources for all messages in one query — joined to video_queue
+  // and channels so each source has display-friendly metadata.
+  const ids = messages.map(m => m.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const sourceRows = getDb().prepare(`
+    SELECT
+      s.message_id, s.source_index, s.video_id, s.channel_id,
+      s.segment_index, s.start_seconds, s.end_seconds, s.speaker,
+      s.excerpt, s.score,
+      q.title AS video_title, q.upload_date,
+      q.video_path, q.md_path, q.status, q.is_live, q.duration, q.word_count,
+      c.name  AS channel_name,
+      sp.name AS speaker_name
+    FROM chat_message_sources s
+    LEFT JOIN video_queue q ON q.video_id = s.video_id AND q.channel_id = s.channel_id
+    LEFT JOIN channels    c ON c.id       = s.channel_id
+    LEFT JOIN video_speaker_assignments vsa
+           ON vsa.video_id = s.video_id
+          AND vsa.channel_id = s.channel_id
+          AND vsa.local_speaker = s.speaker
+    LEFT JOIN speakers sp ON sp.id = vsa.speaker_id
+    WHERE s.message_id IN (${placeholders})
+    ORDER BY s.message_id, s.source_index ASC
+  `).all(...ids) as Array<ChatMessageSource & { message_id: string }>;
+
+  const byMessage = new Map<string, ChatMessageSource[]>();
+  for (const s of sourceRows) {
+    const { message_id, ...source } = s;
+    const list = byMessage.get(message_id);
+    if (list) list.push(source); else byMessage.set(message_id, [source]);
+  }
+
+  return {
+    ...meta,
+    messages: messages.map(m => ({
+      ...m,
+      is_starred: !!m.is_starred,
+      sources: byMessage.get(m.id) ?? [],
+    })),
+  };
+}
+
+export function deleteChatConversation(id: string): boolean {
+  return getDb().prepare("DELETE FROM chat_conversations WHERE id = ?").run(id).changes > 0;
+}
+
+export function updateChatConversation(id: string, fields: { title?: string | null; pinned?: boolean }): ChatConversationMeta | undefined {
+  const sets: string[] = [];
+  const params: any[] = [];
+  if (fields.title !== undefined) { sets.push("title = ?"); params.push(fields.title); }
+  if (fields.pinned !== undefined) { sets.push("pinned = ?"); params.push(fields.pinned ? 1 : 0); }
+  if (sets.length === 0) return getChatConversationMeta(id);
+  sets.push("updated_at = datetime('now')");
+  params.push(id);
+  getDb().prepare(`UPDATE chat_conversations SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+  return getChatConversationMeta(id);
+}
+
+export function appendChatMessage(args: {
+  id: string;
+  conversationId: string;
+  role: "user" | "assistant";
+  content: string;
+  model?: string | null;
+  sources?: Array<{
+    sourceIndex: number;
+    videoId: string;
+    channelId: string;
+    segmentIndex?: number | null;
+    startSeconds?: number | null;
+    endSeconds?: number | null;
+    speaker?: string | null;
+    excerpt?: string | null;
+    score?: number | null;
+  }>;
+}): void {
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO chat_messages (id, conversation_id, role, content, model)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(args.id, args.conversationId, args.role, args.content, args.model ?? null);
+
+    if (args.sources?.length) {
+      const insert = db.prepare(`
+        INSERT INTO chat_message_sources
+          (message_id, source_index, video_id, channel_id, segment_index,
+           start_seconds, end_seconds, speaker, excerpt, score)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const s of args.sources) {
+        insert.run(
+          args.id, s.sourceIndex, s.videoId, s.channelId,
+          s.segmentIndex ?? null, s.startSeconds ?? null, s.endSeconds ?? null,
+          s.speaker ?? null, s.excerpt ?? null, s.score ?? null,
+        );
+      }
+    }
+
+    db.prepare(`
+      UPDATE chat_conversations SET updated_at = datetime('now') WHERE id = ?
+    `).run(args.conversationId);
+  })();
+}
+
+export function setChatMessageStarred(messageId: string, starred: boolean): boolean {
+  const r = getDb().prepare(
+    "UPDATE chat_messages SET is_starred = ? WHERE id = ?"
+  ).run(starred ? 1 : 0, messageId);
+  return r.changes > 0;
+}
+
+export function getChatMessage(id: string): ChatMessage | undefined {
+  const row = getDb().prepare(`
+    SELECT id, conversation_id, role, content, model, is_starred, created_at
+    FROM chat_messages WHERE id = ?
+  `).get(id) as any;
+  if (!row) return undefined;
+  const sourceRows = getDb().prepare(`
+    SELECT
+      s.source_index, s.video_id, s.channel_id, s.segment_index,
+      s.start_seconds, s.end_seconds, s.speaker, s.excerpt, s.score,
+      q.title AS video_title, q.upload_date,
+      q.video_path, q.md_path, q.status, q.is_live, q.duration, q.word_count,
+      c.name  AS channel_name,
+      sp.name AS speaker_name
+    FROM chat_message_sources s
+    LEFT JOIN video_queue q ON q.video_id = s.video_id AND q.channel_id = s.channel_id
+    LEFT JOIN channels    c ON c.id       = s.channel_id
+    LEFT JOIN video_speaker_assignments vsa
+           ON vsa.video_id = s.video_id
+          AND vsa.channel_id = s.channel_id
+          AND vsa.local_speaker = s.speaker
+    LEFT JOIN speakers sp ON sp.id = vsa.speaker_id
+    WHERE s.message_id = ?
+    ORDER BY s.source_index ASC
+  `).all(id) as ChatMessageSource[];
+  return {
+    ...row,
+    is_starred: !!row.is_starred,
+    sources: sourceRows,
+  };
 }
 
 export function closeDb(): void {
