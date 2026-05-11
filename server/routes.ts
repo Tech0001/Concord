@@ -1409,13 +1409,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         backfillVideoSpeakerMetadata(videoId, channelId, al);
       }
 
-      // Auto-rescan: if this assign created a NEW global speaker, sweep
-      // the rest of the archive for that voice. Solves the "I added 200
-      // videos before labeling Pastor Johnson — now they all
-      // auto-identify him" case. Skipped for unlinks and re-assigns to
-      // existing speakers (don't second-guess prior labels).
+      // Auto-rescan whenever an assignment lands a video-local on a
+      // global speaker — both new speakers AND re-assignments to existing
+      // ones. The latter case matters because the assignVideoSpeakerToGlobal
+      // call updates the speaker's centroid (count-weighted average from
+      // this new sample), so other unidentified videos might NOW match
+      // even though they didn't before. Only operates on rows that are
+      // currently UNIDENTIFIED — already-labeled assignments aren't
+      // touched, so prior user decisions are preserved.
       let autoMatched = 0;
-      if (speakerId !== null && createdSpeaker) {
+      if (speakerId !== null) {
         autoMatched = autoMatchUnidentifiedAgainstSpeaker(speakerId);
       }
       res.json({ success: true, speakerId, createdSpeaker, autoMatched, additionalAssigned: additional.length });

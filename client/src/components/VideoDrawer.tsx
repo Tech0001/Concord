@@ -634,11 +634,52 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                 />
               )}
 
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 items-center">
                 {video.status && <Badge variant="outline">{video.status}</Badge>}
                 {!!video.word_count && <Badge variant="outline">{video.word_count} words</Badge>}
                 {video.video_path && <Badge variant="outline">{isAudioPath(video.video_path) ? "audio" : "video"}</Badge>}
                 {video.md_path && <Badge variant="outline">transcript</Badge>}
+                {(() => {
+                  // Identified-speaker chips, deduplicated by global speaker
+                  // id (the same person might span multiple S* locals after
+                  // multi-select labeling). Plus a single "N unidentified"
+                  // badge when there are unlabeled chips left in the
+                  // transcript so the user knows there's more to label.
+                  const idsSeen = new Set<string>();
+                  const distinct: { id: string; name: string; color: string | null }[] = [];
+                  for (const v of Object.values(speakerMap)) {
+                    if (idsSeen.has(v.id)) continue;
+                    idsSeen.add(v.id);
+                    distinct.push(v);
+                  }
+                  const unidentifiedCount = (() => {
+                    const seen = new Set<string>();
+                    for (const seg of segments) {
+                      if (seg.speaker && !speakerMap[seg.speaker]) seen.add(seg.speaker);
+                    }
+                    return seen.size;
+                  })();
+                  return (
+                    <>
+                      {distinct.map(s => (
+                        <span
+                          key={s.id}
+                          className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                          style={s.color
+                            ? { background: s.color, color: "white" }
+                            : { background: "var(--secondary, #e5e7eb)" }}
+                        >
+                          {s.name}
+                        </span>
+                      ))}
+                      {unidentifiedCount > 0 && (
+                        <Badge variant="outline" title="Open transcript and click an unlabeled chip to assign a speaker">
+                          {unidentifiedCount} unidentified
+                        </Badge>
+                      )}
+                    </>
+                  );
+                })()}
                 {videoInfo?.codec && (
                   <Badge
                     variant="secondary"
