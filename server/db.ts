@@ -811,7 +811,11 @@ export function getQueueList(filters: QueueListFilters = {}): QueueListResult {
 
   const whereSql = `WHERE ${where.join(" AND ")}`;
   const orderSql = queueOrderSql(filters.sort);
-  const limit = Math.min(Math.max(Math.floor(filters.limit ?? 100), 1), 250);
+  // Upper bound is generous (100k) so internal callers like the
+  // embeddings reindex can pull every complete video in one query.
+  // The Library page applies its own per-page cap (50/100/250) on top
+  // of this — UI pagination is a separate concern from the SQL guard.
+  const limit = Math.min(Math.max(Math.floor(filters.limit ?? 100), 1), 100000);
   const offset = Math.max(Math.floor(filters.offset ?? 0), 0);
 
   const fromSql = "FROM video_queue q LEFT JOIN channels c ON c.id = q.channel_id";
