@@ -641,10 +641,12 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                 {video.md_path && <Badge variant="outline">transcript</Badge>}
                 {(() => {
                   // Identified-speaker chips, deduplicated by global speaker
-                  // id (the same person might span multiple S* locals after
-                  // multi-select labeling). Plus a single "N unidentified"
-                  // badge when there are unlabeled chips left in the
-                  // transcript so the user knows there's more to label.
+                  // id. Plus a clickable "N unidentified" badge — clicking
+                  // it opens the label dialog for the dominant unidentified
+                  // speaker (most airtime), so the user doesn't have to
+                  // scroll the transcript to find an S* chip. The dialog's
+                  // multi-select section then surfaces every OTHER
+                  // unidentified local in this video for one-shot labeling.
                   const idsSeen = new Set<string>();
                   const distinct: { id: string; name: string; color: string | null }[] = [];
                   for (const v of Object.values(speakerMap)) {
@@ -652,13 +654,14 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                     idsSeen.add(v.id);
                     distinct.push(v);
                   }
-                  const unidentifiedCount = (() => {
-                    const seen = new Set<string>();
-                    for (const seg of segments) {
-                      if (seg.speaker && !speakerMap[seg.speaker]) seen.add(seg.speaker);
+                  const unidentifiedAirtime: Record<string, number> = {};
+                  for (const seg of segments) {
+                    if (seg.speaker && !speakerMap[seg.speaker]) {
+                      unidentifiedAirtime[seg.speaker] = (unidentifiedAirtime[seg.speaker] || 0) + Math.max(0, seg.end - seg.start);
                     }
-                    return seen.size;
-                  })();
+                  }
+                  const unidentifiedLocals = Object.entries(unidentifiedAirtime).sort((a, b) => b[1] - a[1]);
+                  const dominantUnidentified = unidentifiedLocals[0]?.[0];
                   return (
                     <>
                       {distinct.map(s => (
@@ -672,10 +675,15 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                           {s.name}
                         </span>
                       ))}
-                      {unidentifiedCount > 0 && (
-                        <Badge variant="outline" title="Open transcript and click an unlabeled chip to assign a speaker">
-                          {unidentifiedCount} unidentified
-                        </Badge>
+                      {dominantUnidentified && (
+                        <button
+                          type="button"
+                          onClick={() => setLabelDialog({ localSpeaker: dominantUnidentified, currentSpeakerId: null })}
+                          className="inline-flex items-center rounded border border-input bg-transparent px-2 py-0.5 text-xs font-semibold cursor-pointer hover:bg-accent hover:text-accent-foreground transition-colors"
+                          title={`Click to label the ${unidentifiedLocals.length === 1 ? "remaining unlabeled speaker" : "dominant unlabeled speaker (and optionally the others)"} in this video`}
+                        >
+                          {unidentifiedLocals.length} unidentified
+                        </button>
                       )}
                     </>
                   );
