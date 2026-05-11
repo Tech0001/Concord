@@ -30,6 +30,8 @@ interface Channel {
   /** Run speaker diarization for this channel. Undefined treated as true
    *  (legacy channels created before the toggle existed default-on). */
   diarize?: boolean;
+  /** Include YouTube Shorts when scanning this channel. Off by default. */
+  include_shorts?: boolean;
 }
 
 interface Job {
@@ -259,6 +261,11 @@ export default function PipelineStatus() {
 
   const toggleChannelDiarize = async (id: string, diarize: boolean) => {
     await apiRequest("PATCH", `/api/pipeline/channels/${id}`, { diarize });
+    fetchConfig();
+  };
+
+  const toggleChannelShorts = async (id: string, include_shorts: boolean) => {
+    await apiRequest("PATCH", `/api/pipeline/channels/${id}`, { include_shorts });
     fetchConfig();
   };
 
@@ -687,6 +694,14 @@ export default function PipelineStatus() {
                       ? "Identify speakers (master switch is off — toggle above)"
                       : "Identify speakers (turn off for single-speaker content — faster)"}
                   </span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Switch
+                    checked={!!ch.include_shorts}
+                    onCheckedChange={v => toggleChannelShorts(ch.id, v)}
+                    aria-label="Include YouTube Shorts when scanning this channel"
+                  />
+                  <span>Include Shorts (off by default — most are clips of full videos)</span>
                 </div>
                 {archiveMsg[ch.id] && <div className="text-xs text-muted-foreground">{archiveMsg[ch.id]}</div>}
               </div>

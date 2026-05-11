@@ -58,6 +58,7 @@ const SCHEMA = `
     url        TEXT NOT NULL UNIQUE,
     enabled    INTEGER NOT NULL DEFAULT 1,
     diarize    INTEGER NOT NULL DEFAULT 1,
+    include_shorts INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
@@ -243,6 +244,11 @@ export interface StoredChannel {
    *  Optional in writes (undefined = default to true); always populated in
    *  reads. */
   diarize?: boolean;
+  /** Include YouTube Shorts when scanning this channel. Off by default —
+   *  most Shorts are mashups/clips of full videos already in the channel,
+   *  so they duplicate content without adding signal. Toggle on per-channel
+   *  for creators whose Shorts are genuine new content. */
+  include_shorts?: boolean;
 }
 
 export function getDb(dbPath?: string): Database.Database {
@@ -306,6 +312,7 @@ function runMigrations(database: Database.Database) {
   ensureColumn("video_queue", "ai_summary", "TEXT");
   ensureColumn("video_queue", "ai_summary_model", "TEXT");
   ensureColumn("channels", "diarize", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn("channels", "include_shorts", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("speakers", "is_noise", "INTEGER NOT NULL DEFAULT 0");
 
   // Renamed link kind: same_scripture → same_topic. Migrate any existing rows.
@@ -474,7 +481,7 @@ export function resetTodayDownloadCount(): void {
 
 // ---- Channels ----
 
-type ChannelRow = { id: string; name: string; url: string; enabled: number; diarize: number };
+type ChannelRow = { id: string; name: string; url: string; enabled: number; diarize: number; include_shorts: number };
 
 function rowToChannel(row: ChannelRow): StoredChannel {
   return {
@@ -483,12 +490,13 @@ function rowToChannel(row: ChannelRow): StoredChannel {
     url: row.url,
     enabled: !!row.enabled,
     diarize: !!row.diarize,
+    include_shorts: !!row.include_shorts,
   };
 }
 
 export function getChannels(): StoredChannel[] {
   const rows = getDb().prepare(
-    "SELECT id, name, url, enabled, diarize FROM channels ORDER BY created_at ASC, name ASC"
+    "SELECT id, name, url, enabled, diarize, include_shorts FROM channels ORDER BY created_at ASC, name ASC"
   ).all() as ChannelRow[];
 
   return rows.map(rowToChannel);
@@ -497,8 +505,8 @@ export function getChannels(): StoredChannel[] {
 export function replaceChannels(channels: StoredChannel[]): void {
   const clear = getDb().prepare("DELETE FROM channels");
   const insert = getDb().prepare(`
-    INSERT INTO channels (id, name, url, enabled, diarize, updated_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    INSERT INTO channels (id, name, url, enabled, diarize, include_shorts, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
   `);
 
   const tx = getDb().transaction(() => {
@@ -508,6 +516,7 @@ export function replaceChannels(channels: StoredChannel[]): void {
         channel.id, channel.name, channel.url,
         channel.enabled ? 1 : 0,
         channel.diarize === false ? 0 : 1,
+        channel.include_shorts ? 1 : 0,
       );
     }
   });
@@ -517,18 +526,20 @@ export function replaceChannels(channels: StoredChannel[]): void {
 
 export function upsertChannel(channel: StoredChannel): void {
   getDb().prepare(`
-    INSERT INTO channels (id, name, url, enabled, diarize, updated_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    INSERT INTO channels (id, name, url, enabled, diarize, include_shorts, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       url = excluded.url,
       enabled = excluded.enabled,
       diarize = excluded.diarize,
+      include_shorts = excluded.include_shorts,
       updated_at = datetime('now')
   `).run(
     channel.id, channel.name, channel.url,
     channel.enabled ? 1 : 0,
     channel.diarize === false ? 0 : 1,
+    channel.include_shorts ? 1 : 0,
   );
 }
 
@@ -543,7 +554,17 @@ export function updateChannelEnabled(channelId: string, enabled: boolean): Store
   ).run(enabled ? 1 : 0, channelId);
   if (result.changes === 0) return undefined;
 
-  const row = d.prepare("SELECT id, name, url, enabled, diarize FROM channels WHERE id = ?").get(channelId) as ChannelRow | undefined;
+  const row = d.prepare("SELECT id, name, url, enabled, diarize, include_shorts FROM channels WHERE id = ?").get(channelId) as ChannelRow | undefined;
+  return row ? rowToChannel(row) : undefined;
+}
+
+export function updateChannelIncludeShorts(channelId: string, includeShorts: boolean): StoredChannel | undefined {
+  const d = getDb();
+  const result = d.prepare(
+    "UPDATE channels SET include_shorts = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(includeShorts ? 1 : 0, channelId);
+  if (result.changes === 0) return undefined;
+  const row = d.prepare("SELECT id, name, url, enabled, diarize, include_shorts FROM channels WHERE id = ?").get(channelId) as ChannelRow | undefined;
   return row ? rowToChannel(row) : undefined;
 }
 
@@ -554,13 +575,13 @@ export function updateChannelDiarize(channelId: string, diarize: boolean): Store
   ).run(diarize ? 1 : 0, channelId);
   if (result.changes === 0) return undefined;
 
-  const row = d.prepare("SELECT id, name, url, enabled, diarize FROM channels WHERE id = ?").get(channelId) as ChannelRow | undefined;
+  const row = d.prepare("SELECT id, name, url, enabled, diarize, include_shorts FROM channels WHERE id = ?").get(channelId) as ChannelRow | undefined;
   return row ? rowToChannel(row) : undefined;
 }
 
 export function getChannelById(channelId: string): StoredChannel | undefined {
   const row = getDb().prepare(
-    "SELECT id, name, url, enabled, diarize FROM channels WHERE id = ?"
+    "SELECT id, name, url, enabled, diarize, include_shorts FROM channels WHERE id = ?"
   ).get(channelId) as ChannelRow | undefined;
   return row ? rowToChannel(row) : undefined;
 }

@@ -20,6 +20,10 @@ export interface ChannelConfig {
   enabled: boolean;
   /** Run speaker diarization for this channel's transcripts. Default true. */
   diarize?: boolean;
+  /** Include YouTube Shorts. Default false (most are mashups of full
+   *  videos already in the channel — turn on for creators whose Shorts
+   *  are genuine new content). */
+  include_shorts?: boolean;
 }
 
 /**

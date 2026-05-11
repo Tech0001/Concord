@@ -662,7 +662,7 @@ export class Pipeline extends EventEmitter {
           this.emit("archiveProgress", { channelId: channel.id, channelName: channel.name, ...info });
         });
         const toEnqueue = allVideos
-          .filter(v => !(this.config.skipShorts && v.isShorts))
+          .filter(v => !v.isShorts || !!channel.include_shorts)
           .map(v => ({
             videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
             duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
@@ -687,7 +687,7 @@ export class Pipeline extends EventEmitter {
             continue;
           }
 
-          if (this.config.skipShorts && v.isShorts) continue;
+          if (v.isShorts && !channel.include_shorts) continue;
           if (enqueueVideo({
             videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
             duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
@@ -727,7 +727,7 @@ export class Pipeline extends EventEmitter {
 
     let newVideos = 0;
     const toEnqueue = videos
-      .filter(v => !(this.config.skipShorts && v.isShorts))
+      .filter(v => !v.isShorts || !!channel.include_shorts)
       .map(v => ({
         videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
         duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,

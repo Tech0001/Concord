@@ -1205,6 +1205,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     if (req.body.enabled !== undefined) channel.enabled = req.body.enabled;
     if (req.body.diarize !== undefined) channel.diarize = !!req.body.diarize;
+    if (req.body.include_shorts !== undefined) channel.include_shorts = !!req.body.include_shorts;
     pipeline.updateConfig(config);
     res.json({ success: true, channel });
   });
