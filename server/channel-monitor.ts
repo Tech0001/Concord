@@ -130,7 +130,21 @@ async function fetchAllVideosFromTab(
       }
 
     } catch (error) {
-      console.error(`[monitor] Error fetching batch at offset ${offset}:`, error);
+      // Soft failures we expect on many channels — most don't have ALL of
+      // /videos, /streams, /shorts. yt-dlp emits "does not have a streams
+      // tab" (or shorts/videos) when we ask for a tab the channel never
+      // populated. Treat as "this tab is empty, move on" and continue
+      // with the next scanUrl in the caller's loop.
+      const msg = error instanceof Error ? error.message : String(error);
+      const stderr = (error as any)?.stderr || "";
+      const combined = `${msg}\n${stderr}`;
+      const missingTab = /does not have a (streams|shorts|videos) tab/i.test(combined);
+      if (missingTab) {
+        const tabMatch = combined.match(/does not have a (streams|shorts|videos) tab/i);
+        console.log(`[monitor] No ${tabMatch?.[1] || "tab"} on ${scanUrl} — skipping (this is normal)`);
+      } else {
+        console.error(`[monitor] Error fetching batch at offset ${offset}:`, error);
+      }
       break;
     }
   }
