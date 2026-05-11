@@ -132,7 +132,10 @@ export default function TranscriptSearch() {
         try {
           const sres = await apiRequest("GET", "/api/speakers");
           const sdata = await sres.json();
-          setSpeakerOptions((sdata.speakers || []).map((s: any) => ({ id: s.id, name: s.name })));
+          // Hide noise speakers from the search filter — you wouldn't
+          // want to filter results down to "show me everywhere there
+          // was background music."
+          setSpeakerOptions((sdata.speakers || []).filter((s: any) => s.is_noise !== 1).map((s: any) => ({ id: s.id, name: s.name })));
         } catch { setSpeakerOptions([]); }
         // Embedding stats — used by the Mode toggle to warn when Meaning
         // mode is selected but nothing has been embedded yet.

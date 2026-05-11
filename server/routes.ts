@@ -22,6 +22,7 @@ import {
   getVideoSpeakerSummary, getVideoSpeakerSummariesBatch,
   backfillVideoSpeakerMetadata, backfillAllZeroAirtimeAssignments,
   autoMatchUnidentifiedAgainstSpeaker, autoMatchAllUnidentified,
+  getOrCreateNoiseSpeaker,
 } from "./db";
 import {
   addClipLink,
@@ -1353,13 +1354,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.patch("/api/speakers/:id", (req: Request<{ id: string }>, res) => {
-    const fields: { name?: string; displayColor?: string | null; notes?: string | null } = {};
+    const fields: { name?: string; displayColor?: string | null; notes?: string | null; isNoise?: boolean } = {};
     if (typeof req.body?.name === "string") fields.name = req.body.name.trim();
     if (req.body?.displayColor !== undefined) fields.displayColor = req.body.displayColor;
     if (req.body?.notes !== undefined) fields.notes = req.body.notes;
+    if (typeof req.body?.isNoise === "boolean") fields.isNoise = req.body.isNoise;
     const updated = updateSpeaker(req.params.id, fields);
     if (!updated) return res.status(404).json({ error: "Speaker not found" });
     res.json({ speaker: updated });
+  });
+
+  // "Mark as noise" — assigns one or more video-locals in a video to the
+  // singleton noise speaker (creating it on first use). Doesn't take a
+  // name/color from the user; the noise speaker is a fixed grey "(noise)"
+  // bucket. Auto-rescan still fires so similar noise auto-folds in.
+  app.post("/api/speakers/mark-noise", (req, res) => {
+    try {
+      const videoId = String(req.body?.videoId || "");
+      const channelId = String(req.body?.channelId || "");
+      const localSpeaker = String(req.body?.localSpeaker || "");
+      if (!videoId || !channelId || !localSpeaker) {
+        return res.status(400).json({ error: "videoId, channelId, localSpeaker required" });
+      }
+      const additional: string[] = Array.isArray(req.body?.additionalLocalSpeakers)
+        ? req.body.additionalLocalSpeakers.filter((x: unknown) => typeof x === "string" && x !== localSpeaker)
+        : [];
+
+      const noise = getOrCreateNoiseSpeaker(nanoid());
+      assignVideoSpeakerToGlobal({ videoId, channelId, localSpeaker, speakerId: noise.id });
+      backfillVideoSpeakerMetadata(videoId, channelId, localSpeaker);
+      for (const al of additional) {
+        assignVideoSpeakerToGlobal({ videoId, channelId, localSpeaker: al, speakerId: noise.id });
+        backfillVideoSpeakerMetadata(videoId, channelId, al);
+      }
+      const autoMatched = autoMatchUnidentifiedAgainstSpeaker(noise.id);
+      res.json({ success: true, speakerId: noise.id, autoMatched, additionalAssigned: additional.length });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
+    }
   });
 
   app.delete("/api/speakers/:id", (req: Request<{ id: string }>, res) => {

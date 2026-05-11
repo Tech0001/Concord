@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { UserPlus, Link2, X } from "lucide-react";
+import { UserPlus, Link2, X, VolumeX } from "lucide-react";
 
 const PRESET_COLORS = [
   "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4",
@@ -122,6 +122,29 @@ export function SpeakerLabelDialog({
       onOpenChange(false);
     } catch (e: any) {
       toast({ variant: "destructive", title: "Assign failed", description: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const markAsNoise = async () => {
+    setBusy(true);
+    try {
+      const body: any = { videoId, channelId, localSpeaker };
+      if (alsoLabel.size > 0) body.additionalLocalSpeakers = Array.from(alsoLabel);
+      const r = await apiRequest("POST", "/api/speakers/mark-noise", body);
+      const data = await r.json() as { autoMatched?: number; additionalAssigned?: number };
+      const extras: string[] = [];
+      if (data.additionalAssigned) extras.push(`+${data.additionalAssigned} other label${data.additionalAssigned === 1 ? "" : "s"} in this video`);
+      if (data.autoMatched) extras.push(`auto-matched ${data.autoMatched} more noise turn${data.autoMatched === 1 ? "" : "s"}`);
+      toast({
+        title: "Marked as noise",
+        description: extras.length > 0 ? extras.join(" · ") : "Hidden from Library badges and Search filter.",
+      });
+      onSaved?.();
+      onOpenChange(false);
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Mark-as-noise failed", description: e.message });
     } finally {
       setBusy(false);
     }
@@ -256,12 +279,23 @@ export function SpeakerLabelDialog({
               </div>
             )}
 
-            <div className="flex gap-2 justify-end pt-2">
+            <div className="flex gap-2 justify-end pt-2 flex-wrap">
               {currentSpeakerId && (
                 <Button size="sm" variant="ghost" className="mr-auto text-destructive" onClick={unassign} disabled={busy}>
                   Unlink
                 </Button>
               )}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground"
+                onClick={markAsNoise}
+                disabled={busy}
+                title="Mark this voice as background noise / audio artifact — hidden from Library and Search"
+              >
+                <VolumeX className="h-3 w-3 mr-1"/>
+                Noise
+              </Button>
               <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
               <Button size="sm" onClick={submit} disabled={busy}>{busy ? "Saving…" : "Save"}</Button>
             </div>

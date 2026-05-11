@@ -7,13 +7,14 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { SpeakerLabelDialog } from "@/components/SpeakerLabelDialog";
-import { Mic, Play, UserPlus, Trash2, Pencil, X, Check, Users, RefreshCw, Search } from "lucide-react";
+import { Mic, Play, UserPlus, Trash2, Pencil, X, Check, Users, RefreshCw, Search, VolumeX } from "lucide-react";
 
 interface Speaker {
   id: string;
   name: string;
   display_color: string | null;
   notes: string | null;
+  is_noise: number;
   created_at: string;
   updated_at: string;
   total_airtime_seconds: number;
@@ -191,6 +192,22 @@ export default function Speakers() {
     }
   };
 
+  const toggleNoise = async (s: Speaker) => {
+    try {
+      await apiRequest("PATCH", `/api/speakers/${s.id}`, { isNoise: s.is_noise === 1 ? false : true });
+      setAppearances(prev => { const { [s.id]: _, ...rest } = prev; return rest; });
+      fetchAll();
+      toast({
+        title: s.is_noise === 1 ? `${s.name} promoted to regular speaker` : `${s.name} marked as noise`,
+        description: s.is_noise === 1
+          ? "Now visible in Library badges and Search filter again."
+          : "Hidden from Library badges and Search filter.",
+      });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Toggle failed", description: e.message });
+    }
+  };
+
   const removeSpeaker = async (s: Speaker) => {
     if (!confirm(`Delete speaker "${s.name}"?\nAny videos labeled with this speaker will become unidentified again.`)) return;
     try {
@@ -302,7 +319,10 @@ export default function Speakers() {
                     </>
                   ) : (
                     <>
-                      <span className="font-medium text-sm flex-1 truncate">{s.name}</span>
+                      <span className={`font-medium text-sm flex-1 truncate ${s.is_noise === 1 ? "italic text-muted-foreground" : ""}`}>
+                        {s.name}
+                        {s.is_noise === 1 && <span className="ml-1.5 text-[10px] uppercase tracking-wide opacity-60">noise</span>}
+                      </span>
                       <Badge variant="secondary" className="text-[10px]">{fmtAirtime(s.total_airtime_seconds)}</Badge>
                       <Badge variant="outline" className="text-[10px]">{s.appearance_count} videos</Badge>
                       {s.has_embedding === 1 && (
@@ -310,6 +330,15 @@ export default function Speakers() {
                           <RefreshCw className="h-3.5 w-3.5"/>
                         </Button>
                       )}
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        onClick={e => { e.stopPropagation(); toggleNoise(s); }}
+                        title={s.is_noise === 1 ? "Promote back to regular speaker" : "Mark as noise / ignore"}
+                      >
+                        <VolumeX className={`h-3.5 w-3.5 ${s.is_noise === 1 ? "text-foreground" : "text-muted-foreground"}`}/>
+                      </Button>
                       <Button size="icon" variant="ghost" className="h-7 w-7" onClick={e => { e.stopPropagation(); beginEdit(s); }}>
                         <Pencil className="h-3.5 w-3.5"/>
                       </Button>
