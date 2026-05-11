@@ -20,6 +20,11 @@ export interface KnownSpeaker {
   display_color?: string | null;
 }
 
+export interface OtherLocalSpeakerOption {
+  localSpeaker: string;
+  airtimeSeconds: number;
+}
+
 export interface SpeakerLabelDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -32,13 +37,26 @@ export interface SpeakerLabelDialogProps {
   channelId: string;
   /** If a global speaker is currently assigned, allow Unlink. */
   currentSpeakerId?: string | null;
+  /** Other unidentified local speakers in the same video. When provided,
+   *  the dialog shows checkboxes so the user can label several at once as
+   *  the same person — handy when over-segmentation split one speaker
+   *  into multiple S* chips. */
+  otherUnidentified?: OtherLocalSpeakerOption[];
   /** Callback after successful save (assign / unassign). */
   onSaved?: () => void;
 }
 
+function fmtAirtime(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
 export function SpeakerLabelDialog({
   open, onOpenChange, localSpeaker, contextLabel,
-  videoId, channelId, currentSpeakerId, onSaved,
+  videoId, channelId, currentSpeakerId, otherUnidentified, onSaved,
 }: SpeakerLabelDialogProps) {
   const { toast } = useToast();
   const [knownSpeakers, setKnownSpeakers] = useState<KnownSpeaker[]>([]);
@@ -47,6 +65,8 @@ export function SpeakerLabelDialog({
   const [newColor, setNewColor] = useState(PRESET_COLORS[0]);
   const [mergeIntoId, setMergeIntoId] = useState("");
   const [busy, setBusy] = useState(false);
+  /** Set of "other" local speakers the user picked to label together. */
+  const [alsoLabel, setAlsoLabel] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!open) return;
@@ -61,6 +81,7 @@ export function SpeakerLabelDialog({
         setNewName("");
         setNewColor(PRESET_COLORS[list.length % PRESET_COLORS.length]);
         setMergeIntoId("");
+        setAlsoLabel(new Set());
       })
       .catch(() => setKnownSpeakers([]));
   }, [open]);
@@ -71,6 +92,9 @@ export function SpeakerLabelDialog({
     setBusy(true);
     try {
       const body: any = { videoId, channelId, localSpeaker };
+      if (alsoLabel.size > 0) {
+        body.additionalLocalSpeakers = Array.from(alsoLabel);
+      }
       if (mode === "new") {
         if (!newName.trim()) {
           toast({ variant: "destructive", title: "Name required" });
@@ -87,8 +111,15 @@ export function SpeakerLabelDialog({
         }
         body.speakerId = mergeIntoId;
       }
-      await apiRequest("POST", "/api/speakers/assign", body);
-      toast({ title: "Speaker assigned" });
+      const r = await apiRequest("POST", "/api/speakers/assign", body);
+      const data = await r.json() as { autoMatched?: number; additionalAssigned?: number };
+      const extras: string[] = [];
+      if (data.additionalAssigned) extras.push(`+${data.additionalAssigned} other label${data.additionalAssigned === 1 ? "" : "s"} in this video`);
+      if (data.autoMatched) extras.push(`auto-matched in ${data.autoMatched} other video${data.autoMatched === 1 ? "" : "s"}`);
+      toast({
+        title: "Speaker assigned",
+        description: extras.length > 0 ? extras.join(" · ") : undefined,
+      });
       onSaved?.();
       onOpenChange(false);
     } catch (e: any) {
@@ -177,6 +208,43 @@ export function SpeakerLabelDialog({
               </SelectContent>
             </Select>
           )}
+
+          {otherUnidentified && otherUnidentified.length > 0 && (
+            <div className="rounded-md border border-dashed p-2 space-y-1 bg-muted/20">
+              <div className="text-xs font-medium text-muted-foreground">
+                Also label these as the same person?
+                <span className="ml-1 text-muted-foreground/70">
+                  ({otherUnidentified.length} other unidentified in this video)
+                </span>
+              </div>
+              <div className="max-h-32 overflow-y-auto space-y-0.5 pr-1">
+                {otherUnidentified.map(o => {
+                  const checked = alsoLabel.has(o.localSpeaker);
+                  return (
+                    <label key={o.localSpeaker} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/30 rounded px-1 py-0.5">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          const next = new Set(alsoLabel);
+                          if (checked) next.delete(o.localSpeaker); else next.add(o.localSpeaker);
+                          setAlsoLabel(next);
+                        }}
+                      />
+                      <span className="font-mono">{o.localSpeaker}</span>
+                      <span className="text-muted-foreground ml-auto">{fmtAirtime(o.airtimeSeconds)}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              {alsoLabel.size > 0 && (
+                <div className="text-[10px] text-muted-foreground pt-1">
+                  Will label {alsoLabel.size + 1} local speakers in this video as one person.
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-2 justify-end pt-2">
             {currentSpeakerId && (
               <Button size="sm" variant="ghost" className="mr-auto text-destructive" onClick={unassign} disabled={busy}>

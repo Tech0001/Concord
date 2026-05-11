@@ -365,7 +365,7 @@ class SpeakerManager:
         return len(self.centroids)
 
 
-def extract_turn_embeddings(waveform, sample_rate, turns, titanet, device, min_turn_sec: float = 0.75):
+def extract_turn_embeddings(waveform, sample_rate, turns, titanet, device, min_turn_sec: float = 1.0):
     """Extract a 192-dim TitaNet embedding for each turn. Slices the
     pre-loaded waveform tensor (no per-turn disk I/O); each slice runs
     through the model in a tight inference-mode loop.
@@ -508,7 +508,14 @@ def diarize(audio_path: str, output_path: str, model_name: str, device: str,
         # major speaker by centroid similarity. Sortformer + TitaNet still
         # spawn brief noise speakers (intro music, voice-quality changes)
         # that aren't real distinct people — collapse them.
-        merge_minor_speakers(turns, embeddings, min_airtime_sec=5.0)
+        # Threshold scales with audio length: long videos accumulate more
+        # noise turns, so 5s absolute (= 0.3% of a 30-min video) is too
+        # permissive. Use max(15s, 2% of audio) — 15s covers short clips,
+        # 2% catches the cumulative "1s here, 2s there" spurious speakers
+        # that pile up over long content.
+        audio_dur = max((t["end"] for t in turns), default=0.0)
+        merge_threshold = max(15.0, 0.02 * audio_dur)
+        merge_minor_speakers(turns, embeddings, min_airtime_sec=merge_threshold)
 
         # Convert to FluidAudio shape (1-indexed string speaker IDs).
         spans = [{

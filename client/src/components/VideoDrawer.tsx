@@ -1114,18 +1114,35 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
           <div className="p-4 text-sm text-muted-foreground">No video selected.</div>
         )}
       </SheetContent>
-      {labelDialog && video && (
-        <SpeakerLabelDialog
-          open={true}
-          onOpenChange={(o) => { if (!o) setLabelDialog(null); }}
-          localSpeaker={labelDialog.localSpeaker}
-          contextLabel={video.title}
-          videoId={video.video_id}
-          channelId={video.channel_id}
-          currentSpeakerId={labelDialog.currentSpeakerId}
-          onSaved={loadSpeakerMap}
-        />
-      )}
+      {labelDialog && video && (() => {
+        // Build "other unidentified locals in this video" with airtime
+        // by walking segments. Excludes already-labeled (in speakerMap)
+        // and the one being labeled. Lets the dialog offer multi-select
+        // for the over-segmentation case.
+        const airtimes: Record<string, number> = {};
+        for (const seg of segments) {
+          if (!seg.speaker) continue;
+          if (seg.speaker === labelDialog.localSpeaker) continue;
+          if (speakerMap[seg.speaker]) continue;
+          airtimes[seg.speaker] = (airtimes[seg.speaker] || 0) + Math.max(0, seg.end - seg.start);
+        }
+        const others = Object.entries(airtimes)
+          .map(([localSpeaker, airtimeSeconds]) => ({ localSpeaker, airtimeSeconds }))
+          .sort((a, b) => b.airtimeSeconds - a.airtimeSeconds);
+        return (
+          <SpeakerLabelDialog
+            open={true}
+            onOpenChange={(o) => { if (!o) setLabelDialog(null); }}
+            localSpeaker={labelDialog.localSpeaker}
+            contextLabel={video.title}
+            videoId={video.video_id}
+            channelId={video.channel_id}
+            currentSpeakerId={labelDialog.currentSpeakerId}
+            otherUnidentified={others}
+            onSaved={loadSpeakerMap}
+          />
+        );
+      })()}
     </Sheet>
   );
 }

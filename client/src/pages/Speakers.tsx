@@ -7,7 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { SpeakerLabelDialog } from "@/components/SpeakerLabelDialog";
-import { Mic, Play, UserPlus, Trash2, Pencil, X, Check, Users } from "lucide-react";
+import { Mic, Play, UserPlus, Trash2, Pencil, X, Check, Users, RefreshCw, Search } from "lucide-react";
 
 interface Speaker {
   id: string;
@@ -165,6 +165,32 @@ export default function Speakers() {
     }
   };
 
+  const findMatchesFor = async (s: Speaker) => {
+    try {
+      const r = await apiRequest("POST", `/api/speakers/${s.id}/find-matches`);
+      const data = await r.json() as { matched: number };
+      toast({
+        title: data.matched > 0 ? `Matched ${s.name} in ${data.matched} more video${data.matched === 1 ? "" : "s"}` : `No new matches for ${s.name}`,
+      });
+      if (data.matched > 0) fetchAll();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Match scan failed", description: e.message });
+    }
+  };
+
+  const rescanAll = async () => {
+    try {
+      const r = await apiRequest("POST", "/api/speakers/find-all-matches");
+      const data = await r.json() as { matched: number };
+      toast({
+        title: data.matched > 0 ? `Auto-matched ${data.matched} unidentified voice${data.matched === 1 ? "" : "s"} across the archive` : "No new matches found",
+      });
+      if (data.matched > 0) fetchAll();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Rescan failed", description: e.message });
+    }
+  };
+
   const removeSpeaker = async (s: Speaker) => {
     if (!confirm(`Delete speaker "${s.name}"?\nAny videos labeled with this speaker will become unidentified again.`)) return;
     try {
@@ -208,7 +234,17 @@ export default function Speakers() {
 
       {/* Known speakers */}
       <Card>
-        <CardHeader><CardTitle className="text-base">Known voices</CardTitle></CardHeader>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="text-base">Known voices</CardTitle>
+            {speakers.length > 0 && unidentified.length > 0 && (
+              <Button size="sm" variant="outline" onClick={rescanAll}>
+                <Search className="h-3 w-3 mr-1.5"/>
+                Rescan unidentified
+              </Button>
+            )}
+          </div>
+        </CardHeader>
         <CardContent className="space-y-1.5">
           {loading && speakers.length === 0 && (
             <p className="text-xs text-muted-foreground">Loading…</p>
@@ -269,6 +305,11 @@ export default function Speakers() {
                       <span className="font-medium text-sm flex-1 truncate">{s.name}</span>
                       <Badge variant="secondary" className="text-[10px]">{fmtAirtime(s.total_airtime_seconds)}</Badge>
                       <Badge variant="outline" className="text-[10px]">{s.appearance_count} videos</Badge>
+                      {s.has_embedding === 1 && (
+                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={e => { e.stopPropagation(); findMatchesFor(s); }} title="Find more videos with this voice">
+                          <RefreshCw className="h-3.5 w-3.5"/>
+                        </Button>
+                      )}
                       <Button size="icon" variant="ghost" className="h-7 w-7" onClick={e => { e.stopPropagation(); beginEdit(s); }}>
                         <Pencil className="h-3.5 w-3.5"/>
                       </Button>

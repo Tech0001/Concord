@@ -2490,6 +2490,84 @@ export function assignVideoSpeakerToGlobal(args: {
   setSpeakerEmbedding(args.speakerId, merged, n + 1);
 }
 
+/** Walk every video_speaker_assignments row with speaker_id IS NULL
+ *  and a non-empty centroid, compare against the given global speaker's
+ *  centroid, and auto-assign matches within the threshold. Returns how
+ *  many matched.
+ *
+ *  Triggered automatically when a new global speaker is created (so a
+ *  one-shot label finds all the prior appearances in your archive) and
+ *  exposed as a manual button per-speaker for re-running after centroid
+ *  updates from later labels. */
+export function autoMatchUnidentifiedAgainstSpeaker(
+  speakerId: string,
+  threshold = SPEAKER_AUTOMATCH_THRESHOLD,
+): number {
+  const target = getSpeakerEmbedding(speakerId);
+  if (!target) return 0;
+
+  const rows = getDb().prepare(`
+    SELECT video_id, channel_id, local_speaker, centroid
+    FROM video_speaker_assignments
+    WHERE speaker_id IS NULL
+  `).all() as Array<{ video_id: string; channel_id: string; local_speaker: string; centroid: Buffer }>;
+
+  const updateStmt = getDb().prepare(`
+    UPDATE video_speaker_assignments
+    SET speaker_id = ?, confidence = ?, updated_at = datetime('now')
+    WHERE video_id = ? AND channel_id = ? AND local_speaker = ?
+  `);
+
+  let matched = 0;
+  for (const row of rows) {
+    if (row.centroid.byteLength === 0) continue;  // pre-Phase-1 stub
+    const candidate = bufferToF32(row.centroid);
+    const dist = cosineDistance(candidate, target.embedding);
+    if (dist <= threshold) {
+      updateStmt.run(speakerId, 1.0 - dist, row.video_id, row.channel_id, row.local_speaker);
+      matched++;
+    }
+  }
+  return matched;
+}
+
+/** Bulk variant: walks all unidentifieds and tries every known speaker,
+ *  assigning each to the closest match within threshold. Used by the
+ *  "Rescan all" button on the Speakers page. */
+export function autoMatchAllUnidentified(threshold = SPEAKER_AUTOMATCH_THRESHOLD): number {
+  const speakers = getAllSpeakerEmbeddings();
+  if (speakers.length === 0) return 0;
+
+  const rows = getDb().prepare(`
+    SELECT video_id, channel_id, local_speaker, centroid
+    FROM video_speaker_assignments
+    WHERE speaker_id IS NULL
+  `).all() as Array<{ video_id: string; channel_id: string; local_speaker: string; centroid: Buffer }>;
+
+  const updateStmt = getDb().prepare(`
+    UPDATE video_speaker_assignments
+    SET speaker_id = ?, confidence = ?, updated_at = datetime('now')
+    WHERE video_id = ? AND channel_id = ? AND local_speaker = ?
+  `);
+
+  let matched = 0;
+  for (const row of rows) {
+    if (row.centroid.byteLength === 0) continue;
+    const candidate = bufferToF32(row.centroid);
+    let bestDist = Infinity;
+    let bestSpeakerId: string | null = null;
+    for (const s of speakers) {
+      const d = cosineDistance(candidate, s.embedding);
+      if (d < bestDist) { bestDist = d; bestSpeakerId = s.speaker_id; }
+    }
+    if (bestSpeakerId !== null && bestDist <= threshold) {
+      updateStmt.run(bestSpeakerId, 1.0 - bestDist, row.video_id, row.channel_id, row.local_speaker);
+      matched++;
+    }
+  }
+  return matched;
+}
+
 /** Compute airtime + longest-turn sample for a video-local speaker by
  *  reading the transcript markdown's per-segment data, then UPDATE the
  *  matching video_speaker_assignments row in place.

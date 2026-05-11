@@ -21,6 +21,7 @@ import {
   getUnidentifiedAssignments, getSpeakerAppearances, assignVideoSpeakerToGlobal,
   getVideoSpeakerSummary, getVideoSpeakerSummariesBatch,
   backfillVideoSpeakerMetadata, backfillAllZeroAirtimeAssignments,
+  autoMatchUnidentifiedAgainstSpeaker, autoMatchAllUnidentified,
 } from "./db";
 import {
   addClipLink,
@@ -1293,6 +1294,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // transcripts) and recomputes airtime + sample timestamps from each
   // transcript file. Idempotent — calling twice does no extra work the
   // second time.
+  // Per-speaker rescan — used by the "Find more matches" button after
+  // additional labels update the centroid (centroid moves → new
+  // matches possible).
+  app.post("/api/speakers/:id/find-matches", (req: Request<{ id: string }>, res) => {
+    try {
+      res.json({ matched: autoMatchUnidentifiedAgainstSpeaker(req.params.id) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
+    }
+  });
+
+  // Bulk rescan — sweeps every unidentified against all known speakers,
+  // takes the closest within threshold. Used by "Rescan all" on Speakers.
+  app.post("/api/speakers/find-all-matches", (_req, res) => {
+    try {
+      res.json({ matched: autoMatchAllUnidentified() });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
+    }
+  });
+
   app.post("/api/speakers/backfill-stats", (_req, res) => {
     try {
       res.json(backfillAllZeroAirtimeAssignments());
@@ -1373,13 +1395,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         return res.status(400).json({ error: "Provide speakerId, newName, or speakerId=null" });
       }
+      // Multi-select: also label these other local labels in the same
+      // video as the same speaker. Handles the over-segmentation case
+      // where one person ended up split into S0/S1/.../Sn chips.
+      const additional: string[] = Array.isArray(req.body?.additionalLocalSpeakers)
+        ? req.body.additionalLocalSpeakers.filter((x: unknown) => typeof x === "string" && x !== localSpeaker)
+        : [];
+
       assignVideoSpeakerToGlobal({ videoId, channelId, localSpeaker, speakerId });
-      // Backfill airtime + sample timestamps from the transcript file
-      // (idempotent; safe to call after every assign — pre-Phase-1
-      // transcripts get real numbers instead of zeros, post-Phase-1
-      // ones get refreshed to match the transcript's view).
       backfillVideoSpeakerMetadata(videoId, channelId, localSpeaker);
-      res.json({ success: true, speakerId, createdSpeaker });
+      for (const al of additional) {
+        assignVideoSpeakerToGlobal({ videoId, channelId, localSpeaker: al, speakerId });
+        backfillVideoSpeakerMetadata(videoId, channelId, al);
+      }
+
+      // Auto-rescan: if this assign created a NEW global speaker, sweep
+      // the rest of the archive for that voice. Solves the "I added 200
+      // videos before labeling Pastor Johnson — now they all
+      // auto-identify him" case. Skipped for unlinks and re-assigns to
+      // existing speakers (don't second-guess prior labels).
+      let autoMatched = 0;
+      if (speakerId !== null && createdSpeaker) {
+        autoMatched = autoMatchUnidentifiedAgainstSpeaker(speakerId);
+      }
+      res.json({ success: true, speakerId, createdSpeaker, autoMatched, additionalAssigned: additional.length });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
     }
