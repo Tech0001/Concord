@@ -2640,6 +2640,56 @@ export function backfillVideoSpeakerMetadata(
   return { airtime, sampleStart: longest.start, sampleEnd: longest.end };
 }
 
+/** Delete video_speaker_assignments rows whose local_speaker doesn't
+ *  appear in the current transcript file. These are orphans from a
+ *  previous diarization run — when the video gets re-transcribed and
+ *  the new run has fewer (or different) local speakers, the old DB
+ *  rows persist and pollute the "unidentified" list with phantoms
+ *  that have no chip in the transcript to label.
+ *
+ *  Reads the transcript .md to determine which local labels are still
+ *  valid. If the file is missing OR has no speaker labels at all (e.g.
+ *  diarization was disabled), no rows are deleted (we'd rather keep
+ *  potentially-stale rows than nuke real data on a misread).
+ *
+ *  Returns the number of orphan rows removed. */
+export function pruneOrphanedAssignmentsForVideo(videoId: string, channelId: string): number {
+  const entry = getQueueEntry(videoId, channelId);
+  if (!entry?.md_path) return 0;
+  const segments = parseTranscriptSegments(entry.md_path);
+  const validLocals = new Set<string>();
+  for (const s of segments) {
+    if (s.speaker) validLocals.add(s.speaker);
+  }
+  // Safety: if the transcript has no labeled segments at all, skip —
+  // the file might be truncated or we're misreading the format. Don't
+  // delete real data on a misread.
+  if (validLocals.size === 0) return 0;
+
+  const placeholders = Array.from(validLocals, () => "?").join(",");
+  const result = getDb().prepare(`
+    DELETE FROM video_speaker_assignments
+    WHERE video_id = ? AND channel_id = ?
+      AND local_speaker NOT IN (${placeholders})
+  `).run(videoId, channelId, ...Array.from(validLocals));
+  return result.changes;
+}
+
+/** Bulk variant: walk every distinct video_id/channel_id with at least
+ *  one assignment row, then prune orphans for each. Used to fix up
+ *  pre-existing orphans from prior buggy re-transcribes. */
+export function pruneAllOrphanedAssignments(): { videosScanned: number; orphansRemoved: number } {
+  const rows = getDb().prepare(`
+    SELECT DISTINCT video_id, channel_id
+    FROM video_speaker_assignments
+  `).all() as Array<{ video_id: string; channel_id: string }>;
+  let orphansRemoved = 0;
+  for (const r of rows) {
+    orphansRemoved += pruneOrphanedAssignmentsForVideo(r.video_id, r.channel_id);
+  }
+  return { videosScanned: rows.length, orphansRemoved };
+}
+
 /** Bulk variant — walks every video_speaker_assignments row whose
  *  airtime_seconds is 0 (i.e. inserted as a stub by an assign action
  *  on a pre-Phase-1 transcript) and runs backfillVideoSpeakerMetadata.

@@ -22,7 +22,7 @@ import {
   getVideoSpeakerSummary, getVideoSpeakerSummariesBatch,
   backfillVideoSpeakerMetadata, backfillAllZeroAirtimeAssignments,
   autoMatchUnidentifiedAgainstSpeaker, autoMatchAllUnidentified,
-  getOrCreateNoiseSpeaker,
+  getOrCreateNoiseSpeaker, pruneAllOrphanedAssignments,
 } from "./db";
 import {
   addClipLink,
@@ -1311,6 +1311,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/speakers/find-all-matches", (_req, res) => {
     try {
       res.json({ matched: autoMatchAllUnidentified() });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
+    }
+  });
+
+  // Sweep all videos for orphan video_speaker_assignments rows whose
+  // local_speaker no longer appears in the current transcript file.
+  // Caused by re-transcribes that produced fewer/different local
+  // speakers than the prior run — DB rows persisted but had no chip
+  // to render. Cheap (one transcript-parse per video).
+  app.post("/api/speakers/prune-orphans", (_req, res) => {
+    try {
+      res.json(pruneAllOrphanedAssignments());
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed" });
     }

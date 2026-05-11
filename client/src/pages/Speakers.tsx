@@ -116,6 +116,22 @@ export default function Speakers() {
       .catch(() => { /* silent — non-critical */ });
   }, [loading, speakers, didBackfill, fetchAll]);
 
+  // Same idea for orphan pruning: if any unidentified rows exist, run a
+  // one-shot orphan sweep. Catches the "row in DB but no chip in
+  // transcript" case caused by re-transcribes that produced different
+  // local speakers than the prior run. Idempotent.
+  const [didPrune, setDidPrune] = useState(false);
+  useEffect(() => {
+    if (didPrune) return;
+    if (loading) return;
+    if (unidentified.length === 0) return;
+    setDidPrune(true);
+    apiRequest("POST", "/api/speakers/prune-orphans")
+      .then(r => r.json())
+      .then(({ orphansRemoved }) => { if (orphansRemoved > 0) fetchAll(); })
+      .catch(() => { /* silent — non-critical */ });
+  }, [loading, unidentified, didPrune, fetchAll]);
+
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   const fetchAppearances = useCallback(async (speakerId: string) => {

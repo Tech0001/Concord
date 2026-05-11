@@ -7,7 +7,7 @@ import {
   spansFromFluidAudio,
   type SpeakerSpan,
 } from "./diarize-merge";
-import { findClosestSpeaker, upsertVideoSpeakerAssignment, SPEAKER_AUTOMATCH_THRESHOLD } from "./db";
+import { findClosestSpeaker, upsertVideoSpeakerAssignment, SPEAKER_AUTOMATCH_THRESHOLD, pruneOrphanedAssignmentsForVideo } from "./db";
 
 // ---- JSON shapes on disk ----
 
@@ -262,6 +262,14 @@ function persistSpeakerProfiles(
     if (match) matched++;
     else unidentified++;
   }
+  // Clean up orphan rows from earlier diarization runs that produced
+  // local speakers no longer in the new transcript. Without this, a
+  // re-transcribe leaves phantom S* entries in the DB that never appear
+  // as chips in the drawer (no segment to render) but DO show up in
+  // the unidentified list — confusing because the user sees nothing
+  // to label.
+  const removed = pruneOrphanedAssignmentsForVideo(videoId, channelId);
+  if (removed > 0) console.log(`[parakeet] Pruned ${removed} orphan speaker assignment${removed === 1 ? "" : "s"} from previous diarization`);
   if (matched > 0 || unidentified > 0) {
     console.log(
       `[parakeet] Speaker profiles persisted: ${matched} auto-matched, ${unidentified} unidentified`,
