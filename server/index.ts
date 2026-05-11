@@ -22,6 +22,7 @@ const QUIET_PATHS = new Set([
   "/api/transcripts/search/stats",
   "/api/clips/tags",
   "/api/system/info",
+  "/api/status",
 ]);
 const QUIET_PREFIXES = [
   "/api/pipeline/events",                   // SSE — fires constantly

@@ -518,6 +518,7 @@ interface ReindexProgress {
   total: number;
   totalSegments: number;
   skipped: number;
+  alreadyCovered?: number;
   current?: string;
 }
 
@@ -564,6 +565,7 @@ function EmbeddingsCard({ hasEmbeddingModel }: { hasEmbeddingModel: boolean }) {
       let skipped = 0;
       let total = 0;
       let done = 0;
+      let alreadyCovered = 0;
       while (true) {
         const { value, done: streamDone } = await reader.read();
         if (streamDone) break;
@@ -579,21 +581,22 @@ function EmbeddingsCard({ hasEmbeddingModel }: { hasEmbeddingModel: boolean }) {
           const data = JSON.parse(dataMatch[1]);
           if (event === "start") {
             total = data.total;
-            setProgress({ done: 0, total, totalSegments: 0, skipped: 0 });
+            alreadyCovered = data.alreadyCovered || 0;
+            setProgress({ done: 0, total, totalSegments: 0, skipped: 0, alreadyCovered });
           } else if (event === "video") {
             done = data.done;
             if (data.skipped) skipped++;
             else totalSegments += (data.segmentCount || 0);
-            setProgress({ done, total, totalSegments, skipped, current: data.videoId });
+            setProgress({ done, total, totalSegments, skipped, alreadyCovered, current: data.videoId });
           } else if (event === "done") {
-            setProgress({ done: data.total, total: data.total, totalSegments: data.totalSegments, skipped: data.skipped });
+            setProgress({ done: data.total, total: data.total, totalSegments: data.totalSegments, skipped: data.skipped, alreadyCovered });
           }
         }
       }
-      toast({
-        title: "Reindex complete",
-        description: `${totalSegments} segments embedded across ${done - skipped} videos (${skipped} skipped)`,
-      });
+      const description = total === 0
+        ? `Nothing to do — all ${alreadyCovered} videos already indexed for this model.`
+        : `${totalSegments} segments embedded across ${done - skipped} videos (${skipped} skipped${alreadyCovered ? `, ${alreadyCovered} already covered` : ""})`;
+      toast({ title: "Reindex complete", description });
       fetchStats();
     } catch (err) {
       toast({ title: "Reindex failed", description: String(err), variant: "destructive" });
@@ -648,9 +651,12 @@ function EmbeddingsCard({ hasEmbeddingModel }: { hasEmbeddingModel: boolean }) {
                 style={{ width: progress.total ? `${(progress.done / progress.total) * 100}%` : "0%" }}
               />
             </div>
-            <div className="mt-1.5 flex justify-between text-muted-foreground">
+            <div className="mt-1.5 flex flex-wrap justify-between gap-x-3 text-muted-foreground">
               <span>{progress.totalSegments} segments embedded</span>
-              {progress.skipped > 0 && <span>{progress.skipped} skipped</span>}
+              <span className="flex gap-3">
+                {progress.skipped > 0 && <span>{progress.skipped} skipped</span>}
+                {progress.alreadyCovered ? <span>{progress.alreadyCovered} already covered</span> : null}
+              </span>
             </div>
           </div>
         )}

@@ -16,13 +16,14 @@ import { embedSegmentsForVideo } from "./embed-segments";
 import { summarizeVideo } from "./summarize-video";
 import { chat as llmChat } from "./llm";
 import {
-  getEmbeddingStats, clearAllEmbeddings, setVideoAiSummary,
+  getEmbeddingStats, clearAllEmbeddings, setVideoAiSummary, hasVideoEmbeddings,
   getSpeakersWithStats, getSpeakerById, createSpeaker, updateSpeaker, deleteSpeaker,
   getUnidentifiedAssignments, getSpeakerAppearances, assignVideoSpeakerToGlobal,
   getVideoSpeakerSummary, getVideoSpeakerSummariesBatch,
   backfillVideoSpeakerMetadata, backfillAllZeroAirtimeAssignments,
   autoMatchUnidentifiedAgainstSpeaker, autoMatchAllUnidentified,
   getOrCreateNoiseSpeaker, pruneAllOrphanedAssignments,
+  getArchiveStatus,
 } from "./db";
 import {
   addClipLink,
@@ -733,6 +734,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(pipeline.getState());
   });
 
+  // Whole-archive status snapshot — powers the Status dashboard. Bundles
+  // the pipeline state with coverage counts so the page renders from a
+  // single fetch. Cheap aggregate queries; safe to poll every few seconds.
+  app.get("/api/status", (_req, res) => {
+    try {
+      const cfg = pipeline.getConfig();
+      const snapshot = getArchiveStatus(cfg.llm.embeddingModel || null);
+      res.json({
+        pipeline: pipeline.getState(),
+        ...snapshot,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : "Failed to assemble status snapshot",
+      });
+    }
+  });
+
   // Get pipeline config
   app.get("/api/pipeline/config", (_req, res) => {
     res.json(pipeline.getConfig());
@@ -871,13 +890,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders();
 
-    const videos = getQueueList({ status: "complete", limit: 100000 }).rows;
+    // Default behavior: catch-up only — skip videos that already have
+    // embeddings for this model. Wipe forces a full re-embed (used when
+    // changing models or rebuilding from scratch).
+    const allVideos = getQueueList({ status: "complete", limit: 100000 }).rows;
+    const videos = wipe
+      ? allVideos
+      : allVideos.filter((v) => !hasVideoEmbeddings(v.video_id, v.channel_id, model));
+    const alreadyCovered = allVideos.length - videos.length;
     const sse = (event: string, data: unknown) => {
       res.write(`event: ${event}\n`);
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    sse("start", { total: videos.length, model });
+    sse("start", { total: videos.length, model, alreadyCovered });
 
     let done = 0;
     let totalSegments = 0;

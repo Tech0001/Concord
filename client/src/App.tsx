@@ -18,12 +18,14 @@ import Search from "@/pages/Search";
 import Clips from "@/pages/Clips";
 import AI from "@/pages/AI";
 import Speakers from "@/pages/Speakers";
+import Status from "@/pages/Status";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
   Activity,
   Bookmark,
   Database,
+  Gauge,
   Map as MapIcon,
   Moon,
   Search as SearchIcon,
@@ -35,6 +37,7 @@ import {
 const MapPage = lazy(() => import("@/pages/Map"));
 
 const NAV_ITEMS = [
+  { href: "/status", label: "Status", icon: Gauge },
   { href: "/library", label: "Library", icon: Database },
   { href: "/search", label: "Search", icon: SearchIcon },
   { href: "/clips", label: "Clips", icon: Bookmark },
@@ -156,6 +159,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Library} />
+      <Route path="/status" component={Status} />
       <Route path="/pipeline" component={Pipeline} />
       <Route path="/library" component={Library} />
       <Route path="/search" component={Search} />
