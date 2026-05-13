@@ -1,6 +1,9 @@
 import express, { type Request, Response, NextFunction } from "express";
+import { fileURLToPath } from "url";
+import type { AddressInfo } from "net";
 import { registerRoutes } from "./routes";
-import { setupVite, serveStatic, log } from "./vite";
+import { serveStatic, log } from "./vite";
+import { getConfigValues } from "./db";
 
 const app = express();
 app.use(express.json());
@@ -71,7 +74,13 @@ app.use((req, res, next) => {
   next();
 });
 
-(async () => {
+/**
+ * Boot the server and start listening. Returns the actual bound port +
+ * a close handle. Electron's main process calls this with `port: 0` to
+ * get an ephemeral port, then loads BrowserWindow against `localhost:<port>`.
+ * Run directly via `tsx` / `node` it auto-starts on PORT or 5050.
+ */
+export async function startServer(opts: { port?: number } = {}): Promise<{ port: number; close: () => Promise<void> }> {
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -85,18 +94,45 @@ app.use((req, res, next) => {
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
-  if (app.get("env") === "development") {
+  // Using process.env.NODE_ENV (not app.get("env")) so esbuild can statically
+  // substitute it at build time via --define and tree-shake the entire dev
+  // branch out of the production bundle. Without this, vite-dev.ts (and its
+  // transitive imports of vite + vite plugins) end up in dist/index.js even
+  // behind a dynamic import, and the packaged Electron app crashes at boot
+  // because vite is a devDependency that isn't shipped.
+  if (process.env.NODE_ENV !== "production") {
+    const { setupVite } = await import("./vite-dev");
     await setupVite(app, server);
   } else {
     serveStatic(app);
   }
 
   // Default 5050 because macOS Control Center (AirPlay Receiver) holds 5000.
-  const port = Number(process.env.PORT) || 5050;
-  server.listen({
-    port,
-    host: "0.0.0.0",
-  }, () => {
-    log(`serving on port ${port}`);
+  // Electron passes 0 explicitly to get whatever ephemeral port is free.
+  const requestedPort = opts.port ?? (Number(process.env.PORT) || 5050);
+  // LAN access is opt-in via config — default 127.0.0.1 keeps the API off
+  // the local network entirely. Toggling lanAccess to true (and restarting)
+  // binds to 0.0.0.0 so a phone/tablet on the same WiFi can browse the app.
+  const lanAccess = getConfigValues().lanAccess === "true";
+  const host = lanAccess ? "0.0.0.0" : "127.0.0.1";
+  return new Promise((resolve) => {
+    server.listen({ port: requestedPort, host }, () => {
+      const addr = server.address() as AddressInfo;
+      log(`serving on ${host}:${addr.port}${lanAccess ? " (LAN access enabled)" : ""}`);
+      resolve({
+        port: addr.port,
+        close: () => new Promise<void>((r) => server.close(() => r())),
+      });
+    });
   });
-})();
+}
+
+// Auto-start when invoked directly (tsx server/index.ts or node dist/server/index.js).
+// In Electron, the main process imports startServer and calls it explicitly.
+const isMain = process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url);
+if (isMain) {
+  startServer().catch((err) => {
+    console.error("Server failed to start:", err);
+    process.exit(1);
+  });
+}

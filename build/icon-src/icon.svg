@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- macOS squircle (continuous corners). Apple's icon grid leaves
+       ~100px padding around a 824px artwork. Background uses a subtle
+       vertical gradient so the icon doesn't look flat at large sizes. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1f2e"/>
+      <stop offset="1" stop-color="#0d1118"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f5e6cb"/>
+      <stop offset="1" stop-color="#e8c878"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle background -->
+  <path d="M 224 0 H 800 C 924 0 1024 100 1024 224 V 800 C 1024 924 924 1024 800 1024 H 224 C 100 1024 0 924 0 800 V 224 C 0 100 100 0 224 0 Z"
+        fill="url(#bg)"/>
+
+  <!-- Stylized 'C' made from vertical audio-waveform bars arranged in an
+       arc. Bars are taller in the middle and shorter at the ends — reads as
+       both a 'C' shape and a sound wave. Rounded caps for warmth.
+
+       Each bar: x-position, y-center, height. y-center traces a circle
+       around (512, 512) with radius 280; gap at the right (open side of C)
+       between bar 1 (12 o'clock) and bar 16 (6 o'clock) excludes the
+       3 o'clock region so the C opens rightward. -->
+  <g stroke="#ecd9a8" stroke-linecap="round" fill="none" stroke-width="44">
+    <!-- 17 bars sweeping from top (90°) counter-clockwise through left
+         to bottom (-90°), skipping the right (0°) side. Each bar is
+         drawn as a short vertical line, length = audio-level intensity
+         (taller in middle, shorter at tips). -->
+    <line x1="512" y1="180" x2="512" y2="284"/>           <!-- 12 o'clock, short -->
+    <line x1="426" y1="200" x2="426" y2="324"/>
+    <line x1="346" y1="240" x2="346" y2="380"/>
+    <line x1="278" y1="296" x2="278" y2="440"/>
+    <line x1="232" y1="368" x2="232" y2="500"/>
+    <line x1="212" y1="442" x2="212" y2="582"/>           <!-- 9 o'clock, tallest -->
+    <line x1="232" y1="524" x2="232" y2="656"/>
+    <line x1="278" y1="584" x2="278" y2="728"/>
+    <line x1="346" y1="644" x2="346" y2="784"/>
+    <line x1="426" y1="700" x2="426" y2="824"/>
+    <line x1="512" y1="740" x2="512" y2="844"/>           <!-- 6 o'clock, short -->
+  </g>
+</svg>

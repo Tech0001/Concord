@@ -288,7 +288,23 @@ export function getDb(dbPath?: string): Database.Database {
     // create the vec_segments virtual table or run any migration that
     // touches it. The npm package ships prebuilt loadable libs for
     // darwin-arm64 / darwin-x64 / linux-x64 / linux-arm64 / windows-x64.
-    sqliteVec.load(db);
+    //
+    // We bypass sqlite-vec's bundled `load(db)` because it uses
+    // `import.meta.resolve()` to locate the `.dylib`, which inside a
+    // packaged Electron app returns a path inside `app.asar/`. Native
+    // libraries can't be dlopen'd from inside asar — they have to be
+    // loaded from `app.asar.unpacked/` (electron-builder's asarUnpack
+    // config copies them there at build time). The CJS `require.resolve`
+    // path Electron uses for require IS asar-aware, but ESM
+    // `import.meta.resolve` isn't yet, so the path comes back wrong.
+    // Fix: take whatever path sqlite-vec computes, swap the asar segment
+    // for asar.unpacked when it points inside the bundle, then call
+    // loadExtension directly.
+    const vecPath = sqliteVec.getLoadablePath();
+    const fixedVecPath = vecPath.includes("/app.asar/")
+      ? vecPath.replace("/app.asar/", "/app.asar.unpacked/")
+      : vecPath;
+    db.loadExtension(fixedVecPath);
 
     db.exec(SCHEMA);
 
