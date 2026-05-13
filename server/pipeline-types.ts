@@ -39,6 +39,11 @@ export interface PipelineConfig {
    *  cap the pipeline stops pulling new YouTube videos; resets at local
    *  midnight. Local-folder channels don't count. 0 disables the cap. */
   dailyDownloadCap: number;
+  /** When true, the HTTP server binds to 0.0.0.0 (LAN-reachable) so the
+   *  user can browse the app from a phone/tablet on the same WiFi.
+   *  Default false → binds to 127.0.0.1 only. Requires server restart
+   *  to take effect (binding happens once at boot). */
+  lanAccess: boolean;
   transcription: {
     model: string;
     language: string;

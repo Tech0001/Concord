@@ -769,6 +769,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ platform: process.platform, arch: process.arch });
   });
 
+  // ---- LAN URL (for "open on your phone" UX) ----
+  // Returns the first non-internal IPv4 address bound on this machine so
+  // the UI can surface a URL the user types into their phone's browser.
+  // Only meaningful when lanAccess is enabled in pipeline config; the
+  // client gates display on that flag, but the endpoint always answers
+  // so the UI can show "save config and restart to enable" hints.
+  app.get("/api/system/lan-url", async (_req, res) => {
+    const os = await import("os");
+    const port = (httpServer.address() as { port?: number } | null)?.port;
+    const lanAccess = pipeline.getConfig().lanAccess === true;
+    const ifaces = os.networkInterfaces();
+    let ip: string | null = null;
+    for (const list of Object.values(ifaces)) {
+      for (const i of list || []) {
+        if (i.family === "IPv4" && !i.internal) { ip = i.address; break; }
+      }
+      if (ip) break;
+    }
+    res.json({
+      lanAccess,
+      ip,
+      port: port ?? null,
+      url: lanAccess && ip && port ? `http://${ip}:${port}` : null,
+    });
+  });
+
   // ---- Native folder picker (macOS / future Electron) ----
   // Spawns AppleScript's `choose folder` dialog so users can pick paths in
   // Finder instead of typing them. Server-side because the app runs locally

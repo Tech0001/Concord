@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -913,6 +914,7 @@ interface PipelineConfigShape {
   youtubeCookiesFile?: string;
   youtubeSpeedPreset?: "fast" | "balanced" | "conservative";
   dailyDownloadCap?: number;
+  lanAccess?: boolean;
   checkIntervalMinutes?: number;
   transcription?: { model?: string };
   // unknown fields preserved on save round-trip
@@ -934,6 +936,8 @@ function PipelineSettingsCard() {
   const [youtubeCookiesFile, setYoutubeCookiesFile] = useState("");
   const [youtubeSpeed, setYoutubeSpeed] = useState<"fast" | "balanced" | "conservative">("conservative");
   const [dailyCap, setDailyCap] = useState(200);
+  const [lanAccess, setLanAccess] = useState(false);
+  const [lanInfo, setLanInfo] = useState<{ lanAccess: boolean; ip: string | null; port: number | null; url: string | null } | null>(null);
   const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
   const [checkInterval, setCheckInterval] = useState(60);
 
@@ -950,6 +954,7 @@ function PipelineSettingsCard() {
       setYoutubeCookiesFile(c.youtubeCookiesFile ?? "");
       setYoutubeSpeed(c.youtubeSpeedPreset ?? "conservative");
       setDailyCap(typeof c.dailyDownloadCap === "number" ? c.dailyDownloadCap : 200);
+      setLanAccess(c.lanAccess === true);
       setTranscriptionModel(c.transcription?.model ?? "large-v3");
       setCheckInterval(typeof c.checkIntervalMinutes === "number" ? c.checkIntervalMinutes : 60);
     } catch {
@@ -965,7 +970,14 @@ function PipelineSettingsCard() {
     } catch {}
   }, []);
 
-  useEffect(() => { fetchConfig(); fetchPlatform(); }, [fetchConfig, fetchPlatform]);
+  const fetchLanInfo = useCallback(async () => {
+    try {
+      const r = await apiRequest("GET", "/api/system/lan-url");
+      setLanInfo(await r.json());
+    } catch { setLanInfo(null); }
+  }, []);
+
+  useEffect(() => { fetchConfig(); fetchPlatform(); fetchLanInfo(); }, [fetchConfig, fetchPlatform, fetchLanInfo]);
 
   const save = async () => {
     if (!config) return;
@@ -981,6 +993,7 @@ function PipelineSettingsCard() {
         youtubeCookiesFile: youtubeCookiesFile.trim(),
         youtubeSpeedPreset: youtubeSpeed,
         dailyDownloadCap: dailyCap,
+        lanAccess,
         checkIntervalMinutes: checkInterval,
         transcription: { ...(config.transcription ?? {}), model: transcriptionModel },
       });
@@ -1071,6 +1084,31 @@ function PipelineSettingsCard() {
               className="h-8 font-mono"
               placeholder="200 (0 = disabled)"
             />
+          </div>
+          <div className="grid grid-cols-[160px_1fr] items-start gap-2">
+            <label className="text-muted-foreground pt-1">LAN access</label>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Switch checked={lanAccess} onCheckedChange={setLanAccess} aria-label="Allow phone/tablet on same WiFi" />
+                <span className="text-xs text-muted-foreground">
+                  {lanAccess ? "On — phone/tablet on same WiFi can connect" : "Off — local Mac only (default)"}
+                </span>
+              </div>
+              {lanAccess && lanInfo?.url && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-muted-foreground">URL:</span>
+                  <code className="font-mono text-foreground bg-muted px-1.5 py-0.5 rounded">{lanInfo.url}</code>
+                  <button
+                    type="button"
+                    className="text-xs underline underline-offset-2 hover:no-underline"
+                    onClick={() => { if (lanInfo.url) navigator.clipboard.writeText(lanInfo.url); toast({ title: "URL copied" }); }}
+                  >copy</button>
+                </div>
+              )}
+              {lanAccess && !lanInfo?.url && (
+                <p className="text-[10px] text-muted-foreground">Save and restart the server to activate. URL appears here after restart.</p>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-[160px_1fr] items-center gap-2">
             <label className="text-muted-foreground" htmlFor="settings-checkInterval">Check interval (min)</label>

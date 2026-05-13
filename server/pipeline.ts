@@ -204,6 +204,7 @@ export class Pipeline extends EventEmitter {
       youtubeCookiesFile: "",
       youtubeSpeedPreset: "conservative",
       dailyDownloadCap: 200,
+      lanAccess: false,
       transcription: {
         model: "large-v3",
         language: "en",
@@ -245,6 +246,7 @@ export class Pipeline extends EventEmitter {
       youtubeCookiesFile: stored.youtubeCookiesFile || defaults.youtubeCookiesFile,
       youtubeSpeedPreset: parseSpeedPreset(stored.youtubeSpeedPreset, defaults.youtubeSpeedPreset),
       dailyDownloadCap: parseConfigNumber(stored.dailyDownloadCap, defaults.dailyDownloadCap),
+      lanAccess: parseConfigBoolean(stored.lanAccess, defaults.lanAccess),
       transcription: {
         model: stored["transcription.model"] || defaults.transcription.model,
         language: stored["transcription.language"] || defaults.transcription.language,
@@ -319,6 +321,7 @@ export class Pipeline extends EventEmitter {
       youtubeCookiesFile: config.youtubeCookiesFile,
       youtubeSpeedPreset: config.youtubeSpeedPreset,
       dailyDownloadCap: config.dailyDownloadCap,
+      lanAccess: config.lanAccess,
       "transcription.model": config.transcription.model,
       "transcription.language": config.transcription.language,
       "transcription.device": config.transcription.device,

@@ -80,6 +80,7 @@ interface Config {
   youtubeCookiesFile: string;
   youtubeSpeedPreset: "fast" | "balanced" | "conservative";
   dailyDownloadCap: number;
+  lanAccess: boolean;
   transcription: { model: string; language: string; device: string };
   processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean; diarizationEnabled: boolean };
 }
