@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { TagPicker } from "@/components/TagPicker";
 import { useToast } from "@/hooks/use-toast";
@@ -14,6 +15,7 @@ import {
   ChevronRight,
   Filter,
   Loader2,
+  Menu,
   MessageSquare,
   Pencil,
   Pin,
@@ -415,53 +417,96 @@ export default function AI() {
     return { pinned, recent };
   }, [conversations]);
 
-  return (
-    <div className="mx-auto flex max-w-7xl gap-3 px-3 py-3" style={{ height: "calc(100vh - 48px)" }}>
-      <aside className="flex w-64 shrink-0 flex-col gap-2">
-        <div className="flex items-center gap-1.5">
-          <Button size="sm" onClick={newChat} disabled={streaming} className="flex-1 justify-start">
-            <Plus className="mr-1.5 h-3.5 w-3.5" /> New chat
-          </Button>
-          <Link href="/settings">
-            <Button size="icon" variant="ghost" className="h-8 w-8" title="Settings">
-              <SettingsIcon className="h-3.5 w-3.5" />
-            </Button>
-          </Link>
-        </div>
+  const [conversationsSheetOpen, setConversationsSheetOpen] = useState(false);
 
-        <div className="flex-1 space-y-2 overflow-y-auto">
-          {groupedConversations.pinned.length > 0 && (
-            <ConversationGroup
-              label="Pinned"
-              items={groupedConversations.pinned}
-              activeId={active.id}
-              onSelect={loadConversation}
-              onDelete={deleteConversation}
-              onTogglePin={togglePin}
-              onRename={renameConversation}
-            />
-          )}
+  // Closing the sheet after a tap is what makes the mobile experience feel
+  // right — wrap the conversation actions so each one auto-dismisses.
+  const handleSelectFromSheet = useCallback((id: string) => {
+    setConversationsSheetOpen(false);
+    void loadConversation(id);
+  }, [loadConversation]);
+
+  const newChatFromSheet = useCallback(() => {
+    setConversationsSheetOpen(false);
+    newChat();
+  }, [newChat]);
+
+  // Shared sidebar body — rendered both as the desktop aside and inside the
+  // mobile sheet. Takes a flag so the desktop variant doesn't auto-close.
+  const renderSidebar = (onSelect: (id: string) => void, onNew: () => void) => (
+    <>
+      <div className="flex items-center gap-1.5">
+        <Button size="sm" onClick={onNew} disabled={streaming} className="flex-1 justify-start">
+          <Plus className="mr-1.5 h-3.5 w-3.5" /> New chat
+        </Button>
+        <Link href="/settings">
+          <Button size="icon" variant="ghost" className="h-8 w-8" title="Settings">
+            <SettingsIcon className="h-3.5 w-3.5" />
+          </Button>
+        </Link>
+      </div>
+
+      <div className="flex-1 space-y-2 overflow-y-auto">
+        {groupedConversations.pinned.length > 0 && (
           <ConversationGroup
-            label={groupedConversations.pinned.length > 0 ? "Recent" : "Conversations"}
-            items={groupedConversations.recent}
+            label="Pinned"
+            items={groupedConversations.pinned}
             activeId={active.id}
-            onSelect={loadConversation}
+            onSelect={onSelect}
             onDelete={deleteConversation}
             onTogglePin={togglePin}
             onRename={renameConversation}
           />
-          {conversations.length === 0 && (
-            <div className="rounded-md border border-dashed bg-muted/30 px-3 py-6 text-center text-xs text-muted-foreground">
-              No conversations yet. Ask the archive something.
-            </div>
-          )}
-        </div>
+        )}
+        <ConversationGroup
+          label={groupedConversations.pinned.length > 0 ? "Recent" : "Conversations"}
+          items={groupedConversations.recent}
+          activeId={active.id}
+          onSelect={onSelect}
+          onDelete={deleteConversation}
+          onTogglePin={togglePin}
+          onRename={renameConversation}
+        />
+        {conversations.length === 0 && (
+          <div className="rounded-md border border-dashed bg-muted/30 px-3 py-6 text-center text-xs text-muted-foreground">
+            No conversations yet. Ask the archive something.
+          </div>
+        )}
+      </div>
+    </>
+  );
+
+  return (
+    <div className="mx-auto flex max-w-7xl gap-3 px-3 py-3" style={{ height: "calc(100vh - 48px)" }}>
+      <aside className="hidden w-64 shrink-0 flex-col gap-2 md:flex">
+        {renderSidebar(loadConversation, newChat)}
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col gap-2">
         <header className="flex items-center justify-between gap-3 border-b pb-2">
           <div className="flex min-w-0 items-center gap-2">
-            <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <Sheet open={conversationsSheetOpen} onOpenChange={setConversationsSheetOpen}>
+              <SheetTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 md:hidden"
+                  aria-label="Open conversations"
+                  title="Conversations"
+                >
+                  <Menu className="h-4 w-4" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left" className="w-72 p-0">
+                <SheetHeader className="border-b p-3">
+                  <SheetTitle className="text-sm">Conversations</SheetTitle>
+                </SheetHeader>
+                <div className="flex h-[calc(100%-49px)] flex-col gap-2 p-3">
+                  {renderSidebar(handleSelectFromSheet, newChatFromSheet)}
+                </div>
+              </SheetContent>
+            </Sheet>
+            <MessageSquare className="hidden h-4 w-4 shrink-0 text-muted-foreground md:block" />
             <h1 className="truncate text-sm font-semibold">
               {active.title || (active.id ? "Untitled conversation" : "New chat")}
             </h1>
@@ -475,7 +520,7 @@ export default function AI() {
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Filter className="h-3.5 w-3.5" />
               <Select value={channelFilter} onValueChange={setChannelFilter}>
-                <SelectTrigger className="h-7 w-[180px] text-xs">
+                <SelectTrigger className="h-7 w-[120px] text-xs md:w-[180px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

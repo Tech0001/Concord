@@ -11,6 +11,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import NotFound from "@/pages/not-found";
 import Pipeline from "@/pages/Pipeline";
 import Library from "@/pages/Library";
@@ -27,6 +35,7 @@ import {
   Database,
   Gauge,
   Map as MapIcon,
+  Menu,
   Moon,
   NotebookText,
   Search as SearchIcon,
@@ -52,10 +61,42 @@ const NAV_ITEMS = [
 function TopBar() {
   const [location] = useLocation();
   const { theme, toggle, themeName, setThemeName, themes } = useTheme();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Auto-close the mobile menu whenever the route changes — without this the
+  // sheet stays open after a nav link tap, which feels broken on phone.
+  useEffect(() => { setMenuOpen(false); }, [location]);
+
+  const themeSelect = (
+    <Select value={themeName} onValueChange={setThemeName}>
+      <SelectTrigger className="h-8 w-[120px] text-xs" aria-label="Theme">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {themes.map((name) => (
+          <SelectItem key={name} value={name} className="text-xs capitalize">
+            {name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+
+  const themeToggleButton = (
+    <Button
+      size="icon"
+      variant="ghost"
+      onClick={toggle}
+      aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      className="h-8 w-8"
+    >
+      {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+    </Button>
+  );
 
   return (
     <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-      <div className="mx-auto flex h-12 max-w-7xl items-center gap-6 px-4">
+      <div className="mx-auto flex h-12 max-w-7xl items-center gap-3 px-3 md:gap-6 md:px-4">
         <div className="flex items-center gap-2">
           <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-foreground text-[11px] font-semibold text-background tracking-tight">
             C
@@ -64,7 +105,9 @@ function TopBar() {
             Concord
           </span>
         </div>
-        <nav className="flex flex-1 items-center gap-1 text-sm">
+
+        {/* Desktop nav — visible md and up. Phone gets the hamburger below. */}
+        <nav className="hidden flex-1 items-center gap-1 text-sm md:flex">
           {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
             const active = location === href;
             return (
@@ -82,32 +125,80 @@ function TopBar() {
             );
           })}
         </nav>
-        <div className="flex items-center gap-1">
+
+        {/* Right-side controls */}
+        <div className="ml-auto flex items-center gap-1 md:ml-0">
           <LlmStatusDot />
-          <Link href="/settings" aria-label="Settings" title="Settings" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground">
+
+          {/* Settings + theme controls only fit on md+ — the mobile menu
+              repeats them inside the drawer so phone users still have access. */}
+          <Link
+            href="/settings"
+            aria-label="Settings"
+            title="Settings"
+            className="hidden h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground md:inline-flex"
+          >
             <SettingsIcon className="h-3.5 w-3.5" />
           </Link>
-          <Select value={themeName} onValueChange={setThemeName}>
-            <SelectTrigger className="h-8 w-[120px] text-xs" aria-label="Theme">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {themes.map((name) => (
-                <SelectItem key={name} value={name} className="text-xs capitalize">
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={toggle}
-            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            className="h-8 w-8"
-          >
-            {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-          </Button>
+          <div className="hidden md:block">{themeSelect}</div>
+          <div className="hidden md:block">{themeToggleButton}</div>
+
+          {/* Hamburger — phone only. */}
+          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+            <SheetTrigger asChild>
+              <Button size="icon" variant="ghost" className="h-8 w-8 md:hidden" aria-label="Open menu">
+                <Menu className="h-4 w-4" />
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="right" className="w-72 p-0">
+              <SheetHeader className="border-b p-4">
+                <SheetTitle className="text-base">Concord</SheetTitle>
+              </SheetHeader>
+              <nav className="flex flex-col gap-0.5 p-2">
+                {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+                  const active = location === href;
+                  return (
+                    <SheetClose asChild key={href}>
+                      <Link
+                        href={href}
+                        className={cn(
+                          "inline-flex h-10 items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+                          active && "bg-secondary text-foreground"
+                        )}
+                      >
+                        <Icon className="h-4 w-4" />
+                        <span>{label}</span>
+                      </Link>
+                    </SheetClose>
+                  );
+                })}
+                <SheetClose asChild>
+                  <Link
+                    href="/settings"
+                    className={cn(
+                      "inline-flex h-10 items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+                      location === "/settings" && "bg-secondary text-foreground"
+                    )}
+                  >
+                    <SettingsIcon className="h-4 w-4" />
+                    <span>Settings</span>
+                  </Link>
+                </SheetClose>
+              </nav>
+              <div className="space-y-3 border-t p-4">
+                <div className="space-y-1.5">
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Theme</div>
+                  {themeSelect}
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">
+                    {theme === "dark" ? "Dark mode" : "Light mode"}
+                  </span>
+                  {themeToggleButton}
+                </div>
+              </div>
+            </SheetContent>
+          </Sheet>
         </div>
       </div>
     </header>
