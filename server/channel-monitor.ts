@@ -162,14 +162,15 @@ async function fetchChannelVideos(
   start: number,
   maxResults: number
 ): Promise<ChannelVideo[]> {
-  try {
-    const end = start + maxResults - 1;
-    const results: ChannelVideo[] = [];
-    const seen = new Set<string>();
+  const end = start + maxResults - 1;
+  const results: ChannelVideo[] = [];
+  const seen = new Set<string>();
+  const errors: unknown[] = [];
 
-    for (const scanUrl of normalizeChannelScanUrls(channelUrl)) {
-      console.log(`[monitor] Fetching videos from channel: ${scanUrl} (${start}-${end})`);
+  for (const scanUrl of normalizeChannelScanUrls(channelUrl)) {
+    console.log(`[monitor] Fetching videos from channel: ${scanUrl} (${start}-${end})`);
 
+    try {
       const result = await youtubedl(scanUrl, {
         dumpSingleJson: true,
         playlistStart: start,
@@ -189,13 +190,36 @@ async function fetchChannelVideos(
         seen.add(video.id);
         results.push(video);
       }
+    } catch (error) {
+      // yt-dlp returns a non-zero exit (which youtube-dl-exec rethrows as
+      // ChildProcessError) when a tab doesn't exist on the channel, e.g.
+      // `/streams` on a channel that has never gone live. That's expected,
+      // not an error — just skip that URL and try the next one. Real
+      // failures (network, auth, parse) still propagate via `errors[]`
+      // below if every URL fails.
+      if (isMissingTabError(error)) {
+        console.log(`[monitor] ${scanUrl}: tab not present on this channel, skipping`);
+        continue;
+      }
+      console.error(`[monitor] Error fetching ${scanUrl}:`, error);
+      errors.push(error);
     }
-
-    return results.sort(compareNewestFirst);
-  } catch (error) {
-    console.error(`[monitor] Error fetching channel ${channelUrl}:`, error);
-    throw error;
   }
+
+  // Only escalate if every URL failed AND we have nothing to show for it.
+  // A partial success (e.g. /videos worked, /streams threw a real error)
+  // still returns whatever we got.
+  if (results.length === 0 && errors.length > 0) {
+    throw errors[0];
+  }
+
+  return results.sort(compareNewestFirst);
+}
+
+function isMissingTabError(error: unknown): boolean {
+  const stderr = String((error as { stderr?: unknown })?.stderr ?? "");
+  const message = error instanceof Error ? error.message : String(error);
+  return /does not have an? \w+ tab/i.test(stderr) || /does not have an? \w+ tab/i.test(message);
 }
 
 function normalizeChannelScanUrls(channelUrl: string): string[] {
