@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Concord — personal research archive for spoken-word media",
   "author": "mackers",
+  "homepage": "https://github.com/mackers/concord",
   "type": "module",
   "license": "MIT",
   "packageManager": "pnpm@10.23.0",
@@ -18,7 +19,8 @@
     "check": "tsc",
     "electron:rebuild": "electron-builder install-app-deps",
     "electron:dev": "pnpm run build && pnpm run electron:rebuild && NODE_ENV=production electron dist/electron/main.js",
-    "electron:dist": "pnpm run build && electron-builder --mac --arm64"
+    "electron:dist": "pnpm run build && electron-builder --mac --arm64",
+    "electron:dist:linux": "pnpm run build && pnpm run electron:rebuild && electron-builder --linux"
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "1.1.0",
@@ -53,7 +55,9 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "@ffmpeg-installer/darwin-arm64",
+      "@ffmpeg-installer/linux-x64",
       "@ffprobe-installer/darwin-arm64",
+      "@ffprobe-installer/linux-x64",
       "better-sqlite3",
       "electron",
       "esbuild"
@@ -101,6 +105,7 @@
     "asarUnpack": [
       "node_modules/better-sqlite3/**",
       "node_modules/sqlite-vec-darwin-arm64/**",
+      "node_modules/sqlite-vec-linux-x64/**",
       "node_modules/@ffmpeg-installer/**",
       "node_modules/@ffprobe-installer/**"
     ],
@@ -122,6 +127,17 @@
     },
     "dmg": {
       "title": "Concord ${version}"
+    },
+    "linux": {
+      "category": "AudioVideo",
+      "target": [
+        { "target": "AppImage", "arch": "x64" },
+        { "target": "deb", "arch": "x64" }
+      ],
+      "icon": "build/icon-src/icon_1024.png",
+      "synopsis": "Personal research archive for spoken-word media",
+      "description": "Concord ingests YouTube channels and local audio, transcribes and diarizes speech, embeds segments for semantic search, and lets you tag, link, and chat with the archive.",
+      "maintainer": "mackers <noreply@concord.local>"
     }
   }
 }
