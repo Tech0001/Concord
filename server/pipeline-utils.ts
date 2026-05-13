@@ -88,10 +88,16 @@ export function localStableId(absPath: string): string {
 }
 
 /** YouTube sometimes leaves `is_live: true` on the metadata of old
- *  streams (especially archived premieres). A video uploaded more than
- *  24 hours ago physically can't still be broadcasting, so the flag is
- *  stale and we should proceed with a normal download instead of parking
- *  the row in `waiting_live` forever. */
+ *  streams (especially archived premieres). A stream that started more
+ *  than 6 hours ago is almost certainly done broadcasting — let it fall
+ *  through to a normal download rather than parking the row in
+ *  `waiting_live` waiting for a stream that already ended.
+ *
+ *  Note: uploadDate is YYYYMMDD only (no time-of-day), so the comparison
+ *  is against midnight UTC of that date. A stream uploaded "today" reads
+ *  as 0–24h old depending on when we check. The 6h threshold is the
+ *  *minimum* age we require; in practice anything from a previous day
+ *  always counts as stale. */
 export function isLiveFlagStale(uploadDate: string | null): boolean {
   if (!uploadDate) return false;
   const m = uploadDate.match(/^(\d{4})(\d{2})(\d{2})$/);
@@ -101,7 +107,7 @@ export function isLiveFlagStale(uploadDate: string | null): boolean {
     parseInt(m[2], 10) - 1,
     parseInt(m[3], 10),
   );
-  return Date.now() - uploadMs > 24 * 60 * 60 * 1000;
+  return Date.now() - uploadMs > 6 * 60 * 60 * 1000;
 }
 
 export function mtimeToYYYYMMDD(mtimeMs: number): string {
