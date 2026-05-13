@@ -113,7 +113,12 @@
         }
       ],
       "icon": "build/icon.icns",
-      "identity": "Tech0001 LLC (HXKQ77VWW2)"
+      "identity": "Tech0001 LLC (HXKQ77VWW2)",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true
     },
     "dmg": {
       "title": "Concord ${version}"

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- V8 needs JIT to compile JavaScript. Without this entitlement,
+       hardenedRuntime kills the renderer at first compile. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+
+  <!-- Electron loads native .node modules + Chromium's Mojo bindings,
+       which involve allocating executable pages outside the signed
+       binary. -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+
+  <!-- Required to dlopen third-party dylibs that aren't signed by
+       Apple or by the same team — sqlite-vec's vec0.dylib, the
+       bundled ffmpeg/ffprobe, and (when we ship it) fluidaudiocli. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- yt-dlp spawns python/python subprocesses for some YouTube
+       extractors; they inherit the parent process entitlements unless
+       we disable that. We need them to run unrestricted. -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+</dict>
+</plist>
