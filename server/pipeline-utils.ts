@@ -54,7 +54,13 @@ export function pathToFileUrl(absPath: string): string {
 
 export function isMediaFile(name: string): boolean {
   const ext = path.extname(name).toLowerCase();
-  return VIDEO_FILE_EXTS.has(ext) || AUDIO_FILE_EXTS.has(ext);
+  if (!(VIDEO_FILE_EXTS.has(ext) || AUDIO_FILE_EXTS.has(ext))) return false;
+  // Skip our own AAC playback sidecars (`<stem>.playback.m4a`). These live
+  // next to source files and would otherwise re-ingest as a separate video
+  // on every scan.
+  const stem = path.basename(name, ext).toLowerCase();
+  if (stem.endsWith(".playback")) return false;
+  return true;
 }
 
 export function isAudioOnlyPath(filePath: string): boolean {
