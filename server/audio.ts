@@ -2,6 +2,18 @@ import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
 
+/** Pull the actually-useful lines out of ffmpeg's stderr (which is mostly
+ *  banner output and progress) so a non-zero exit's Error message carries
+ *  the real diagnostic. Lets the pipeline's retry classifier see phrases
+ *  like "moov atom not found" or "Invalid data found when processing
+ *  input" instead of an opaque "ffmpeg exited with code N". */
+function summarizeFfmpegStderr(stderr: string): string {
+  const lines = stderr.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const errorLines = lines.filter(l => /error|invalid|not found|cannot|fail/i.test(l));
+  const pick = (errorLines.length ? errorLines : lines).slice(-3);
+  return pick.join(" | ").slice(0, 300);
+}
+
 /**
  * Fast extract: just demux the audio track from a video file without re-encoding.
  * Returns the path to the extracted audio file (typically m4a for YouTube videos).
@@ -29,7 +41,7 @@ export function copyAudioTrack(
         console.log(`[audio] Audio track copied: ${outputPath}`);
         resolve(outputPath);
       } else {
-        reject(new Error(`Audio track copy failed (code ${code})`));
+        reject(new Error(`Audio track copy failed (code ${code}): ${summarizeFfmpegStderr(stderr)}`));
       }
     });
 
@@ -100,8 +112,13 @@ export function extractAudio(
           reject(new Error("Audio extraction produced empty or missing file"));
         }
       } else {
+        // Surface the tail of stderr inside the Error message so the
+        // pipeline's retry classifier can recognize non-retryable cases
+        // (e.g. "moov atom not found", "Invalid data found...") instead
+        // of treating every corrupt file as a transient failure worth 3
+        // retries.
         console.error(`[audio] ffmpeg stderr: ${stderr.slice(-500)}`);
-        reject(new Error(`ffmpeg exited with code ${code}`));
+        reject(new Error(`ffmpeg exited with code ${code}: ${summarizeFfmpegStderr(stderr)}`));
       }
     });
 

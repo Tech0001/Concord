@@ -5,16 +5,28 @@ import { fileURLToPath, pathToFileURL } from "url";
 import type { ChannelVideo } from "./channel-monitor";
 import type { SpeedPreset } from "./pipeline-types";
 
-/** Transcription errors that should NOT trigger a retry — usually CUDA /
- *  driver issues that won't fix themselves between attempts and would
- *  just burn through the retry budget. */
+/** Pipeline errors that should NOT trigger a retry — these won't fix
+ *  themselves between attempts and would just burn through the retry
+ *  budget. Two families:
+ *  - CUDA / driver issues (the GPU isn't going to come back online
+ *    between retries 1 and 4).
+ *  - Corrupt / unreadable source files (a missing moov atom or an
+ *    "Invalid data" verdict from ffmpeg means the bytes themselves are
+ *    bad — replaying the same input gets the same answer every time).
+ */
 export function isNonRetryableTranscriptionError(message: string): boolean {
   const lower = message.toLowerCase();
   return (
+    // CUDA / GPU driver
     lower.includes("no cuda-capable device is detected") ||
     lower.includes("can't initialize nvml") ||
     lower.includes("cuda driver") ||
-    lower.includes("cuda failed")
+    lower.includes("cuda failed") ||
+    // Corrupt media / ffmpeg cannot decode
+    lower.includes("moov atom not found") ||
+    lower.includes("invalid data found when processing input") ||
+    lower.includes("error opening input file") ||
+    lower.includes("invalid argument") && lower.includes("ffmpeg")
   );
 }
 
