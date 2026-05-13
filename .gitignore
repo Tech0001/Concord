@@ -58,4 +58,3 @@ pipeline.db
 __pycache__/
 *.pyc
 /dist-electron
-build/icon.iconset/
