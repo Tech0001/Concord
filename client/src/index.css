@@ -219,3 +219,12 @@
     outline-color: var(--color-ring);
   }
 }
+
+/* Electron-only: the OS overlays traffic-light buttons at the top-left of
+   the window content area when `titleBarStyle: "hiddenInset"` is used.
+   Push the sticky header's inner row right so the logo doesn't sit under
+   them. Set on <html> via main.tsx after detecting `Electron` in the user
+   agent — absent in plain-browser dev, so the layout is unaffected there. */
+.electron header > div:first-child {
+  padding-left: 5rem;
+}

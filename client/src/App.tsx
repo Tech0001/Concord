@@ -95,7 +95,7 @@ function TopBar() {
   );
 
   return (
-    <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+    <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 [-webkit-app-region:drag]">
       <div className="mx-auto flex h-12 max-w-7xl items-center gap-3 px-3 md:gap-6 md:px-4">
         <div className="flex items-center gap-2">
           <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-foreground text-[11px] font-semibold text-background tracking-tight">
@@ -106,8 +106,9 @@ function TopBar() {
           </span>
         </div>
 
-        {/* Desktop nav — visible md and up. Phone gets the hamburger below. */}
-        <nav className="hidden flex-1 items-center gap-1 text-sm md:flex">
+        {/* Desktop nav — visible md and up. Phone gets the hamburger below.
+            no-drag so the nav links are clickable inside the draggable header. */}
+        <nav className="hidden flex-1 items-center gap-1 text-sm md:flex [-webkit-app-region:no-drag]">
           {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
             const active = location === href;
             return (
@@ -126,8 +127,9 @@ function TopBar() {
           })}
         </nav>
 
-        {/* Right-side controls */}
-        <div className="ml-auto flex items-center gap-1 md:ml-0">
+        {/* Right-side controls — no-drag so settings/theme/hamburger
+            buttons remain clickable inside the draggable header. */}
+        <div className="ml-auto flex items-center gap-1 md:ml-0 [-webkit-app-region:no-drag]">
           <LlmStatusDot />
 
           {/* Settings + theme controls only fit on md+ — the mobile menu

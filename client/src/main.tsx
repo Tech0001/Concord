@@ -6,6 +6,14 @@ import { injectThemes, DEFAULT_THEME, themes } from "./themes";
 // Make every theme file in client/src/themes/ available before React mounts.
 injectThemes();
 
+// Tag <html> with `.electron` when running inside the Electron shell so
+// the title-bar area gets enough left padding for macOS traffic lights
+// (which the OS overlays at the top-left). In a regular browser this
+// class is absent and the layout flows edge-to-edge as before.
+if (typeof navigator !== "undefined" && /Electron/i.test(navigator.userAgent)) {
+  document.documentElement.classList.add("electron");
+}
+
 // Apply persisted theme + mode synchronously to avoid a flash of the default.
 (() => {
   try {
