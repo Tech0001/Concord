@@ -37,6 +37,7 @@ import {
   Gauge,
   Map as MapIcon,
   Menu,
+  Mic,
   Moon,
   NotebookText,
   Search as SearchIcon,
@@ -45,6 +46,7 @@ import {
   Sun,
   Users,
 } from "lucide-react";
+import { VoiceRecorder } from "@/components/VoiceRecorder";
 
 const MapPage = lazy(() => import("@/pages/Map"));
 
@@ -63,6 +65,7 @@ function TopBar() {
   const [location] = useLocation();
   const { theme, toggle, themeName, setThemeName, themes } = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [recorderOpen, setRecorderOpen] = useState(false);
 
   // Auto-close the mobile menu whenever the route changes — without this the
   // sheet stays open after a nav link tap, which feels broken on phone.
@@ -132,6 +135,21 @@ function TopBar() {
             buttons remain clickable inside the draggable header. */}
         <div className="ml-auto flex items-center gap-1 md:ml-0 [-webkit-app-region:no-drag]">
           <LlmStatusDot />
+
+          {/* Voice-note recorder — sits next to the LLM status dot so it's
+              one click away on every page, including mobile (where the
+              hamburger replaces the nav links but this row stays visible). */}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8"
+            aria-label="Record voice note"
+            title="Record voice note"
+            onClick={() => setRecorderOpen(true)}
+          >
+            <Mic className="h-3.5 w-3.5" />
+          </Button>
+          <VoiceRecorder open={recorderOpen} onOpenChange={setRecorderOpen} />
 
           {/* Settings + theme controls only fit on md+ — the mobile menu
               repeats them inside the drawer so phone users still have access. */}

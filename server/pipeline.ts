@@ -619,6 +619,15 @@ export class Pipeline extends EventEmitter {
 
   // ---- Queue processor: pick next video and run the pipeline ----
 
+  /** Public nudge — tells the pipeline "there might be a new pending row,
+   *  please look." Used by voice-notes finalize and any other code path
+   *  that drops a row in via SQL without going through scanEnabledChannels.
+   *  Fire-and-forget: returns immediately; processing happens on the
+   *  microtask queue and re-arms itself via the activeJobs `finally`. */
+  kickQueue(): void {
+    void this.processNextInQueue();
+  }
+
   private async processNextInQueue(): Promise<void> {
     if (this.activeJobs >= this.maxConcurrent) {
       // Already busy — the active job's `finally` will call this again
