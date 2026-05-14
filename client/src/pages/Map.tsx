@@ -41,6 +41,7 @@ import {
   type ArcOrder,
   type Channel,
   type ClipLinkKind,
+  type FlowEdgePayload,
   type GraphEdgeData,
   type GraphNodeData,
   type GraphResponse,
@@ -272,30 +273,44 @@ export default function MapPage() {
       const source = clipById.get(edge.source);
       const target = clipById.get(edge.target);
       if (!source || !target) return [];
-      // For each link between two notes, emit one Flow edge per
-      // (sourceAnchor, targetAnchor) pair — multi-anchor notes appear in
-      // every anchored video's container, and the link should connect ALL
-      // appearances, not just the primary. Standalone notes (zero anchors)
-      // pass through with no handle (they render as freestanding ClipNodes
-      // with default Handles).
-      const srcAppearances = source.anchors?.length
-        ? source.anchors.map((a) => ({
-            nodeId: `video:${a.channelId}:${a.videoId}`,
-            handle: `${source.id}:${a.ordinal}`,
-            key: `${a.ordinal}`,
-          }))
-        : [{ nodeId: source.id, handle: undefined as string | undefined, key: "0" }];
-      const tgtAppearances = target.anchors?.length
-        ? target.anchors.map((a) => ({
-            nodeId: `video:${a.channelId}:${a.videoId}`,
-            handle: `${target.id}:${a.ordinal}`,
-            key: `${a.ordinal}`,
-          }))
-        : [{ nodeId: target.id, handle: undefined as string | undefined, key: "0" }];
+      // Per logical link, emit ONE edge per (sourceVideo, targetVideo)
+      // pair — NOT the full anchor × anchor cross-product. Multi-anchor
+      // notes still appear at every anchored timestamp inside their
+      // video container, but a single A→B link only draws one line in
+      // each video (pointing at the FIRST anchor of each side), so the
+      // viewer doesn't see A connecting to "every clip in video B"
+      // when it's the same target note just appearing multiple times.
+      //
+      // Standalone notes (zero anchors) pass through with no handle —
+      // they render as freestanding ClipNodes with default Handles.
+      type Appearance = { nodeId: string; handle: string | undefined; key: string };
+      const canonicalByVideo = (clip: typeof source): Map<string, Appearance> => {
+        const byVideo = new Map<string, Appearance>();
+        if (!clip.anchors?.length) {
+          byVideo.set(clip.id, { nodeId: clip.id, handle: undefined, key: "0" });
+          return byVideo;
+        }
+        for (const a of clip.anchors) {
+          const nodeId = `video:${a.channelId}:${a.videoId}`;
+          const existing = byVideo.get(nodeId);
+          if (!existing || a.ordinal < Number(existing.key)) {
+            byVideo.set(nodeId, {
+              nodeId,
+              handle: `${clip.id}:${a.ordinal}`,
+              key: String(a.ordinal),
+            });
+          }
+        }
+        return byVideo;
+      };
+      const srcByVideo = canonicalByVideo(source);
+      const tgtByVideo = canonicalByVideo(target);
 
       const out: Edge[] = [];
-      for (const s of srcAppearances) {
-        for (const t of tgtAppearances) {
+      const srcList = Array.from(srcByVideo.values());
+      const tgtList = Array.from(tgtByVideo.values());
+      for (const s of srcList) {
+        for (const t of tgtList) {
           // Skip self-loops where both appearances live in the same node —
           // they'd render as tiny loop arcs that just add noise.
           if (s.nodeId === t.nodeId) continue;
@@ -429,7 +444,11 @@ export default function MapPage() {
         note: linkNote.trim() || null,
       });
       toast({ title: "Note link created", description: `${source.title} → ${target.title}` });
-      setLinkSource(null);
+      // Stay in linking mode so the user can fan out from one source —
+      // A→B, A→C, A→D in a single fluid flow. Clear the note (each new
+      // link gets its own context) but keep linkSource + linkKind so
+      // the next target click immediately creates the next link. The
+      // user exits explicitly via the Cancel-link (X) button.
       setLinkNote("");
       await loadGraph();
     } catch (error: any) {
@@ -447,6 +466,43 @@ export default function MapPage() {
       await loadGraph();
     } catch (error: any) {
       toast({ variant: "destructive", title: "Remove link failed", description: error.message });
+    }
+  };
+
+  /** Change the kind of an existing manual edge in place. clip_links is
+   *  keyed by (from, to, kind), so "changing the kind" is a delete +
+   *  insert under the hood — but we preserve the optional note so the
+   *  user doesn't lose context. The edge stays selected after the
+   *  change so the user can make further adjustments or click off to
+   *  deselect explicitly. */
+  const changeManualEdgeKind = async (edge: Edge, newKind: ClipLinkKind) => {
+    const graphEdge = edge.data as GraphEdgeData | undefined;
+    if (!graphEdge || graphEdge.kind !== "manual" || !graphEdge.manualKind) return;
+    if (graphEdge.manualKind === newKind) return;
+    try {
+      await apiRequest("DELETE", `/api/clips/${graphEdge.source}/links/${graphEdge.target}/${graphEdge.manualKind}`);
+      await apiRequest("POST", `/api/clips/${graphEdge.source}/links`, {
+        toId: graphEdge.target,
+        kind: newKind,
+        note: graphEdge.note || null,
+      });
+      toast({ title: "Link type changed", description: newKind.replace("_", " ") });
+      // Optimistically patch the locally-held edge so the toolbar
+      // shows the new kind immediately. The loadGraph below will
+      // rebuild flowEdges with a fresh server-side id (id includes
+      // kind), but the toolbar reads from selectedEdge.data and that's
+      // what we just updated. The user can click off to dismiss.
+      setSelectedEdge({
+        ...edge,
+        data: {
+          ...graphEdge,
+          manualKind: newKind,
+          label: newKind,
+        } as FlowEdgePayload,
+      });
+      await loadGraph();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Change link type failed", description: error.message });
     }
   };
 
@@ -620,7 +676,7 @@ export default function MapPage() {
                     <ChevronDown className="ml-1 h-3 w-3" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-56 p-2" align="end">
+                <PopoverContent className="w-64 p-2" align="end">
                   <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">Show which edges</div>
                   {(mode === "video" ? ["manual", "shared_tag"] : ["manual", "shared_tag", "same_video"]).map((edgeType) => {
                     const label = edgeType === "manual" ? "Your links"
@@ -639,6 +695,19 @@ export default function MapPage() {
                       </label>
                     );
                   })}
+
+                  {/* Color legend for the per-kind manual edge colors. Only
+                      meaningful when "Your links" is on, but always rendered
+                      so the legend is a stable reference. */}
+                  <div className="mt-2 border-t pt-2">
+                    <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">Link colors</div>
+                    {LINK_KINDS.map((kind) => (
+                      <div key={kind.value} className="flex items-center gap-2 px-1.5 py-0.5 text-xs">
+                        <span className="inline-block h-2 w-6 rounded-sm" style={{ background: kind.color }} />
+                        <span>{kind.label}</span>
+                      </div>
+                    ))}
+                  </div>
                 </PopoverContent>
               </Popover>
               <span className="text-muted-foreground">{graph.stats.nodeCount} notes · {graph.stats.edgeCount} edges</span>
@@ -653,8 +722,12 @@ export default function MapPage() {
             {mode === "force" && "Tightly-linked notes pull together into clusters. Scroll to zoom, drag to pan."}
           </div>
 
-          {/* Linking controls — only when a note is selected. Collapses when
-              not linking so it stays out of the way most of the time. */}
+          {/* Linking controls — visible whenever a note is selected. The
+              kind picker sits next to the Link button BEFORE you commit
+              to linking, so users see the relationship-type choice up
+              front instead of discovering it only after they've already
+              clicked "Link" (at which point the default "Same topic"
+              had time to lock in if they then clicked a target). */}
           {selectedClip && (
             <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 p-2 text-xs">
               <Button
@@ -665,14 +738,23 @@ export default function MapPage() {
                 {linkSource ? <X className="h-3.5 w-3.5" /> : <Link2 className="h-3.5 w-3.5" />}
                 {linkSource ? "Cancel link" : `Link "${selectedClip.title.length > 24 ? selectedClip.title.slice(0, 24) + "…" : selectedClip.title}"`}
               </Button>
+
+              {/* Relationship type — shown both before and during linking so
+                  the user picks it before clicking the target. Disabled
+                  hint when no clip is selected; always visible when there
+                  is one. */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-muted-foreground">as</span>
+                <Select value={linkKind} onValueChange={value => setLinkKind(value as ClipLinkKind)}>
+                  <SelectTrigger className="h-8 w-[160px] text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {LINK_KINDS.map(kind => <SelectItem key={kind.value} value={kind.value}>{kind.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
               {linkSource && (
                 <>
-                  <Select value={linkKind} onValueChange={value => setLinkKind(value as ClipLinkKind)}>
-                    <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {LINK_KINDS.map(kind => <SelectItem key={kind.value} value={kind.value}>{kind.label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
                   <Input
                     value={linkNote}
                     onChange={event => setLinkNote(event.target.value)}
@@ -689,24 +771,46 @@ export default function MapPage() {
           )}
 
           {/* Selected-edge floating toolbar — appears when an edge is clicked.
-              Compact, single-line. Delete only enabled for manual edges. */}
-          {selectedEdge && (
-            <div className="flex items-center justify-between rounded-md border border-primary/30 bg-primary/5 p-2 text-xs">
-              <span>
-                Selected edge: <span className="text-foreground">{(selectedEdge.data as GraphEdgeData | undefined)?.label?.replace("_", " ") || selectedEdge.id}</span>
-              </span>
-              <Button
-                size="sm"
-                variant="destructive"
-                className="h-7 text-xs"
-                disabled={(selectedEdge.data as GraphEdgeData | undefined)?.kind !== "manual"}
-                onClick={() => deleteManualEdge(selectedEdge)}
-              >
-                <Trash2 className="mr-1 h-3 w-3" />
-                Delete
-              </Button>
-            </div>
-          )}
+              For manual links we expose a kind picker (change Same Topic →
+              Contradicts in place) alongside Delete. Auto-edges (shared
+              tag / same video) show only as labels. */}
+          {selectedEdge && (() => {
+            const data = selectedEdge.data as GraphEdgeData | undefined;
+            const isManual = data?.kind === "manual";
+            return (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 p-2 text-xs">
+                <span>
+                  Selected edge: <span className="text-foreground">{data?.label?.replace("_", " ") || selectedEdge.id}</span>
+                </span>
+                <div className="flex items-center gap-2">
+                  {isManual && data?.manualKind && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-muted-foreground">Type</span>
+                      <Select
+                        value={data.manualKind}
+                        onValueChange={(value) => changeManualEdgeKind(selectedEdge, value as ClipLinkKind)}
+                      >
+                        <SelectTrigger className="h-7 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {LINK_KINDS.map(kind => <SelectItem key={kind.value} value={kind.value}>{kind.label}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="h-7 text-xs"
+                    disabled={!isManual}
+                    onClick={() => deleteManualEdge(selectedEdge)}
+                  >
+                    <Trash2 className="mr-1 h-3 w-3" />
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
         </CardHeader>
       </Card>
 

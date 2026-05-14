@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as d3 from "d3";
 import ForceGraph2D, { type ForceGraphMethods, type LinkObject, type NodeObject } from "react-force-graph-2d";
-import { formatTimestamp, primaryTag } from "./helpers";
+import { edgeColor, formatTimestamp, primaryTag } from "./helpers";
 import type { GraphEdgeData, GraphNodeData } from "./types";
 
 /**
@@ -111,7 +111,9 @@ export function ForceDiagram({
           source: edge.source,
           target: edge.target,
           edge,
-          color: edge.kind === "manual" ? "rgba(100,116,139,0.68)" : tag ? color(tag) : "rgba(148,163,184,0.45)",
+          color: edge.kind === "manual"
+            ? edgeColor(edge.kind, edge.manualKind)
+            : tag ? color(tag) : "rgba(148,163,184,0.45)",
           width: edge.kind === "manual" ? 1.4 : Math.max(0.5, Math.min(1.5, edge.weight * 0.45)),
           label: `${edge.label}${tag ? ` (${tag})` : ""}`,
         };

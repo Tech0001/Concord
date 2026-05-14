@@ -104,14 +104,23 @@ export type LayoutMode = "video" | "clip" | "arc" | "force";
 export type ArcOrder = "tag" | "date" | "channel" | "title" | "connections";
 
 export const LINK_KINDS = [
-  { value: "same_claim", label: "Same claim" },
-  { value: "contradicts", label: "Contradicts" },
-  { value: "same_topic", label: "Same topic" },
-  { value: "follow_up", label: "Follow-up" },
-  { value: "context", label: "Context" },
+  // Each kind carries a stroke color used by every layout (Cards / Videos
+  // / Arc / Cluster). Chosen so the meaning reads in both light and dark
+  // themes; they're concrete hex values rather than CSS vars so SVG/canvas
+  // renderers (d3, force-graph) see a real color string.
+  { value: "same_claim",  label: "Same claim",  color: "#10b981" }, // emerald — agreement
+  { value: "contradicts", label: "Contradicts", color: "#ef4444" }, // red — conflict
+  { value: "same_topic",  label: "Same topic",  color: "#3b82f6" }, // blue — general relation
+  { value: "follow_up",   label: "Follow-up",   color: "#8b5cf6" }, // violet — next step
+  { value: "context",     label: "Context",     color: "#f59e0b" }, // amber — supporting info
 ] as const;
 
 export type ClipLinkKind = (typeof LINK_KINDS)[number]["value"];
+
+/** Quick-lookup map (kind value → color hex) for renderers that have
+ *  just the manualKind string in hand. */
+export const LINK_KIND_COLORS: Record<ClipLinkKind, string> =
+  Object.fromEntries(LINK_KINDS.map(k => [k.value, k.color])) as Record<ClipLinkKind, string>;
 
 export const DEFAULT_VIDEO_WIDTH = 360;
 export const DEFAULT_VIDEO_HEIGHT = 310;
