@@ -73,6 +73,17 @@ export class Pipeline extends EventEmitter {
   private activeJobs = 0;
   private maxConcurrent = 1;
 
+  // Retranscribe sequencing — see retranscribeVideo. Without these:
+  //   * Two clicks for the same video would race: both extract audio to
+  //     the same path with ffmpeg -y, one clobbering the other mid-read.
+  //   * Multiple different videos all start audio extraction in parallel,
+  //     then queue up at the Python lock in whatever order ffmpeg
+  //     finished — not click order. Looks like "weird order".
+  // The queue chains all retranscribes through one promise; the inflight
+  // map coalesces rapid duplicate clicks for the same (videoId, channelId).
+  private retranscribeQueue: Promise<unknown> = Promise.resolve();
+  private inflightRetranscribe = new Map<string, Promise<PipelineJob>>();
+
   constructor(_configPath: string = "./pipeline.config.json") {
     super();
     this.config = this.loadConfig();
@@ -1063,13 +1074,25 @@ export class Pipeline extends EventEmitter {
   }
 
   /** Re-transcribe a previously processed video with a different model. */
+  /** Public retranscribe entrypoint. Returns IMMEDIATELY with a stub
+   *  job (status = "queued"); the actual work runs in the background
+   *  through a single FIFO queue. The HTTP layer doesn't have to hold a
+   *  request open for the whole transcription — the client watches
+   *  progress via /api/pipeline/state polling like any other job.
+   *
+   *  Coalesces duplicate clicks for the same (videoId, channelId): a
+   *  second click while the first is still queued/running returns the
+   *  existing job stub instead of enqueueing a duplicate. */
   async retranscribeVideo(videoId: string, channelId: string, model?: string): Promise<PipelineJob> {
+    const key = `${channelId}:${videoId}`;
+    const existing = this.inflightRetranscribe.get(key);
+    if (existing) return existing;
+
+    // Look up the entry so the stub job carries real metadata for the UI.
     const entry = getDb()
       .prepare("SELECT * FROM video_queue WHERE video_id = ? AND channel_id = ?")
       .get(videoId, channelId) as QueueEntry | undefined;
-
     if (!entry) throw new Error(`Video not found in queue: ${videoId}`);
-
     const channel = this.config.channels.find(c => c.id === channelId) || {
       id: channelId, name: channelId, url: "", enabled: true,
     };
@@ -1081,15 +1104,57 @@ export class Pipeline extends EventEmitter {
       videoId,
       videoTitle: entry.title,
       videoUrl: entry.url,
-      status: "transcribing",
+      status: "queued",
       progress: 0,
       startedAt: new Date().toISOString(),
       retries: 0,
     };
-
     this.jobs.unshift(job);
-    this.activeJobs++;
     this.emit("jobStarted", job);
+
+    // Take the next queue slot and chain our work behind whatever's there.
+    const previous = this.retranscribeQueue;
+    let releaseSlot: () => void = () => {};
+    this.retranscribeQueue = new Promise<void>((resolve) => { releaseSlot = resolve; });
+
+    // Fire-and-forget: stash the Promise in the inflight map so a
+    // duplicate click can dedup, but don't await it — the response to
+    // the HTTP caller is the stub job above, returned right away.
+    const work = (async () => {
+      try { await previous; } catch { /* swallow — we want the slot, not the result */ }
+      try {
+        await this.runRetranscribeJob(job, entry, channel, model);
+      } catch (err) {
+        console.error(`[retranscribe] background failure for ${videoId}:`, err);
+      } finally {
+        this.inflightRetranscribe.delete(key);
+        releaseSlot();
+      }
+    })();
+
+    // Store the JOB (not the Promise) so dedup returns the stub instantly.
+    this.inflightRetranscribe.set(key, Promise.resolve(job));
+    // Track work too so a future shutdown handler could await pending jobs.
+    void work;
+
+    return job;
+  }
+
+  /** Worker invoked from retranscribeVideo's queue. Receives the
+   *  pre-built stub job + entry + channel (all looked up by the
+   *  enqueueing call) so we don't double-fetch. Mutates the job in
+   *  place — its identity is what the UI is already polling. */
+  private async runRetranscribeJob(
+    job: PipelineJob,
+    entry: QueueEntry,
+    channel: ChannelConfig,
+    model?: string,
+  ): Promise<PipelineJob> {
+    const videoId = entry.video_id;
+    const channelId = entry.channel_id;
+    job.status = "transcribing";
+    this.activeJobs++;
+    this.emit("jobUpdated", job);
 
     try {
       const transModel = model || this.config.transcription.model;

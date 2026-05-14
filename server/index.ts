@@ -5,6 +5,18 @@ import { registerRoutes } from "./routes";
 import { serveStatic, log } from "./vite";
 import { getConfigValues } from "./db";
 
+// Process-level safety nets. Without these, a single unhandled promise
+// rejection (or a synchronous throw inside an async callback) takes
+// the whole server down — which is what was happening when a background
+// retranscribe job hit an unexpected error mid-queue. Log loudly and
+// keep the event loop alive instead.
+process.on("unhandledRejection", (reason) => {
+  console.error("[process] Unhandled promise rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[process] Uncaught exception:", err);
+});
+
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));

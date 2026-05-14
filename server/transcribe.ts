@@ -79,8 +79,14 @@ async function withTranscriptionLock<T>(fn: () => Promise<T>): Promise<T> {
     release = resolve;
   });
 
-  await previous;
+  // The whole body is wrapped in try/finally — any throw (including a
+  // rejection from `await previous` if a future variant of this lock ever
+  // produces one) still hits release(). Without this, an orphan rejection
+  // on `previous` would skip release() and freeze every subsequent
+  // transcribe forever, which is the kind of silent stall that's almost
+  // impossible to debug from a running server.
   try {
+    try { await previous; } catch { /* prior caller already saw the error */ }
     return await fn();
   } finally {
     release();
