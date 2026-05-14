@@ -206,8 +206,13 @@ export class Pipeline extends EventEmitter {
     const defaults: PipelineConfig = {
       channels: [],
       workingDir: "./downloads",
-      videoSaveDir: "/media/pc/Maac/YouTube/saved_videos",
-      transcriptDir: "/media/pc/Maac/YouTube/transcripts",
+      // Intentionally blank — old defaults pointed at a Linux-specific path
+      // (/media/pc/Maac/...) that doesn't exist on a fresh Mac install and
+      // would silently misroute downloads on a new machine. Force the user
+      // to pick a folder in Settings (the Pipeline page surfaces a banner
+      // when these are unset).
+      videoSaveDir: "",
+      transcriptDir: "",
       qmdVaultDir: null,
       checkIntervalMinutes: 1440,
       skipShorts: true,
@@ -219,7 +224,13 @@ export class Pipeline extends EventEmitter {
       dailyDownloadCap: 200,
       lanAccess: false,
       transcription: {
-        model: "large-v3",
+        // Platform-aware default. Mac uses FluidAudio (ships with the app);
+        // Linux uses NeMo Parakeet via Python. Whisper isn't a great default
+        // anywhere — it's slower than Parakeet on CUDA and not installed
+        // by default on Mac. The wizard / Settings can still switch.
+        model: process.platform === "darwin"
+          ? "fluid-parakeet-tdt-v3"
+          : "nvidia/parakeet-tdt-0.6b-v3",
         language: "en",
         device: "cuda",
         computeType: "float16",
@@ -401,13 +412,40 @@ export class Pipeline extends EventEmitter {
     return buildLocalFileMatcher(folder, datedBaseName);
   }
 
-  /** Promote a freshly-enqueued (status="pending") row to status="complete"
-   *  with the on-disk path attached, so the pipeline skips the download
-   *  step entirely. Used when a scan matches a video to a file that's
-   *  already in the channel save folder. */
-  private linkExistingDownload(videoId: string, channelId: string, videoPath: string): void {
-    updateQueueStatus(videoId, channelId, { videoPath, status: "complete", error: null });
-    console.log(`[pipeline] Linked existing local file: ${videoPath}`);
+  /** Attach an existing on-disk video file to a freshly-enqueued row so
+   *  the pipeline skips re-downloading. Probes for a sibling transcript
+   *  at the canonical path; if found, marks the row complete (truly done).
+   *  If not, leaves status="pending" so processVideo will pick it up,
+   *  detect the preset videoPath, skip the download step, and transcribe
+   *  + embed + summarize like any other queued video. */
+  private linkExistingDownload(
+    videoId: string,
+    channel: ChannelConfig,
+    video: ChannelVideo,
+    videoPath: string,
+  ): void {
+    if (this.config.transcriptDir) {
+      const safeName = datedBaseName(video.title, video.uploadDate);
+      const channelFolder = channelFolderName(channel.name);
+      const mdPath = path.join(this.config.transcriptDir, channelFolder, `${safeName}.md`);
+      if (fs.existsSync(mdPath)) {
+        updateQueueStatus(videoId, channel.id, {
+          videoPath,
+          mdPath,
+          status: "complete",
+          error: null,
+        });
+        console.log(`[pipeline] Linked existing file + transcript: ${videoPath}`);
+        return;
+      }
+    }
+    // Video on disk but no transcript yet — let the pipeline process it.
+    updateQueueStatus(videoId, channel.id, {
+      videoPath,
+      status: "pending",
+      error: null,
+    });
+    console.log(`[pipeline] Linked existing file (will transcribe): ${videoPath}`);
   }
 
   // ---- Periodic check: scan recent videos, enqueue new ones ----
@@ -486,7 +524,7 @@ export class Pipeline extends EventEmitter {
         let linked = 0;
         for (const v of filtered) {
           const hit = matcher.match({ id: v.id, title: v.title, uploadDate: v.uploadDate });
-          if (hit) { this.linkExistingDownload(v.id, channel.id, hit); linked++; }
+          if (hit) { this.linkExistingDownload(v.id, channel, v, hit); linked++; }
         }
         console.log(`[pipeline] ${channel.name}: first scan queued ${added}/${toEnqueue.length} videos${linked ? ` (${linked} already on disk)` : ""}`);
         return added;
@@ -519,7 +557,7 @@ export class Pipeline extends EventEmitter {
           if (inserted) {
             added++;
             const hit = matcher.match({ id: v.id, title: v.title, uploadDate: v.uploadDate });
-            if (hit) { this.linkExistingDownload(v.id, channel.id, hit); linked++; }
+            if (hit) { this.linkExistingDownload(v.id, channel, v, hit); linked++; }
           }
         }
 
@@ -570,7 +608,7 @@ export class Pipeline extends EventEmitter {
     let linked = 0;
     for (const v of filtered) {
       const hit = matcher.match({ id: v.id, title: v.title, uploadDate: v.uploadDate });
-      if (hit) { this.linkExistingDownload(v.id, channel.id, hit); linked++; }
+      if (hit) { this.linkExistingDownload(v.id, channel, v, hit); linked++; }
     }
 
     const skipped = videos.length - toEnqueue.length;
@@ -685,11 +723,22 @@ export class Pipeline extends EventEmitter {
         fs.mkdirSync(saveChannelDir, { recursive: true });
       }
 
+      // If a previous scan linked an on-disk file via linkExistingDownload,
+      // the queue entry already carries the absolute videoPath. Re-use it
+      // directly and skip download — same as the `isLocal` branch, just for
+      // YouTube-sourced channels where the file landed on disk before
+      // Concord knew about it.
+      const linkedExistingPath = !isLocal
+        && queueEntry.video_path
+        && fs.existsSync(queueEntry.video_path)
+        ? queueEntry.video_path
+        : null;
+
       const workVideoPath = isLocal && localFilePath
         ? localFilePath
-        : path.join(workChannelDir, `${safeName}.mp4`);
+        : linkedExistingPath ?? path.join(workChannelDir, `${safeName}.mp4`);
 
-      if (isLocal) {
+      if (isLocal || linkedExistingPath) {
         if (!fs.existsSync(workVideoPath)) {
           throw new Error(`Local file no longer exists: ${workVideoPath}`);
         }
@@ -816,7 +865,7 @@ export class Pipeline extends EventEmitter {
 
       const savePath = path.join(saveChannelDir, `${safeName}.mp4`);
       const saveM4aPath = path.join(saveChannelDir, `${safeName}.m4a`);
-      if (!isLocal && fs.existsSync(workVideoPath) && this.config.workingDir !== this.config.videoSaveDir) {
+      if (!isLocal && !linkedExistingPath && fs.existsSync(workVideoPath) && this.config.workingDir !== this.config.videoSaveDir) {
         try {
           // Handle cross-device moves by copy+delete
           fs.copyFileSync(workVideoPath, savePath);
