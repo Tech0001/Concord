@@ -485,12 +485,20 @@ export default function MapPage() {
     }
   };
 
+  // The DELETE URL must include the ordinals as query params — the PK
+  // on clip_links is (from, to, kind, from_ordinal, to_ordinal), so
+  // dropping by (from, to, kind) alone could touch the wrong row when
+  // a note has multiple anchors linking to the same target.
+  const deleteLinkUrl = (g: GraphEdgeData) =>
+    `/api/clips/${g.source}/links/${g.target}/${g.manualKind}`
+    + `?fromOrd=${g.fromOrdinal ?? 0}&toOrd=${g.toOrdinal ?? 0}`;
+
   const deleteManualEdge = async (edge: Edge | null) => {
     if (!edge) return;
     const graphEdge = edge.data as GraphEdgeData | undefined;
     if (!graphEdge || graphEdge.kind !== "manual" || !graphEdge.manualKind) return;
     try {
-      await apiRequest("DELETE", `/api/clips/${graphEdge.source}/links/${graphEdge.target}/${graphEdge.manualKind}`);
+      await apiRequest("DELETE", deleteLinkUrl(graphEdge));
       toast({ title: "Note link removed", description: graphEdge.label.replace("_", " ") });
       await loadGraph();
     } catch (error: any) {
@@ -509,7 +517,7 @@ export default function MapPage() {
     if (!graphEdge || graphEdge.kind !== "manual" || !graphEdge.manualKind) return;
     if (graphEdge.manualKind === newKind) return;
     try {
-      await apiRequest("DELETE", `/api/clips/${graphEdge.source}/links/${graphEdge.target}/${graphEdge.manualKind}`);
+      await apiRequest("DELETE", deleteLinkUrl(graphEdge));
       await apiRequest("POST", `/api/clips/${graphEdge.source}/links`, {
         toId: graphEdge.target,
         kind: newKind,
@@ -546,7 +554,7 @@ export default function MapPage() {
     const tgt = resolveConnection(connection.target, connection.targetHandle, "left");
     if (!graphEdge || graphEdge.kind !== "manual" || !graphEdge.manualKind || !src || !tgt || src.clip.id === tgt.clip.id) return;
     try {
-      await apiRequest("DELETE", `/api/clips/${graphEdge.source}/links/${graphEdge.target}/${graphEdge.manualKind}`);
+      await apiRequest("DELETE", deleteLinkUrl(graphEdge));
       await apiRequest("POST", `/api/clips/${src.clip.clipId}/links`, {
         toId: tgt.clip.clipId,
         kind: graphEdge.manualKind,

@@ -419,7 +419,15 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
         if (!CLIP_LINK_KINDS.includes(req.params.kind as ClipLinkKind)) {
           return res.status(400).json({ error: "Unknown link kind" });
         }
-        const result = removeClipLink(req.params.clipId, req.params.toId, req.params.kind as ClipLinkKind);
+        const fromOrd = Number(req.query.fromOrd ?? 0);
+        const toOrd = Number(req.query.toOrd ?? 0);
+        const result = removeClipLink(
+          req.params.clipId,
+          req.params.toId,
+          req.params.kind as ClipLinkKind,
+          Number.isFinite(fromOrd) ? fromOrd : 0,
+          Number.isFinite(toOrd) ? toOrd : 0,
+        );
         res.json({ success: true, ...result });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : "Failed to remove link" });

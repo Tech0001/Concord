@@ -652,8 +652,10 @@ export function addClipLink(
   const cleanedNote = note?.trim() || null;
   const fh = fromHandle ?? null;
   const th = toHandle ?? null;
-  const fo = Number.isFinite(fromOrdinal) ? Number(fromOrdinal) : null;
-  const to = Number.isFinite(toOrdinal) ? Number(toOrdinal) : null;
+  // Ordinals are part of the PK, so they MUST be non-NULL. 0 is the
+  // "no specific anchor" sentinel (Cards mode + standalone notes).
+  const fo = Number.isFinite(fromOrdinal as number) ? Number(fromOrdinal) : 0;
+  const to = Number.isFinite(toOrdinal as number) ? Number(toOrdinal) : 0;
   const db = getDb();
   return db.transaction(() => {
     const main = db
@@ -673,16 +675,25 @@ export function addClipLink(
   })();
 }
 
-export function removeClipLink(fromId: string, toId: string, kind: ClipLinkKind): { removed: number } {
+export function removeClipLink(
+  fromId: string,
+  toId: string,
+  kind: ClipLinkKind,
+  fromOrdinal: number = 0,
+  toOrdinal: number = 0,
+): { removed: number } {
   const db = getDb();
+  const fo = Number.isFinite(fromOrdinal) ? Number(fromOrdinal) : 0;
+  const to = Number.isFinite(toOrdinal) ? Number(toOrdinal) : 0;
   return db.transaction(() => {
     let removed = db
-      .prepare("DELETE FROM clip_links WHERE from_clip_id = ? AND to_clip_id = ? AND kind = ?")
-      .run(fromId, toId, kind).changes;
+      .prepare("DELETE FROM clip_links WHERE from_clip_id = ? AND to_clip_id = ? AND kind = ? AND from_ordinal = ? AND to_ordinal = ?")
+      .run(fromId, toId, kind, fo, to).changes;
     if (SYMMETRIC_LINK_KINDS.has(kind)) {
+      // Mirror row had handles AND ordinals swapped on insert.
       removed += db
-        .prepare("DELETE FROM clip_links WHERE from_clip_id = ? AND to_clip_id = ? AND kind = ?")
-        .run(toId, fromId, kind).changes;
+        .prepare("DELETE FROM clip_links WHERE from_clip_id = ? AND to_clip_id = ? AND kind = ? AND from_ordinal = ? AND to_ordinal = ?")
+        .run(toId, fromId, kind, to, fo).changes;
     }
     return { removed };
   })();
@@ -892,28 +903,36 @@ export function getClipGraph(filters: {
         AND to_clip_id IN (${placeholders})
     `).all(...clipIds, ...clipIds) as ClipLink[];
 
-    // For symmetric kinds we keep the canonical (a < b) row. We pick it by
-    // scanning for an exact match in `links` instead of inferring, because
-    // each row has its own from_handle/to_handle that must travel with it
-    // — flipping just the ids would mis-attach the line.
+    // For symmetric kinds we keep the canonical (a < b) row. The dedup
+    // key now includes ordinals so two anchors of the same note can each
+    // carry their own link to the same target — the rows are distinct in
+    // the DB and they should be distinct in the graph too.
+    type SymKey = { key: string; a: string; b: string; aOrd: number; bOrd: number };
+    const symmetricKey = (link: ClipLink): SymKey => {
+      const fromFirst = link.from_clip_id < link.to_clip_id;
+      const a = fromFirst ? link.from_clip_id : link.to_clip_id;
+      const b = fromFirst ? link.to_clip_id : link.from_clip_id;
+      const aOrd = fromFirst ? (link.from_ordinal ?? 0) : (link.to_ordinal ?? 0);
+      const bOrd = fromFirst ? (link.to_ordinal ?? 0) : (link.from_ordinal ?? 0);
+      return { key: `${a}|${b}|${link.kind}|${aOrd}|${bOrd}`, a, b, aOrd, bOrd };
+    };
     const linkByKey = new Map<string, ClipLink>();
     for (const link of links) {
-      linkByKey.set(`${link.from_clip_id}|${link.to_clip_id}|${link.kind}`, link);
+      linkByKey.set(`${link.from_clip_id}|${link.to_clip_id}|${link.kind}|${link.from_ordinal ?? 0}|${link.to_ordinal ?? 0}`, link);
     }
     const seenSymmetric = new Set<string>();
     for (const link of links) {
       if (SYMMETRIC_LINK_KINDS.has(link.kind)) {
-        const [a, b] = link.from_clip_id < link.to_clip_id
-          ? [link.from_clip_id, link.to_clip_id]
-          : [link.to_clip_id, link.from_clip_id];
-        const key = `${a}|${b}|${link.kind}`;
-        if (seenSymmetric.has(key)) continue;
-        seenSymmetric.add(key);
-        const canonical = linkByKey.get(`${a}|${b}|${link.kind}`) ?? link;
+        const sk = symmetricKey(link);
+        if (seenSymmetric.has(sk.key)) continue;
+        seenSymmetric.add(sk.key);
+        // Prefer the canonical (a→b) row when both directions exist so
+        // the line attaches to the side the user actually drew from.
+        const canonical = linkByKey.get(`${sk.a}|${sk.b}|${link.kind}|${sk.aOrd}|${sk.bOrd}`) ?? link;
         edges.push({
-          id: `manual:${a}:${b}:${link.kind}`,
-          source: a,
-          target: b,
+          id: `manual:${sk.a}:${sk.b}:${link.kind}:${sk.aOrd}:${sk.bOrd}`,
+          source: sk.a,
+          target: sk.b,
           kind: "manual",
           label: link.kind,
           weight: 1,
@@ -926,7 +945,7 @@ export function getClipGraph(filters: {
         });
       } else {
         edges.push({
-          id: `manual:${link.from_clip_id}:${link.to_clip_id}:${link.kind}`,
+          id: `manual:${link.from_clip_id}:${link.to_clip_id}:${link.kind}:${link.from_ordinal ?? 0}:${link.to_ordinal ?? 0}`,
           source: link.from_clip_id,
           target: link.to_clip_id,
           kind: "manual",

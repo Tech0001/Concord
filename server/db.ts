@@ -382,11 +382,49 @@ function runMigrations(database: Database.Database) {
 
   // Anchor ordinal — which appearance of the note the link attaches to.
   // Multi-anchor notes appear as multiple rows in a video container;
-  // without persisting the ordinal, every link visually collapses onto
-  // the first anchor regardless of which row the user dragged from.
-  // NULL falls back to first anchor.
-  ensureColumn("clip_links", "from_ordinal", "INTEGER");
-  ensureColumn("clip_links", "to_ordinal", "INTEGER");
+  // without ordinal in the PK, two different anchors of the same note
+  // can't both link to the same target with the same kind (they'd
+  // collide on PK). 0 = no specific anchor (Cards mode / standalone).
+  ensureColumn("clip_links", "from_ordinal", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("clip_links", "to_ordinal", "INTEGER NOT NULL DEFAULT 0");
+
+  // Promote the ordinal columns into the PK if they aren't already.
+  // SQLite can't ALTER a primary key in place — the only path is
+  // recreate-the-table. Detect by reading pragma_table_info: if
+  // from_ordinal isn't marked pk > 0, the old (from, to, kind) PK is
+  // still in place. Existing rows are preserved (their NULL ordinals
+  // are coerced to 0 by the column default).
+  const linkCols = database
+    .prepare(`PRAGMA table_info(clip_links)`)
+    .all() as { name: string; pk: number }[];
+  const ordinalInPk = linkCols.some(c => c.name === "from_ordinal" && c.pk > 0);
+  if (!ordinalInPk) {
+    database.exec(`
+      CREATE TABLE clip_links_new (
+        from_clip_id TEXT NOT NULL REFERENCES transcript_clips(id) ON DELETE CASCADE,
+        to_clip_id   TEXT NOT NULL REFERENCES transcript_clips(id) ON DELETE CASCADE,
+        kind         TEXT NOT NULL,
+        from_ordinal INTEGER NOT NULL DEFAULT 0,
+        to_ordinal   INTEGER NOT NULL DEFAULT 0,
+        from_handle  TEXT,
+        to_handle    TEXT,
+        note         TEXT,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (from_clip_id, to_clip_id, kind, from_ordinal, to_ordinal)
+      );
+      INSERT INTO clip_links_new
+        (from_clip_id, to_clip_id, kind, from_ordinal, to_ordinal,
+         from_handle, to_handle, note, created_at)
+        SELECT
+          from_clip_id, to_clip_id, kind,
+          COALESCE(from_ordinal, 0), COALESCE(to_ordinal, 0),
+          from_handle, to_handle, note, created_at
+        FROM clip_links;
+      DROP TABLE clip_links;
+      ALTER TABLE clip_links_new RENAME TO clip_links;
+      CREATE INDEX IF NOT EXISTS idx_clip_links_to ON clip_links(to_clip_id);
+    `);
+  }
 
   // Renamed link kind: same_scripture → same_topic. Migrate any existing rows.
   database
