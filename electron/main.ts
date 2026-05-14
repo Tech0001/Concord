@@ -16,7 +16,38 @@ const serverEntry = process.env.SERVER_ENTRY
 let mainWindow: BrowserWindow | null = null;
 let closeServer: (() => Promise<void>) | null = null;
 
+/** Resolve the master icon PNG. In a packaged app it's at
+ *  process.resourcesPath/icon.png (copied via build.extraResources in
+ *  package.json). In dev runs (electron:dev) it sits in the source tree
+ *  at build/icon-src/icon_1024.png. Returns the absolute path. */
+function resolveIconPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "icon.png")
+    : path.resolve(__dirname, "..", "..", "build", "icon-src", "icon_1024.png");
+}
+
+/** Pick the HTTP port the embedded server should bind to. Default 5050
+ *  so users can bookmark a stable URL across restarts (especially on
+ *  always-on installs like a Dell-as-server setup); CONCORD_PORT or PORT
+ *  env vars override. Set explicitly to 0 in env to fall back to an
+ *  OS-assigned random port. */
+function pickServerPort(): number {
+  const fromEnv = process.env.CONCORD_PORT ?? process.env.PORT;
+  if (fromEnv !== undefined && fromEnv !== "") {
+    const n = Number(fromEnv);
+    if (Number.isFinite(n) && n >= 0 && n <= 65535) return n;
+  }
+  return 5050;
+}
+
 async function createWindow(serverPort: number): Promise<void> {
+  // Linux + Windows: set the window's own icon. The .desktop entry's
+  // Icon= field only governs the launcher; the running window needs its
+  // own icon for the title bar / taskbar / Alt-Tab / dock entry to show
+  // the right image. macOS gets its icon from the .app bundle (and
+  // app.dock.setIcon below for dev runs), so we skip it there.
+  const windowIcon = process.platform === "darwin" ? undefined : resolveIconPath();
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -24,6 +55,7 @@ async function createWindow(serverPort: number): Promise<void> {
     minHeight: 600,
     titleBarStyle: "hiddenInset",
     backgroundColor: "#0a0a0a",
+    icon: windowIcon,
     webPreferences: {
       // Hard lock the renderer — only the Express UI runs here, so no
       // node integration is needed and contextIsolation prevents the
@@ -71,12 +103,7 @@ async function bootstrap(): Promise<void> {
   // .app this is overridden by the bundle's Info.plist CFBundleIconFile,
   // but it doesn't hurt to set both.
   if (process.platform === "darwin" && app.dock) {
-    // In a packaged .app, electron-builder copies icon.png to
-    // Contents/Resources/ (via extraResources). In dev runs the same file
-    // lives at build/icon-src/icon_1024.png next to the project root.
-    const iconPath = app.isPackaged
-      ? path.join(process.resourcesPath, "icon.png")
-      : path.resolve(__dirname, "..", "..", "build", "icon-src", "icon_1024.png");
+    const iconPath = resolveIconPath();
     try {
       const img = nativeImage.createFromPath(iconPath);
       if (img.isEmpty()) throw new Error("decoded image is empty");
@@ -88,11 +115,29 @@ async function bootstrap(): Promise<void> {
   }
 
   const { startServer } = await import(serverEntry);
-  const handle = await startServer({ port: 0 });
+  const handle = await startServerWithFallback(startServer);
   closeServer = handle.close;
   console.log(`[electron] server bound on port ${handle.port}`);
 
   await createWindow(handle.port);
+}
+
+/** Try the configured port first; fall back to OS-assigned random on
+ *  EADDRINUSE so a port collision (e.g. dev server already running)
+ *  doesn't crash the launch. The console log makes the fallback
+ *  obvious so the user notices the URL changed. */
+async function startServerWithFallback(
+  startServer: (opts: { port?: number }) => Promise<{ port: number; close: () => Promise<void> }>,
+): Promise<{ port: number; close: () => Promise<void> }> {
+  const wanted = pickServerPort();
+  try {
+    return await startServer({ port: wanted });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== "EADDRINUSE" || wanted === 0) throw err;
+    console.warn(`[electron] port ${wanted} in use; falling back to random port`);
+    return await startServer({ port: 0 });
+  }
 }
 
 // macOS convention: re-create the window when the dock icon is clicked
@@ -100,7 +145,7 @@ async function bootstrap(): Promise<void> {
 app.on("activate", async () => {
   if (BrowserWindow.getAllWindows().length === 0 && closeServer) {
     const { startServer } = await import(serverEntry);
-    const handle = await startServer({ port: 0 });
+    const handle = await startServerWithFallback(startServer);
     await createWindow(handle.port);
   }
 });
