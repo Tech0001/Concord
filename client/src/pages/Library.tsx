@@ -29,6 +29,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Trash2,
   X,
   XCircle,
 } from "lucide-react";
@@ -191,6 +192,8 @@ export default function Library() {
   // Rename dialog state. `target` carries the entry whose file we're
   // about to rename; null when the dialog is closed.
   const [renameTarget, setRenameTarget] = useState<QueueEntry | null>(null);
+  // Same shape for the trash confirm dialog.
+  const [trashTarget, setTrashTarget] = useState<QueueEntry | null>(null);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -618,6 +621,15 @@ export default function Library() {
                                 <Pencil className="h-3 w-3" />
                                 Rename file
                               </button>
+                              <button
+                                type="button"
+                                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400"
+                                disabled={!entry.video_path}
+                                onClick={() => setTrashTarget(entry)}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                Move to trash…
+                              </button>
                             </PopoverContent>
                           </Popover>
                         </div>
@@ -683,6 +695,13 @@ export default function Library() {
           entry={renameTarget}
           onClose={() => setRenameTarget(null)}
           onSaved={() => { setRenameTarget(null); fetchData(); }}
+        />
+      )}
+      {trashTarget && (
+        <TrashFileDialog
+          entry={trashTarget}
+          onClose={() => setTrashTarget(null)}
+          onTrashed={() => { setTrashTarget(null); fetchData(); }}
         />
       )}
     </div>
@@ -778,6 +797,84 @@ function RenameFileDialog({ entry, onClose, onSaved }: RenameFileDialogProps) {
               <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
               <Button size="sm" onClick={submit} disabled={!!validation || busy}>
                 {busy ? "Renaming…" : "Rename"}
+              </Button>
+            </div>
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
+}
+
+interface TrashFileDialogProps {
+  entry: QueueEntry;
+  onClose: () => void;
+  onTrashed: () => void;
+}
+
+/** Soft-delete confirmation: moves the video + transcript MD + .playback
+ *  sidecar to the OS Trash. The DB row stays (status becomes "archived",
+ *  the file path columns get nulled) so notes / clips / embeddings the
+ *  user already created remain linked to the same video_id. The user can
+ *  always restore from Trash if they change their mind. */
+function TrashFileDialog({ entry, onClose, onTrashed }: TrashFileDialogProps) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await apiRequest("POST", `/api/videos/library/${encodeURIComponent(entry.channel_id)}/${encodeURIComponent(entry.video_id)}/trash`, {});
+      const data = await r.json() as { trashed?: string[]; failed?: { path: string; error: string }[] };
+      const trashed = data.trashed?.length ?? 0;
+      const failed = data.failed?.length ?? 0;
+      toast({
+        title: "Moved to trash",
+        description: `${trashed} file${trashed === 1 ? "" : "s"} trashed${failed ? `, ${failed} failed (see console)` : ""}`,
+      });
+      if (data.failed && data.failed.length > 0) {
+        // Surface failures for the rare case where the sidecar didn't
+        // make it but the main video did.
+        for (const f of data.failed) console.error(`[trash] failed: ${f.path}: ${f.error}`);
+      }
+      onTrashed();
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Trash failed", description: err?.message ?? String(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <DialogPrimitive.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-background/80 backdrop-blur-sm" />
+        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-[101] w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-card p-0 shadow-lg mx-4">
+          <div className="flex items-center justify-between gap-2 border-b p-4">
+            <DialogPrimitive.Title className="text-base font-semibold">Move to trash?</DialogPrimitive.Title>
+            <DialogPrimitive.Close asChild>
+              <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Close">
+                <X className="h-4 w-4" />
+              </Button>
+            </DialogPrimitive.Close>
+          </div>
+          <div className="space-y-3 p-4 text-xs">
+            <DialogPrimitive.Description className="text-muted-foreground">
+              Moves the video file, transcript markdown, and playback sidecar (if present) to your OS trash. They can be restored from your file manager's Trash.
+            </DialogPrimitive.Description>
+            <div className="rounded-md border bg-muted/30 p-2">
+              <div className="line-clamp-2 font-medium text-foreground">{entry.title}</div>
+              <code className="mt-1 block break-all font-mono text-[10px] text-muted-foreground">{entry.video_path}</code>
+            </div>
+            <p className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-amber-900 dark:text-amber-200">
+              The library entry stays (notes, clips, and search embeddings remain linked) but its status becomes <code>archived</code> and the file paths are cleared.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+              <Button size="sm" variant="destructive" onClick={submit} disabled={busy}>
+                <Trash2 className="mr-1.5 h-3 w-3" />
+                {busy ? "Trashing…" : "Move to trash"}
               </Button>
             </div>
           </div>

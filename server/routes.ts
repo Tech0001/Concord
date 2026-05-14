@@ -51,6 +51,33 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
+/** Move a file to the OS trash (restorable). Linux uses `gio trash`
+ *  (freedesktop trash spec, what Files / Nautilus respects). macOS uses
+ *  Finder via AppleScript so "Put Back" works. Windows isn't supported
+ *  yet — the route would need a separate IFileOperation call. */
+async function moveToTrash(absPath: string): Promise<void> {
+  if (process.platform === "linux") {
+    try {
+      await execFileAsync("gio", ["trash", absPath]);
+      return;
+    } catch (err) {
+      // gio not installed (rare on modern Ubuntu but possible on minimal
+      // installs). Fall through to a friendlier error.
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`gio trash failed — install gvfs-bin / glib2.0-bin? (${msg})`);
+    }
+  }
+  if (process.platform === "darwin") {
+    // AppleScript via Finder. Escape quotes so a filename with " in it
+    // doesn't break the script.
+    const escaped = absPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const script = `tell application "Finder" to delete POSIX file "${escaped}"`;
+    await execFileAsync("osascript", ["-e", script]);
+    return;
+  }
+  throw new Error(`Trash is not implemented on ${process.platform}`);
+}
+
 // Track active downloads and their progress
 const activeDownloads = new Map<string, {
   percent: number;
@@ -1615,6 +1642,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json({ ok: true });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : "Forget failed" });
+      }
+    },
+  );
+
+  /**
+   * Move the video file (+ transcript MD + .playback.m4a sidecar) to
+   * the OS trash. Soft delete — restorable from the user's Trash UI.
+   *
+   * The DB row stays: video_path / md_path / playback_path are nulled
+   * out and status flips to "archived", which keeps notes / clips /
+   * transcripts linked to the same video_id for future research.
+   *
+   * Linux uses `gio trash` (freedesktop trash spec). macOS uses
+   * AppleScript via Finder so the file lands in ~/.Trash with the
+   * proper "Put Back" metadata.
+   */
+  app.post(
+    "/api/videos/library/:channelId/:videoId/trash",
+    async (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
+      try {
+        const entry = getQueueEntry(req.params.videoId, req.params.channelId);
+        if (!entry) return res.status(404).json({ error: "Video not found" });
+
+        // Collect every file we're about to trash so the response can
+        // tell the user exactly what moved.
+        const targets: string[] = [];
+        if (entry.video_path && fs.existsSync(entry.video_path)) targets.push(entry.video_path);
+        if (entry.md_path && fs.existsSync(entry.md_path)) targets.push(entry.md_path);
+        if (entry.playback_path && fs.existsSync(entry.playback_path)) targets.push(entry.playback_path);
+
+        if (targets.length === 0) {
+          return res.status(400).json({ error: "No files on disk to trash (entry already orphaned?)" });
+        }
+
+        const trashed: string[] = [];
+        const failed: { path: string; error: string }[] = [];
+        for (const target of targets) {
+          try {
+            await moveToTrash(target);
+            trashed.push(target);
+          } catch (err) {
+            failed.push({ path: target, error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+
+        // Even if one of the sidecars failed to trash, the main file
+        // probably succeeded — clear those paths in the DB so the row
+        // doesn't try to stream a non-existent file. The user can
+        // manually clean up any leftovers via Files / Trash.
+        const dbUpdate: { videoPath?: string | null; mdPath?: string | null; playbackPath?: string | null; status?: string } = {};
+        if (entry.video_path && trashed.includes(entry.video_path)) dbUpdate.videoPath = null;
+        if (entry.md_path && trashed.includes(entry.md_path)) dbUpdate.mdPath = null;
+        if (entry.playback_path && trashed.includes(entry.playback_path)) dbUpdate.playbackPath = null;
+        // Mark archived only if the main video actually made it to trash.
+        if (entry.video_path && trashed.includes(entry.video_path)) {
+          dbUpdate.status = "archived";
+        }
+        if (Object.keys(dbUpdate).length > 0) {
+          updateQueueStatus(entry.video_id, entry.channel_id, dbUpdate);
+        }
+
+        if (failed.length > 0 && trashed.length === 0) {
+          return res.status(500).json({ error: failed[0].error, failed });
+        }
+        res.json({ ok: true, trashed, failed });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : "Trash failed" });
       }
     },
   );
