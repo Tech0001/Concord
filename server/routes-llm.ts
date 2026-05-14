@@ -2,6 +2,8 @@ import type { Express, Request, Response } from "express";
 import {
   listModels as llmListModels,
   probeStatus as llmProbeStatus,
+  validateChatModel,
+  validateEmbeddingModel,
   LlmConfigError,
   LlmHttpError,
   LlmUnreachableError,
@@ -69,6 +71,23 @@ export function registerLlmRoutes(app: Express, pipeline: Pipeline): void {
   // Quick reachability + identity probe. Always 200; body says reachable=false on error.
   app.get("/api/llm/status", async (_req, res) => {
     res.json(await llmProbeStatus());
+  });
+
+  // Pre-save sanity check: prove each candidate model is the right *kind*
+  // (chat vs. embedding). The LLM returns clear 400s when the slots are
+  // swapped (e.g. an embedding model in the chat slot), but those errors
+  // would otherwise only show up later when a summary or embed job fails
+  // in the background. Settings → Save calls this before persisting and
+  // surfaces a toast on kind-mismatch so the user can fix it immediately.
+  app.post("/api/llm/validate-models", async (req, res) => {
+    const body = req.body || {};
+    const chatModel = typeof body.chatModel === "string" ? body.chatModel.trim() : "";
+    const embeddingModel = typeof body.embeddingModel === "string" ? body.embeddingModel.trim() : "";
+    const [chat, embedding] = await Promise.all([
+      chatModel ? validateChatModel(chatModel) : Promise.resolve({ ok: true as const }),
+      embeddingModel ? validateEmbeddingModel(embeddingModel) : Promise.resolve({ ok: true as const }),
+    ]);
+    res.json({ chat, embedding });
   });
 
   // ---- Semantic search & embedding management ----

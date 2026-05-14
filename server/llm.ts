@@ -285,3 +285,81 @@ export async function probeStatus(timeoutMs = 3000): Promise<LlmStatus> {
     clearTimeout(timer);
   }
 }
+
+// ---- Model-kind validation ------------------------------------------------
+//
+// OpenAI-compatible servers don't expose "is this a chat model or an embedding
+// model?" metadata, so it's easy to put an embedding model in the chat slot
+// (or vice versa) and only find out hours later when summary/embed jobs fail
+// silently in the background. To catch the mistake at save time we issue a
+// 1-token probe against each slot's intended endpoint and look for the
+// kind-mismatch error from the server (oMLX phrases it as "is not an LLM /
+// chat model" or "is not an embedding model"; we also classify any 400
+// containing "embedding" / "chat" as a kind mismatch defensively).
+
+export interface ModelValidation {
+  ok: boolean;
+  /** "kind-mismatch" = wrong type of model picked; "unreachable" = server down;
+   *  "http" = some other server-side rejection; "other" = unknown. */
+  errorKind?: "kind-mismatch" | "unreachable" | "http" | "other";
+  error?: string;
+}
+
+function classifyKindError(err: unknown, expected: "chat" | "embedding"): ModelValidation {
+  if (err instanceof LlmUnreachableError) {
+    return { ok: false, errorKind: "unreachable", error: err.message };
+  }
+  if (err instanceof LlmHttpError) {
+    const body = err.body as { error?: { message?: string } } | string | undefined;
+    const msg =
+      typeof body === "object" && body && "error" in body && typeof body.error?.message === "string"
+        ? body.error.message
+        : typeof body === "string"
+          ? body
+          : err.message;
+    const looksLikeMismatch =
+      err.status === 400 &&
+      (/not an? (llm|chat)/i.test(msg) || /not an embedding/i.test(msg));
+    return {
+      ok: false,
+      errorKind: looksLikeMismatch ? "kind-mismatch" : "http",
+      error: msg,
+    };
+  }
+  return { ok: false, errorKind: "other", error: err instanceof Error ? err.message : String(err) };
+}
+
+/** Probe `model` as a chat model — sends one user turn capped at 1 token.
+ *  Returns ok=true if the server accepts the request shape, regardless of
+ *  what the model actually generates. */
+export async function validateChatModel(model: string): Promise<ModelValidation> {
+  if (!model) return { ok: false, errorKind: "other", error: "no model specified" };
+  try {
+    await llmFetch("/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: "." }],
+        max_tokens: 1,
+        stream: false,
+      }),
+    });
+    return { ok: true };
+  } catch (err) {
+    return classifyKindError(err, "chat");
+  }
+}
+
+/** Probe `model` as an embedding model — sends one trivial input. */
+export async function validateEmbeddingModel(model: string): Promise<ModelValidation> {
+  if (!model) return { ok: false, errorKind: "other", error: "no model specified" };
+  try {
+    await llmFetch("/embeddings", {
+      method: "POST",
+      body: JSON.stringify({ model, input: "." }),
+    });
+    return { ok: true };
+  } catch (err) {
+    return classifyKindError(err, "embedding");
+  }
+}

@@ -135,6 +135,39 @@ export default function Settings() {
   const save = async () => {
     setSaving(true);
     try {
+      // Validate model kinds first — easy mistake to swap chat ↔ embedding
+      // pickers, and the failure would otherwise only surface later when
+      // a background summary or embed job hits the wrong endpoint.
+      if (chatModel || embeddingModel) {
+        try {
+          const vr = await apiRequest("POST", "/api/llm/validate-models", { chatModel, embeddingModel });
+          const verdict = await vr.json() as {
+            chat: { ok: boolean; errorKind?: string; error?: string };
+            embedding: { ok: boolean; errorKind?: string; error?: string };
+          };
+          const problems: string[] = [];
+          if (chatModel && !verdict.chat.ok && verdict.chat.errorKind === "kind-mismatch") {
+            problems.push(`Chat model "${chatModel}" is not a chat model — it looks like an embedding model. Swap the slots?`);
+          }
+          if (embeddingModel && !verdict.embedding.ok && verdict.embedding.errorKind === "kind-mismatch") {
+            problems.push(`Embedding model "${embeddingModel}" is not an embedding model — it looks like a chat/LLM model. Swap the slots?`);
+          }
+          if (problems.length > 0) {
+            toast({
+              title: "Model slot mismatch",
+              description: problems.join("\n\n"),
+              variant: "destructive",
+            });
+            return;
+          }
+          // Non-kind errors (unreachable, http) are logged but don't block —
+          // user may legitimately be testing a baseUrl that's offline, etc.
+        } catch {
+          // Validator itself failed (route missing, etc.). Save anyway and
+          // let the normal status indicator surface real problems.
+        }
+      }
+
       const body: Record<string, string> = {
         baseUrl,
         chatModel,
