@@ -24,6 +24,7 @@ import {
 import { registerChatRoutes } from "./routes-chat";
 import { registerNotesRoutes } from "./routes-notes";
 import { registerSpeakerRoutes } from "./routes-speakers";
+import { registerTranscriptionSetupRoutes } from "./routes-transcription-setup";
 import {
   countByStatus,
   enqueueVideo,
@@ -1579,6 +1580,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ---- Notes (transcript_clips) + tags + links + graph ----
   // /api/clips/* registered in routes-notes.ts.
   registerNotesRoutes(app, pipeline);
+
+  // ---- Transcription setup wizard ----
+  // /api/transcription/* — first-launch venv install, engine select, etc.
+  registerTranscriptionSetupRoutes(app);
 
   app.patch(
     "/api/videos/library/:channelId/:videoId/notes",

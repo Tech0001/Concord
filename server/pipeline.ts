@@ -212,6 +212,8 @@ export class Pipeline extends EventEmitter {
         computeType: "float16",
         beamSize: 5,
         pythonVenv: "./venv/bin/python",
+        engine: "",
+        venvPath: "",
       },
       llm: {
         baseUrl: "http://localhost:8000/v1",
@@ -254,6 +256,11 @@ export class Pipeline extends EventEmitter {
         computeType: stored["transcription.computeType"] || defaults.transcription.computeType,
         beamSize: parseConfigNumber(stored["transcription.beamSize"], defaults.transcription.beamSize),
         pythonVenv: stored["transcription.pythonVenv"] || defaults.transcription.pythonVenv,
+        // Wizard-managed fields. engine = "" until the wizard runs (or
+        // explicitly set via Settings); venvPath = "" → fall back to the
+        // legacy cwd-relative resolution in transcribe.ts.
+        engine: (stored["transcription.engine"] as "parakeet" | "whisper" | "") || (defaults.transcription.engine ?? ""),
+        venvPath: stored["transcription.venvPath"] || (defaults.transcription.venvPath ?? ""),
       },
       llm: {
         baseUrl: stored["llm.baseUrl"] || defaults.llm.baseUrl,
@@ -328,6 +335,8 @@ export class Pipeline extends EventEmitter {
       "transcription.computeType": config.transcription.computeType,
       "transcription.beamSize": config.transcription.beamSize,
       "transcription.pythonVenv": config.transcription.pythonVenv,
+      "transcription.engine": config.transcription.engine,
+      "transcription.venvPath": config.transcription.venvPath,
       "llm.baseUrl": config.llm.baseUrl,
       "llm.apiKey": config.llm.apiKey,
       "llm.chatModel": config.llm.chatModel,

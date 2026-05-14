@@ -1,0 +1,3 @@
+# NeMo's ASR stack pulls in PyTorch + CUDA wheels (~5GB). Pin to a
+# known-good version so re-installs are deterministic.
+nemo_toolkit[asr]==2.7.3

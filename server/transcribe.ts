@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
+import { getConfigValues } from "./db";
 import { transcribeWithFluidAudio } from "./transcribe-fluidaudio";
 import { transcribeWithParakeet } from "./transcribe-parakeet";
 
@@ -44,6 +45,21 @@ function isFluidModel(model: string): boolean {
 }
 
 function defaultPythonPath(parakeet: boolean): string {
+  // Resolution order:
+  //   1. Wizard-installed venv (transcription.venvPath in config) — only
+  //      honored when the marker engine matches what we need (i.e. no
+  //      asking the parakeet path to use a whisper venv that lacks NeMo).
+  //   2. Env var override (PARAKEET_PYTHON / WHISPER_PYTHON).
+  //   3. cwd-relative fallback (legacy dev layout).
+  const cfg = getConfigValues();
+  const wizardEngine = cfg["transcription.engine"]; // "parakeet" | "whisper" | ""
+  const wizardVenv = cfg["transcription.venvPath"];
+  const wantedEngine = parakeet ? "parakeet" : "whisper";
+  if (wizardVenv && wizardEngine === wantedEngine) {
+    const py = path.join(wizardVenv, "bin", "python");
+    if (fs.existsSync(py)) return py;
+  }
+
   if (parakeet) {
     return process.env.PARAKEET_PYTHON
       || path.join(process.cwd(), "venv-parakeet", "bin", "python");

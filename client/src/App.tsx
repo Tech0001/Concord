@@ -28,6 +28,7 @@ import AI from "@/pages/AI";
 import Speakers from "@/pages/Speakers";
 import Status from "@/pages/Status";
 import Settings from "@/pages/Settings";
+import TranscriptionSetup from "@/pages/TranscriptionSetup";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
@@ -266,6 +267,7 @@ function Router() {
       <Route path="/speakers" component={Speakers} />
       <Route path="/ai" component={AI} />
       <Route path="/settings" component={Settings} />
+      <Route path="/setup/transcription" component={TranscriptionSetup} />
       <Route path="/map">
         <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading map...</div>}>
           <MapPage />
@@ -276,11 +278,38 @@ function Router() {
   );
 }
 
+/** Redirect to /setup/transcription on first launch when no engine is
+ *  installed AND the user hasn't dismissed the wizard. The check fires
+ *  once per page load. The dismiss flag lives in localStorage so a
+ *  user who skipped doesn't get re-nudged on every reload. */
+function TranscriptionSetupGate() {
+  const [location, navigate] = useLocation();
+  useEffect(() => {
+    if (location.startsWith("/setup")) return;
+    if (localStorage.getItem("concord-skip-transcription-setup") === "1") return;
+    let cancelled = false;
+    fetch("/api/transcription/status")
+      .then(r => r.ok ? r.json() : null)
+      .then(status => {
+        if (cancelled || !status) return;
+        if (status.skipSetup) return;       // Mac
+        if (status.installed) return;       // already done
+        navigate("/setup/transcription");
+      })
+      .catch(() => { /* status endpoint missing or unreachable — silent */ });
+    return () => { cancelled = true; };
+  // We deliberately re-run on every navigation so a user who clears the
+  // skip flag and reloads gets gated without a hard refresh.
+  }, [location, navigate]);
+  return null;
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <div className="min-h-screen bg-background text-foreground">
         <TopBar />
+        <TranscriptionSetupGate />
         <main className="pb-12">
           <Router />
         </main>

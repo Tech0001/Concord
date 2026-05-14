@@ -51,6 +51,15 @@ export interface PipelineConfig {
     computeType: string;
     beamSize: number;
     pythonVenv: string;
+    /** Engine the wizard installed. Empty string before the wizard has
+     *  run; "parakeet" or "whisper" once chosen. Read by transcribe.ts
+     *  to route between the GPU NeMo path and the CPU faster-whisper
+     *  path independently of model name heuristics. */
+    engine: "parakeet" | "whisper" | "";
+    /** Absolute path to the wizard-installed venv directory (the dir,
+     *  not the python binary). Empty string falls back to the legacy
+     *  cwd-relative resolution. */
+    venvPath: string;
   };
   llm: {
     /** OpenAI-compatible base URL, e.g. http://localhost:8000/v1 (oMLX) or http://localhost:11434/v1 (Ollama) */
