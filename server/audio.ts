@@ -1,6 +1,32 @@
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import ffprobeInstaller from "@ffprobe-installer/ffprobe";
+
+/** Resolve the bundled ffmpeg / ffprobe paths. Electron-builder packages
+ *  these binaries into app.asar.unpacked (we listed @ffmpeg-installer/**
+ *  and @ffprobe-installer/** in asarUnpack). The installer returns a
+ *  path that still has `app.asar` in it, so swap to the unpacked tree
+ *  when running inside an asar bundle. Falling back to the bare name
+ *  (relying on system PATH) is a last resort for dev environments
+ *  where the installer didn't run. */
+function resolveBundledBinary(installerPath: string, fallback: string): string {
+  const swapped = installerPath.replace(
+    /([\\/])app\.asar([\\/])/,
+    `$1app.asar.unpacked$2`,
+  );
+  if (fs.existsSync(swapped)) return swapped;
+  if (fs.existsSync(installerPath)) return installerPath;
+  return fallback;
+}
+
+const ffmpegBin = resolveBundledBinary(ffmpegInstaller.path, "ffmpeg");
+const ffprobeBin = resolveBundledBinary(ffprobeInstaller.path, "ffprobe");
+console.log(`[audio] ffmpeg: ${ffmpegBin}`);
+console.log(`[audio] ffprobe: ${ffprobeBin}`);
+
+export { ffmpegBin, ffprobeBin };
 
 /** Pull the actually-useful lines out of ffmpeg's stderr (which is mostly
  *  banner output and progress) so a non-zero exit's Error message carries
@@ -32,7 +58,7 @@ export function copyAudioTrack(
 
     console.log(`[audio] Demuxing audio: ffmpeg ${args.join(" ")}`);
 
-    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     proc.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
 
@@ -94,7 +120,7 @@ export function extractAudio(
 
     console.log(`[audio] Extracting audio: ffmpeg ${args.join(" ")}`);
 
-    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
 
     let stderr = "";
 
@@ -148,7 +174,7 @@ export function encodeAacSidecar(
       "-b:a", bitrate,
       "-y", outputPath,
     ];
-    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
     proc.on("close", (code) => {
@@ -176,7 +202,7 @@ export function getMediaDuration(filePath: string): Promise<number> {
       filePath,
     ];
 
-    const proc = spawn("ffprobe", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
 
     proc.stdout.on("data", (data: Buffer) => {
@@ -232,7 +258,7 @@ export async function getVideoStreamInfo(filePath: string): Promise<VideoStreamI
       "-of", "json",
       filePath,
     ];
-    const proc = spawn("ffprobe", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     proc.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
     proc.on("close", (code) => {

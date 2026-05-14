@@ -38,7 +38,7 @@ import {
   setVideoNotes,
   updateQueueStatus,
 } from "./db";
-import { copyAudioTrack, encodeAacSidecar, getVideoStreamInfo } from "./audio";
+import { copyAudioTrack, encodeAacSidecar, ffmpegBin, getVideoStreamInfo } from "./audio";
 import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
 import path from "path";
 import fs from "fs";
@@ -123,7 +123,7 @@ function exportVideoSegment(options: {
   console.log(`[export] ffmpeg ${args.join(" ")}`);
 
   return new Promise((resolve, reject) => {
-    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
 
     proc.stderr.on("data", data => {

@@ -407,6 +407,7 @@ export default function PipelineStatus() {
             </span>
             {state?.lastCheck && <span>Last check: {new Date(state.lastCheck).toLocaleTimeString()}</span>}
           </div>
+          {ytdlpHealth && !ytdlpHealth.ok && <YtdlpInstallHelp />}
         </CardHeader>
       </Card>
 
@@ -687,6 +688,44 @@ export default function PipelineStatus() {
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/** Inline help shown under the yt-dlp status badge when the binary is
+ *  missing. Picks platform-appropriate install commands so the user
+ *  doesn't have to look them up. yt-dlp is not bundled on purpose
+ *  (see server/yt-dlp-bin.ts comments) — the system binary stays
+ *  fresh as YouTube tightens anti-bot. */
+function YtdlpInstallHelp() {
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  const isMac = /Mac OS X|Macintosh/i.test(ua);
+  const isWin = /Windows/i.test(ua);
+  const primary = isMac
+    ? { label: "Homebrew", cmd: "brew install yt-dlp" }
+    : isWin
+      ? { label: "winget", cmd: "winget install yt-dlp.yt-dlp" }
+      : { label: "apt", cmd: "sudo apt install yt-dlp" };
+  const alt = isMac || isWin ? null : { label: "Homebrew", cmd: "brew install yt-dlp" };
+
+  return (
+    <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-amber-900 dark:text-amber-200">
+      <div className="font-medium">yt-dlp isn't installed.</div>
+      <div className="mt-0.5 text-amber-900/80 dark:text-amber-200/80">
+        Only needed for downloading YouTube videos — offline audio/video files import without it.
+      </div>
+      <div className="mt-2 space-y-1 font-mono text-[11px]">
+        <div>
+          <span className="mr-2 text-amber-900/60 dark:text-amber-200/60">{primary.label}</span>
+          <code className="rounded bg-amber-500/10 px-1.5 py-0.5">{primary.cmd}</code>
+        </div>
+        {alt && (
+          <div>
+            <span className="mr-2 text-amber-900/60 dark:text-amber-200/60">{alt.label}</span>
+            <code className="rounded bg-amber-500/10 px-1.5 py-0.5">{alt.cmd}</code>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

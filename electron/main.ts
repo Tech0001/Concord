@@ -16,6 +16,75 @@ const serverEntry = process.env.SERVER_ENTRY
 let mainWindow: BrowserWindow | null = null;
 let closeServer: (() => Promise<void>) | null = null;
 
+// ---- Console forwarding to renderer DevTools ----
+//
+// The embedded server runs in this main process, so its console.log /
+// console.error output goes to the terminal that launched Electron — but
+// users running the packaged app from Activities don't see a terminal.
+// Forward every log line into the renderer's console too so the in-app
+// DevTools (Cmd/Ctrl+Shift+I) becomes the "terminal" for the app.
+
+type LogLevel = "log" | "info" | "warn" | "error" | "debug";
+interface BufferedLog { level: LogLevel; msg: string }
+
+const logBuffer: BufferedLog[] = [];
+const LOG_BUFFER_MAX = 500;
+let consoleForwardingInstalled = false;
+
+/** Install once at module load — captures startup logs that fire before
+ *  the BrowserWindow exists. The originals still hit stdout/stderr; the
+ *  copy is buffered (and live-flushed once the window is ready). */
+function installConsoleForwarding(): void {
+  if (consoleForwardingInstalled) return;
+  consoleForwardingInstalled = true;
+  const orig: Record<LogLevel, (...args: unknown[]) => void> = {
+    log: console.log.bind(console),
+    info: console.info.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+    debug: console.debug.bind(console),
+  };
+  const formatArg = (a: unknown): string => {
+    if (typeof a === "string") return a;
+    if (a instanceof Error) return a.stack || a.message;
+    try {
+      return JSON.stringify(a, null, 2);
+    } catch {
+      return String(a);
+    }
+  };
+  for (const level of Object.keys(orig) as LogLevel[]) {
+    console[level] = (...args: unknown[]) => {
+      orig[level](...args);
+      const msg = args.map(formatArg).join(" ");
+      const entry: BufferedLog = { level, msg };
+      if (logBuffer.length >= LOG_BUFFER_MAX) logBuffer.shift();
+      logBuffer.push(entry);
+      sendToRenderer(entry);
+    };
+  }
+}
+
+function sendToRenderer(entry: BufferedLog): void {
+  const w = mainWindow;
+  if (!w || w.isDestroyed()) return;
+  const wc = w.webContents;
+  if (wc.isDestroyed() || wc.isLoading()) return;
+  // executeJavaScript is round-trip-free for fire-and-forget logging.
+  // String-quote the message so newlines / quotes survive the round trip.
+  const code = `console.${entry.level}(${JSON.stringify("[server] " + entry.msg)});`;
+  wc.executeJavaScript(code, true).catch(() => { /* swallow — not worth logging the log failure */ });
+}
+
+/** Flush buffered logs into a freshly-loaded window. Called from
+ *  did-finish-load. Subsequent live logs go through sendToRenderer
+ *  directly. */
+function flushLogBufferToRenderer(): void {
+  for (const entry of logBuffer) sendToRenderer(entry);
+}
+
+installConsoleForwarding();
+
 /** Resolve the master icon PNG. In a packaged app it's at
  *  process.resourcesPath/icon.png (copied via build.extraResources in
  *  package.json). In dev runs (electron:dev) it sits in the source tree
@@ -75,6 +144,14 @@ async function createWindow(serverPort: number): Promise<void> {
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+
+  // Replay buffered server logs into the renderer's console after each
+  // load. did-finish-load fires on the initial nav AND on any reloads,
+  // so a Cmd-R wipes the renderer console but the server-side history
+  // re-appears immediately.
+  mainWindow.webContents.on("did-finish-load", () => {
+    flushLogBufferToRenderer();
   });
 
   await mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
