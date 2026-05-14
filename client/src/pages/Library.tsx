@@ -868,7 +868,7 @@ function TrashFileDialog({ entry, onClose, onTrashed }: TrashFileDialogProps) {
               <code className="mt-1 block break-all font-mono text-[10px] text-muted-foreground">{entry.video_path}</code>
             </div>
             <p className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-amber-900 dark:text-amber-200">
-              The library entry stays (notes, clips, and search embeddings remain linked) but its status becomes <code>archived</code> and the file paths are cleared.
+              The library entry is removed from the Library after a successful trash. Any clips you made keep their text but no longer link back to the original.
             </p>
             <div className="flex justify-end gap-2 pt-2">
               <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>

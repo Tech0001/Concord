@@ -381,6 +381,16 @@ function registerLibraryMutators(app: Express, pipeline: Pipeline): void {
         if (entry.md_path && fs.existsSync(entry.md_path)) targets.push(entry.md_path);
         if (entry.playback_path && fs.existsSync(entry.playback_path)) targets.push(entry.playback_path);
 
+        // The transcript engines (FluidAudio / Parakeet / Whisper) write a
+        // JSON sidecar next to the .md with the same basename. We don't
+        // track its path in the DB but the convention is stable, so derive
+        // it from md_path — orphan JSONs are dead bytes and confuse later
+        // re-import scans that look for "transcript exists?" hints.
+        if (entry.md_path && entry.md_path.endsWith(".md")) {
+          const jsonPath = entry.md_path.slice(0, -3) + ".json";
+          if (fs.existsSync(jsonPath)) targets.push(jsonPath);
+        }
+
         if (targets.length === 0) {
           return res.status(400).json({ error: "No files on disk to trash (entry already orphaned?)" });
         }
@@ -396,13 +406,18 @@ function registerLibraryMutators(app: Express, pipeline: Pipeline): void {
           }
         }
 
-        const dbUpdate: { videoPath?: string | null; mdPath?: string | null; playbackPath?: string | null; status?: string } = {};
-        if (entry.video_path && trashed.includes(entry.video_path)) dbUpdate.videoPath = null;
-        if (entry.md_path && trashed.includes(entry.md_path)) dbUpdate.mdPath = null;
-        if (entry.playback_path && trashed.includes(entry.playback_path)) dbUpdate.playbackPath = null;
-        if (entry.video_path && trashed.includes(entry.video_path)) dbUpdate.status = "archived";
-        if (Object.keys(dbUpdate).length > 0) {
-          updateQueueStatus(entry.video_id, entry.channel_id, dbUpdate);
+        // If we got every file to the trash, drop the queue row entirely.
+        // The previous behavior left the row at status="archived" with the
+        // file paths nulled to "preserve" notes/clips/embeddings via the
+        // shared video_id string — but those tables don't FK to video_queue,
+        // so the clips/notes survive a hard delete on their own. An orphan
+        // queue row at status="archived" with no playable file just clutters
+        // the Library. If anything failed to trash, leave the row alone so
+        // the user has something to retry against.
+        if (failed.length === 0 && trashed.length > 0) {
+          getDb()
+            .prepare("DELETE FROM video_queue WHERE video_id = ? AND channel_id = ?")
+            .run(entry.video_id, entry.channel_id);
         }
 
         if (failed.length > 0 && trashed.length === 0) {
