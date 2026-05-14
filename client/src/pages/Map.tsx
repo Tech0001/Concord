@@ -487,11 +487,12 @@ export default function MapPage() {
         note: graphEdge.note || null,
       });
       toast({ title: "Link type changed", description: newKind.replace("_", " ") });
-      // Optimistically patch the locally-held edge so the toolbar
-      // shows the new kind immediately. The loadGraph below will
-      // rebuild flowEdges with a fresh server-side id (id includes
-      // kind), but the toolbar reads from selectedEdge.data and that's
-      // what we just updated. The user can click off to dismiss.
+      // Reload first (loadGraph clears selectedEdge), then re-apply our
+      // patch so the toolbar stays open on the same logical link. The
+      // toolbar reads from selectedEdge.data, so updating data is what
+      // keeps the kind picker pointed at the new value. The user can
+      // click elsewhere to dismiss.
+      await loadGraph();
       setSelectedEdge({
         ...edge,
         data: {
@@ -500,7 +501,6 @@ export default function MapPage() {
           label: newKind,
         } as FlowEdgePayload,
       });
-      await loadGraph();
     } catch (error: any) {
       toast({ variant: "destructive", title: "Change link type failed", description: error.message });
     }
