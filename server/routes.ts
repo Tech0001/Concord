@@ -972,10 +972,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/pipeline/channels/:channelId/import-folder", (req, res) => {
     try {
       const config = pipeline.getConfig();
-      const channel = config.channels.find(c => c.id === req.params.channelId);
-      if (!channel) return res.status(404).json({ error: "Channel not found" });
+      const configured = config.channels.find(c => c.id === req.params.channelId);
 
-      const channelFolder = channelFolderName(channel.name);
+      // Fall back to treating channelId itself as the channel name when no
+      // channels-table row exists. This covers "virtual" channels created
+      // by one-off manual downloads: the user never explicitly subscribed
+      // to the channel, but they have a folder of files under their
+      // name and want this scanner to pick up additional local copies.
+      const channelIdKey = configured?.id ?? req.params.channelId;
+      const channelName = configured?.name ?? req.params.channelId;
+
+      const channelFolder = channelFolderName(channelName);
       const folder = path.join(config.videoSaveDir, channelFolder);
       if (!fs.existsSync(folder)) {
         return res.status(404).json({ error: `Channel folder not found: ${folder}` });
@@ -985,7 +992,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const existing = new Set<string>(
         (getDb()
           .prepare("SELECT video_path FROM video_queue WHERE channel_id = ? AND video_path IS NOT NULL AND video_path <> ''")
-          .all(channel.id) as { video_path: string }[])
+          .all(channelIdKey) as { video_path: string }[])
           .map(r => r.video_path),
       );
 
@@ -1060,7 +1067,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const inserted = enqueueVideo({
           videoId,
-          channelId: channel.id,
+          channelId: channelIdKey,
           title,
           url: `file://${full}`,
           duration: null,
@@ -1072,7 +1079,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           skipped.push({ videoPath: full, reason: "Already queued under this id" });
           continue;
         }
-        updateQueueStatus(videoId, channel.id, { videoPath: full });
+        updateQueueStatus(videoId, channelIdKey, { videoPath: full });
         added.push({ videoId, title, videoPath: full });
       }
 
@@ -1086,6 +1093,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Import folder failed" });
+    }
+  });
+
+  /**
+   * "Virtual" channels: distinct channel_id values present in
+   * video_queue that don't correspond to a row in the configured
+   * channels list. These appear when a user does a one-off manual
+   * download of a video — the download flow stamps the readable
+   * channel name (e.g. "Rick Joyner") into video_queue.channel_id
+   * without creating a channels row (which would have triggered
+   * auto-archive of the whole channel).
+   *
+   * The UI uses this to surface those channels alongside the
+   * configured ones so Rename / Import-folder actions are still
+   * reachable. Each row carries a video count + a representative
+   * video_path so the UI can sanity-check the folder location.
+   */
+  app.get("/api/pipeline/channels/virtual", (_req, res) => {
+    try {
+      const configuredIds = new Set(pipeline.getConfig().channels.map(c => c.id));
+      const rows = getDb()
+        .prepare(`
+          SELECT channel_id, COUNT(*) AS video_count
+          FROM video_queue
+          GROUP BY channel_id
+        `)
+        .all() as { channel_id: string; video_count: number }[];
+      const virtual = rows
+        .filter(r => !configuredIds.has(r.channel_id))
+        .map(r => ({ channelId: r.channel_id, videoCount: r.video_count }))
+        .sort((a, b) => b.videoCount - a.videoCount);
+      res.json({ channels: virtual });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Virtual channel list failed" });
+    }
+  });
+
+  /**
+   * Rename a virtual channel — UPDATEs video_queue rows referencing the
+   * old channel_id string. Unlike the configured-channel PATCH at
+   * /api/pipeline/channels/:id which edits the channels-table row,
+   * virtual channels only exist as a string in video_queue, so the
+   * rename is purely a SQL UPDATE. Used to fix the UC... → "Rick
+   * Joyner" case after a manual download captured the wrong identifier.
+   */
+  app.patch("/api/pipeline/channels/virtual/:channelId", (req, res) => {
+    try {
+      const oldId = req.params.channelId;
+      const newName = (req.body?.name ?? "").toString().trim();
+      if (!newName) return res.status(400).json({ error: "name required" });
+      if (newName === oldId) return res.json({ ok: true, updated: 0 });
+
+      const configuredIds = new Set(pipeline.getConfig().channels.map(c => c.id));
+      if (configuredIds.has(oldId)) {
+        return res.status(400).json({ error: "Use /api/pipeline/channels/:id PATCH for configured channels" });
+      }
+
+      const r = getDb()
+        .prepare("UPDATE video_queue SET channel_id = ? WHERE channel_id = ?")
+        .run(newName, oldId);
+      res.json({ ok: true, updated: r.changes });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Virtual channel rename failed" });
     }
   });
 

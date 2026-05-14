@@ -127,6 +127,10 @@ export default function PipelineStatus() {
   const [retransModel, setRetransModel] = useState("large-v3");
   const [retranscribing, setRetranscribing] = useState<Record<string, boolean>>({});
   const [archiveMsg, setArchiveMsg] = useState<Record<string, string>>({});
+  // "Virtual" channels — distinct channel_id strings in video_queue that
+  // never made it into the configured channels list. Surfaces one-off
+  // manual downloads so Rename / Import-folder actions reach them too.
+  const [virtualChannels, setVirtualChannels] = useState<{ channelId: string; videoCount: number }[]>([]);
   // Config editing now lives on /settings (PipelineSettingsCard) — this
   // page just displays the resolved config read-only. State for the form
   // fields was removed; see the Configuration card render below.
@@ -160,6 +164,7 @@ export default function PipelineStatus() {
   useEffect(() => {
     fetchState();
     fetchConfig();
+    fetchVirtualChannels();
     fetchYtdlpHealth();
     apiRequest("GET", "/api/system/info")
       .then((r) => r.json())
@@ -202,6 +207,52 @@ export default function PipelineStatus() {
       const r = await apiRequest("GET", "/api/pipeline/config");
       setConfig(await r.json());
     } catch {}
+  };
+
+  const fetchVirtualChannels = async () => {
+    try {
+      const r = await apiRequest("GET", `/api/pipeline/channels/virtual?t=${Date.now()}`);
+      const data = await r.json() as { channels: { channelId: string; videoCount: number }[] };
+      setVirtualChannels(data.channels || []);
+    } catch { setVirtualChannels([]); }
+  };
+
+  /** Rename a virtual channel — UPDATEs every video_queue row with the
+   *  old channel_id. Used to fix UC... → "Rick Joyner" after a manual
+   *  download captured the wrong identifier. */
+  const renameVirtualChannel = async (channelId: string) => {
+    const next = window.prompt(`Rename "${channelId}" to:`, channelId);
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === channelId) return;
+    try {
+      const r = await apiRequest("PATCH", `/api/pipeline/channels/virtual/${encodeURIComponent(channelId)}`, { name: trimmed });
+      const data = await r.json() as { updated: number };
+      toast({ title: "Channel renamed", description: `${data.updated} row${data.updated === 1 ? "" : "s"} updated → ${trimmed}` });
+      fetchVirtualChannels();
+      fetchState();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Rename failed", description: e.message });
+    }
+  };
+
+  /** Same import-folder endpoint as configured channels — the backend
+   *  falls back to using the channel_id string as the folder name when
+   *  there's no channels-table row. */
+  const importVirtualFolder = async (channelId: string) => {
+    if (!confirm(`Scan "${channelId}"'s folder for additional local files? Files already tracked are skipped.`)) return;
+    try {
+      const r = await apiRequest("POST", `/api/pipeline/channels/${encodeURIComponent(channelId)}/import-folder`, {});
+      const data = await r.json() as { added: number; skipped: number; scanned: number; folder: string };
+      toast({
+        title: data.added > 0 ? `Imported ${data.added} file${data.added === 1 ? "" : "s"}` : "Nothing new to import",
+        description: `Scanned ${data.scanned} in ${data.folder}${data.skipped ? `, ${data.skipped} already tracked` : ""}`,
+      });
+      fetchVirtualChannels();
+      fetchState();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Import failed", description: e.message });
+    }
   };
 
   const start = async () => { await apiRequest("POST", "/api/pipeline/start"); fetchState(); toast({ title: "Started" }); };
@@ -610,6 +661,44 @@ export default function PipelineStatus() {
             );
           })}
           {(!config?.channels.length) && <p className="text-xs text-muted-foreground">No channels.</p>}
+
+          {/* Virtual channels — exist only in video_queue.channel_id,
+              never had a channels-table row. Surface them so the user
+              can still rename + scan their folder for local files. */}
+          {virtualChannels.length > 0 && (
+            <div className="space-y-1 pt-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">One-off downloads (not subscribed)</div>
+              {virtualChannels.map(vc => (
+                <div key={vc.channelId} className="rounded-md border border-dashed bg-muted/20 px-2 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="font-medium text-sm truncate">{vc.channelId}</span>
+                      <span className="text-[10px] text-muted-foreground">{vc.videoCount} video{vc.videoCount === 1 ? "" : "s"}</span>
+                    </div>
+                    <div className="flex gap-1">
+                      <Button
+                        size="sm" variant="ghost"
+                        onClick={() => importVirtualFolder(vc.channelId)}
+                        title="Scan this channel's folder for additional local files"
+                      >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        Import folder
+                      </Button>
+                      <Button
+                        size="icon" variant="ghost"
+                        onClick={() => renameVirtualChannel(vc.channelId)}
+                        aria-label="Rename channel"
+                        title="Rename — updates every matching row in video_queue"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="space-y-2 pt-2">
             <div className="flex flex-wrap items-center gap-2 text-xs">
