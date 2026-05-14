@@ -303,7 +303,10 @@ export default function MapPage() {
       const sHandle = sAnchor ? `${source.id}:${sAnchor.ordinal}:${fromSide}` : fromSide;
       const tHandle = tAnchor ? `${target.id}:${tAnchor.ordinal}:${toSide}` : toSide;
 
-      if (sNodeId === tNodeId) return [];
+      // Two clips inside the SAME video container is a normal case (link
+      // one timestamp to another in the same talk). ReactFlow renders it
+      // as a self-loop edge between two handles on the same node, which
+      // is exactly what we want. Don't filter it out.
 
       return [{
         id: edge.id,
