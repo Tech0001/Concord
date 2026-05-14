@@ -66,8 +66,22 @@ export interface FluidAudioOptions {
 }
 
 function defaultBinaryPath(): string {
-  return process.env.FLUIDAUDIO_BIN
-    || path.join(os.homedir(), "GitHub", "FluidAudio", ".build", "release", "fluidaudiocli");
+  // Resolution order:
+  //   1. FLUIDAUDIO_BIN env var — explicit override, wins everything.
+  //   2. Packaged .app's bundled binary at Contents/Resources/binaries/
+  //      — what the YouTuber friend gets out-of-the-box. Signed as part
+  //      of the .app codesign so notarization covers it.
+  //   3. Local dev clone at ~/GitHub/FluidAudio/.build/release/fluidaudiocli
+  //      — what we use when running `pnpm dev`.
+  if (process.env.FLUIDAUDIO_BIN) return process.env.FLUIDAUDIO_BIN;
+  // process.resourcesPath is set by Electron when running inside a
+  // packaged .app. It's undefined when running under `tsx` directly,
+  // so the dev path is the natural fallback for dev mode.
+  const bundled = typeof process.resourcesPath === "string"
+    ? path.join(process.resourcesPath, "binaries", "fluidaudiocli")
+    : null;
+  if (bundled && fs.existsSync(bundled)) return bundled;
+  return path.join(os.homedir(), "GitHub", "FluidAudio", ".build", "release", "fluidaudiocli");
 }
 
 function formatTimestamp(seconds: number): string {

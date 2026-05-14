@@ -19,7 +19,8 @@
     "check": "tsc",
     "electron:rebuild": "electron-builder install-app-deps",
     "electron:dev": "pnpm run build && pnpm run electron:rebuild && NODE_ENV=production electron dist/electron/main.js",
-    "electron:dist": "pnpm run build && electron-builder --mac --arm64",
+    "fetch-binaries": "./scripts/fetch-binaries.sh",
+    "electron:dist": "pnpm run fetch-binaries && pnpm run build && electron-builder --mac --arm64",
     "electron:dist:linux": "pnpm run build && pnpm run electron:rebuild && electron-builder --linux"
   },
   "dependencies": {
@@ -100,7 +101,9 @@
     ],
     "extraResources": [
       { "from": "build/icon-src/icon_1024.png", "to": "icon.png" },
-      { "from": "server/transcription-engines", "to": "transcription-engines" }
+      { "from": "server/transcription-engines", "to": "transcription-engines" },
+      { "from": "build/binaries/fluidaudiocli", "to": "binaries/fluidaudiocli" },
+      { "from": "build/binaries/yt-dlp", "to": "binaries/yt-dlp" }
     ],
     "asar": true,
     "asarUnpack": [
