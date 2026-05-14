@@ -900,7 +900,11 @@ export class Pipeline extends EventEmitter {
     let order: string[];
     switch (codec) {
       case "av01":
-        order = [av1, vp9, avc1, anyMp4, anyAny];
+        // AV1 → H.264 → VP9 (last resort). H.264 sits ahead of VP9 so
+        // older YouTube uploads that lack AV1 still land in an
+        // iPhone-playable codec; VP9 only takes over for videos that
+        // YouTube literally only serves in VP9 (rare).
+        order = [av1, avc1, vp9, anyMp4, anyAny];
         break;
       case "vp9":
         order = [vp9, av1, avc1, anyMp4, anyAny];
@@ -1044,7 +1048,7 @@ export class Pipeline extends EventEmitter {
   private codecFallbackChain(): string[] {
     const codec = this.config.videoCodec || "any";
     switch (codec) {
-      case "av01": return ["av01", "vp9", "avc1"];
+      case "av01": return ["av01", "avc1", "vp9"];
       case "vp9":  return ["vp9", "avc1"];
       case "avc1": return ["avc1"];
       default:     return ["any"];
@@ -1112,6 +1116,12 @@ export class Pipeline extends EventEmitter {
     this.jobs.unshift(job);
     this.emit("jobStarted", job);
 
+    // Reflect the queued state in the DB so the Library button can show
+    // a spinner immediately (without waiting for the work to start).
+    // Stash the prior status so we can revert if the retranscribe fails
+    // and the original transcript is still on disk.
+    updateQueueStatus(videoId, channelId, { status: "queued" });
+
     // Take the next queue slot and chain our work behind whatever's there.
     const previous = this.retranscribeQueue;
     let releaseSlot: () => void = () => {};
@@ -1152,9 +1162,14 @@ export class Pipeline extends EventEmitter {
   ): Promise<PipelineJob> {
     const videoId = entry.video_id;
     const channelId = entry.channel_id;
+    // Remember the previous DB status so we can revert on failure: a
+    // failed retranscribe shouldn't mark a previously-good entry as
+    // "failed" — its existing transcript is still on disk.
+    const previousStatus = entry.status || "complete";
     job.status = "transcribing";
     this.activeJobs++;
     this.emit("jobUpdated", job);
+    updateQueueStatus(videoId, channelId, { status: "transcribing" });
 
     try {
       const transModel = model || this.config.transcription.model;
@@ -1245,6 +1260,10 @@ export class Pipeline extends EventEmitter {
       console.error(`[pipeline] ❌ Re-transcribe failed: ${entry.title} — ${job.error}`);
       this.emit("jobUpdated", job);
       this.emit("jobError", job, error);
+      // Restore the prior queue status (usually "complete") so the
+      // existing-on-disk transcript stays accessible from the Library.
+      // The job's own `error` carries the failure detail for the UI.
+      updateQueueStatus(videoId, channelId, { status: previousStatus, error: job.error });
     } finally {
       this.activeJobs--;
     }

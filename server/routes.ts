@@ -29,6 +29,7 @@ import {
   countByStatus,
   enqueueVideo,
   getChannelQueue,
+  getDb,
   getQueueEntry,
   getQueueEntryByVideoId,
   getQueueList,
@@ -38,6 +39,7 @@ import {
   searchTranscriptSegments,
   setVideoNotes,
   updateQueueStatus,
+  type QueueEntry,
 } from "./db";
 import { copyAudioTrack, encodeAacSidecar, ffmpegBin, getVideoStreamInfo } from "./audio";
 import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
@@ -1407,6 +1409,215 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: error instanceof Error ? error.message : "Transcript load failed" });
     }
   });
+
+  /**
+   * Rename the on-disk video file (and its transcript MD + .playback.m4a
+   * sidecar) while keeping the DB linked. The user provides a new
+   * basename (no path, no extension); the server preserves the existing
+   * directory + extension. All related files are renamed atomically-ish:
+   * if any rename fails partway through, attempts to roll back the ones
+   * already moved so we don't leave a half-renamed state.
+   */
+  app.post(
+    "/api/videos/library/:channelId/:videoId/rename",
+    async (req: Request<{ channelId: string; videoId: string }, unknown, { newBasename?: string }>, res: Response) => {
+      try {
+        const entry = getQueueEntry(req.params.videoId, req.params.channelId);
+        if (!entry) return res.status(404).json({ error: "Video not found" });
+
+        const rawNewName = (req.body?.newBasename ?? "").trim();
+
+        // Reject anything with a path separator, leading dot, or filesystem
+        // metacharacters that would let the user climb out of the channel
+        // folder or shadow hidden files. Length cap keeps Linux's 255-byte
+        // filename limit safely far away (with room for extensions / suffixes).
+        if (!rawNewName) return res.status(400).json({ error: "newBasename required" });
+        if (rawNewName.length > 200) return res.status(400).json({ error: "Name too long (max 200 chars)" });
+        if (/[\\\/]/.test(rawNewName)) return res.status(400).json({ error: "Name may not contain / or \\" });
+        if (rawNewName.startsWith(".")) return res.status(400).json({ error: "Name may not start with ." });
+        // eslint-disable-next-line no-control-regex
+        if (/[\x00-\x1f]/.test(rawNewName)) return res.status(400).json({ error: "Name contains control characters" });
+
+        // We need an existing on-disk video to rename — without one, the
+        // request is meaningless.
+        if (!entry.video_path) return res.status(400).json({ error: "Entry has no video_path" });
+        if (!fs.existsSync(entry.video_path)) return res.status(404).json({ error: `Video file missing: ${entry.video_path}` });
+
+        const videoDir = path.dirname(entry.video_path);
+        const videoExt = path.extname(entry.video_path);
+        const oldVideoStem = path.basename(entry.video_path, videoExt);
+
+        // Refuse a no-op rename so we don't pretend to do work.
+        if (oldVideoStem === rawNewName) {
+          return res.status(400).json({ error: "New name matches existing name" });
+        }
+
+        const newVideoPath = path.join(videoDir, `${rawNewName}${videoExt}`);
+        if (fs.existsSync(newVideoPath)) {
+          return res.status(409).json({ error: `A file already exists at ${newVideoPath}` });
+        }
+
+        // Group all the files we want to move together so a failure on
+        // any one rolls back the others. The transcript MD lives in its
+        // own dir (transcriptDir/channelFolder) with the same stem as
+        // the video; the playback sidecar (when present) lives in
+        // entry.playback_path. The md_path stem must match the video
+        // stem for naming downstream (datedBaseName collisions etc.),
+        // so we keep them in sync.
+        type Move = { from: string; to: string };
+        const planned: Move[] = [{ from: entry.video_path, to: newVideoPath }];
+
+        if (entry.md_path && fs.existsSync(entry.md_path)) {
+          const mdDir = path.dirname(entry.md_path);
+          const mdExt = path.extname(entry.md_path); // ".md"
+          const newMdPath = path.join(mdDir, `${rawNewName}${mdExt}`);
+          if (fs.existsSync(newMdPath)) {
+            return res.status(409).json({ error: `Transcript already exists at ${newMdPath}` });
+          }
+          planned.push({ from: entry.md_path, to: newMdPath });
+        }
+
+        if (entry.playback_path && fs.existsSync(entry.playback_path)) {
+          const pbDir = path.dirname(entry.playback_path);
+          // Playback sidecars are conventionally `<videoStem>.playback.m4a`
+          // (see encodeAacSidecar) — preserve that pattern by reading the
+          // existing basename and substituting the stem.
+          const pbBase = path.basename(entry.playback_path);
+          const stripStem = pbBase.startsWith(oldVideoStem) ? pbBase.slice(oldVideoStem.length) : pbBase;
+          const newPlaybackPath = path.join(pbDir, `${rawNewName}${stripStem}`);
+          if (fs.existsSync(newPlaybackPath)) {
+            return res.status(409).json({ error: `Sidecar already exists at ${newPlaybackPath}` });
+          }
+          planned.push({ from: entry.playback_path, to: newPlaybackPath });
+        }
+
+        const completed: Move[] = [];
+        try {
+          for (const move of planned) {
+            fs.renameSync(move.from, move.to);
+            completed.push(move);
+          }
+        } catch (renameErr) {
+          // Roll back: rename completed moves back to their originals.
+          for (const m of completed.reverse()) {
+            try { fs.renameSync(m.to, m.from); } catch { /* best effort */ }
+          }
+          const msg = renameErr instanceof Error ? renameErr.message : String(renameErr);
+          return res.status(500).json({ error: `Rename failed and rolled back: ${msg}` });
+        }
+
+        // Sync the DB to the new paths. Pull the planned moves back out
+        // by index so we know which entry corresponds to which column.
+        const updates: { videoPath?: string; mdPath?: string; playbackPath?: string } = {};
+        updates.videoPath = planned[0].to;
+        let nextIdx = 1;
+        if (entry.md_path && fs.existsSync(planned[nextIdx]?.to ?? "")) {
+          updates.mdPath = planned[nextIdx].to;
+          nextIdx++;
+        }
+        if (entry.playback_path && planned[nextIdx]) {
+          updates.playbackPath = planned[nextIdx].to;
+        }
+        updateQueueStatus(entry.video_id, entry.channel_id, updates);
+
+        res.json({
+          ok: true,
+          videoPath: updates.videoPath,
+          mdPath: updates.mdPath,
+          playbackPath: updates.playbackPath,
+        });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : "Rename failed" });
+      }
+    },
+  );
+
+  /**
+   * List entries whose video_path no longer points at a file on disk
+   * (orphans). Most common cause: user renamed the file outside the app.
+   * Each returned row carries enough info for the UI to either re-link
+   * to a new path or forget the row entirely. Heavy-ish for huge
+   * libraries because we stat every row — paginate on the client if
+   * that's ever a problem.
+   */
+  app.get("/api/videos/library/orphans", (_req, res) => {
+    try {
+      const rows = getDb()
+        .prepare(`SELECT * FROM video_queue
+                  WHERE video_path IS NOT NULL AND video_path <> ''`)
+        .all() as QueueEntry[];
+      const orphans = rows
+        .filter((r) => r.video_path && !fs.existsSync(r.video_path))
+        .map((r) => ({
+          videoId: r.video_id,
+          channelId: r.channel_id,
+          title: r.title,
+          uploadDate: r.upload_date,
+          videoPath: r.video_path,
+          mdPath: r.md_path,
+          mdExists: !!r.md_path && fs.existsSync(r.md_path),
+          status: r.status,
+          wordCount: r.word_count,
+        }));
+      res.json({ orphans, total: orphans.length });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Orphan scan failed" });
+    }
+  });
+
+  /**
+   * Re-link an orphan to a renamed/moved file. The user provides the new
+   * absolute path; we verify the file exists, then update video_path on
+   * the queue row. We do NOT touch md_path or playback_path here because
+   * those are independent — the transcript MD likely still exists at its
+   * original path; the playback sidecar is regenerated on demand from
+   * the stream endpoint if missing.
+   */
+  app.post(
+    "/api/videos/library/:channelId/:videoId/relink",
+    (req: Request<{ channelId: string; videoId: string }, unknown, { newVideoPath?: string }>, res: Response) => {
+      try {
+        const entry = getQueueEntry(req.params.videoId, req.params.channelId);
+        if (!entry) return res.status(404).json({ error: "Video not found" });
+
+        const newVideoPath = (req.body?.newVideoPath ?? "").trim();
+        if (!newVideoPath) return res.status(400).json({ error: "newVideoPath required" });
+        if (!path.isAbsolute(newVideoPath)) return res.status(400).json({ error: "Path must be absolute" });
+        if (!fs.existsSync(newVideoPath)) return res.status(404).json({ error: `File does not exist: ${newVideoPath}` });
+
+        const stat = fs.statSync(newVideoPath);
+        if (!stat.isFile()) return res.status(400).json({ error: "Path is not a regular file" });
+
+        updateQueueStatus(entry.video_id, entry.channel_id, { videoPath: newVideoPath });
+        res.json({ ok: true, videoPath: newVideoPath });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : "Relink failed" });
+      }
+    },
+  );
+
+  /**
+   * Remove an entry from the library entirely — DELETE FROM video_queue.
+   * Used for orphans the user has decided are unrecoverable. Does NOT
+   * cascade to notes / clips / vec_segments — those rows still reference
+   * the videoId and would dangle. The UI calls this out before
+   * confirming. Future work could offer a "forget + cascade" variant.
+   */
+  app.post(
+    "/api/videos/library/:channelId/:videoId/forget",
+    (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
+      try {
+        const entry = getQueueEntry(req.params.videoId, req.params.channelId);
+        if (!entry) return res.status(404).json({ error: "Video not found" });
+        getDb()
+          .prepare("DELETE FROM video_queue WHERE video_id = ? AND channel_id = ?")
+          .run(entry.video_id, entry.channel_id);
+        res.json({ ok: true });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : "Forget failed" });
+      }
+    },
+  );
 
   app.get("/api/videos/library/:channelId/:videoId/stream", async (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
     try {

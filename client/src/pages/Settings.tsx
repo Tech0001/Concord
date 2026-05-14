@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2, FileText, BookOpen, ChevronDown, ChevronUp, HardDrive, Mic, Trash2, Wrench } from "lucide-react";
+import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2, FileText, BookOpen, ChevronDown, ChevronUp, HardDrive, Mic, Trash2, Wrench, Link2, AlertCircle } from "lucide-react";
 import { Link as RouterLink } from "wouter";
 import FolderInput from "@/components/FolderInput";
 import { visibleModels } from "@/lib/transcription-models";
@@ -316,6 +316,8 @@ export default function Settings() {
       <PipelineSettingsCard />
 
       <TranscriptionEngineCard />
+
+      <LibraryMaintenanceCard />
 
       <ModelNamingCheatsheet />
 
@@ -921,6 +923,7 @@ interface PipelineConfigShape {
   lanAccess?: boolean;
   checkIntervalMinutes?: number;
   transcription?: { model?: string };
+  processing?: { keepAudio?: boolean; keepVideo?: boolean; waitForLiveToFinish?: boolean; diarizationEnabled?: boolean };
   // unknown fields preserved on save round-trip
   [key: string]: unknown;
 }
@@ -944,6 +947,7 @@ function PipelineSettingsCard() {
   const [lanInfo, setLanInfo] = useState<{ lanAccess: boolean; ip: string | null; port: number | null; url: string | null } | null>(null);
   const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
   const [checkInterval, setCheckInterval] = useState(60);
+  const [keepAudio, setKeepAudio] = useState(false);
 
   const fetchConfig = useCallback(async () => {
     try {
@@ -961,6 +965,7 @@ function PipelineSettingsCard() {
       setLanAccess(c.lanAccess === true);
       setTranscriptionModel(c.transcription?.model ?? "large-v3");
       setCheckInterval(typeof c.checkIntervalMinutes === "number" ? c.checkIntervalMinutes : 60);
+      setKeepAudio(c.processing?.keepAudio === true);
     } catch {
       setConfig(null);
     }
@@ -1000,6 +1005,7 @@ function PipelineSettingsCard() {
         lanAccess,
         checkIntervalMinutes: checkInterval,
         transcription: { ...(config.transcription ?? {}), model: transcriptionModel },
+        processing: { ...(config.processing ?? {}), keepAudio },
       });
       toast({ title: "Pipeline settings saved" });
       fetchConfig();
@@ -1114,6 +1120,20 @@ function PipelineSettingsCard() {
               )}
             </div>
           </div>
+          <div className="grid grid-cols-[160px_1fr] items-start gap-2">
+            <label className="text-muted-foreground pt-1">Keep audio</label>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Switch checked={keepAudio} onCheckedChange={setKeepAudio} aria-label="Keep extracted m4a alongside the video" />
+                <span className="text-xs text-muted-foreground">
+                  {keepAudio
+                    ? "On — saves a .m4a next to each video. Speeds up retranscribe but uses disk."
+                    : "Off — drop the .m4a after transcription (default). Retranscribe re-extracts audio."}
+                </span>
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-[160px_1fr] items-center gap-2">
             <label className="text-muted-foreground" htmlFor="settings-checkInterval">Check interval (min)</label>
             <Input
@@ -1321,5 +1341,194 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <span className="text-muted-foreground">{label}</span>
       <span>{children}</span>
     </div>
+  );
+}
+
+// ---- Library Maintenance: orphan re-link / forget ------------------------
+
+interface OrphanRow {
+  videoId: string;
+  channelId: string;
+  title: string;
+  uploadDate: string | null;
+  videoPath: string;
+  mdPath: string | null;
+  mdExists: boolean;
+  status: string;
+  wordCount: number | null;
+}
+
+/** Lists entries whose video_path no longer points at a file on disk and
+ *  lets the user re-link them (paste a new path) or forget the row. The
+ *  scan is on-demand (button) because stat'ing every video on a big
+ *  library is slow enough to be annoying as a background poll. */
+function LibraryMaintenanceCard() {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [orphans, setOrphans] = useState<OrphanRow[]>([]);
+  const [scanned, setScanned] = useState(false);
+  const [relinkInput, setRelinkInput] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+
+  const keyOf = (o: OrphanRow) => `${o.channelId}|${o.videoId}`;
+
+  const scan = useCallback(async () => {
+    setScanning(true);
+    try {
+      const r = await apiRequest("GET", `/api/videos/library/orphans?t=${Date.now()}`);
+      const data = await r.json() as { orphans: OrphanRow[]; total: number };
+      setOrphans(data.orphans || []);
+      setScanned(true);
+      // Pre-populate the re-link input with the current (broken) path so
+      // the user can tweak the basename instead of typing the whole path.
+      const seeds: Record<string, string> = {};
+      for (const o of data.orphans || []) seeds[keyOf(o)] = o.videoPath;
+      setRelinkInput(seeds);
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Orphan scan failed", description: err?.message ?? String(err) });
+    } finally {
+      setScanning(false);
+    }
+  }, [toast]);
+
+  // Auto-scan once when the section is first expanded, but don't refresh
+  // on every open after that — keeps the user in control of when stats
+  // get hit.
+  useEffect(() => { if (open && !scanned) void scan(); }, [open, scanned, scan]);
+
+  const relink = async (o: OrphanRow) => {
+    const newVideoPath = (relinkInput[keyOf(o)] || "").trim();
+    if (!newVideoPath) return;
+    setBusy((b) => ({ ...b, [keyOf(o)]: true }));
+    try {
+      await apiRequest("POST", `/api/videos/library/${encodeURIComponent(o.channelId)}/${encodeURIComponent(o.videoId)}/relink`, { newVideoPath });
+      toast({ title: "Re-linked", description: o.title });
+      // Drop the row locally — next scan will confirm.
+      setOrphans((rows) => rows.filter((r) => keyOf(r) !== keyOf(o)));
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Re-link failed", description: err?.message ?? String(err) });
+    } finally {
+      setBusy((b) => ({ ...b, [keyOf(o)]: false }));
+    }
+  };
+
+  const forget = async (o: OrphanRow) => {
+    if (!confirm(`Permanently remove "${o.title}" from the library? Notes, clips, and embeddings tied to this video will dangle (the row is removed from video_queue only).`)) return;
+    setBusy((b) => ({ ...b, [keyOf(o)]: true }));
+    try {
+      await apiRequest("POST", `/api/videos/library/${encodeURIComponent(o.channelId)}/${encodeURIComponent(o.videoId)}/forget`, {});
+      toast({ title: "Removed from library", description: o.title });
+      setOrphans((rows) => rows.filter((r) => keyOf(r) !== keyOf(o)));
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Remove failed", description: err?.message ?? String(err) });
+    } finally {
+      setBusy((b) => ({ ...b, [keyOf(o)]: false }));
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+        >
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Wrench className="h-4 w-4 text-muted-foreground" />
+            Library maintenance
+            {scanned && (
+              <span className="text-xs font-normal text-muted-foreground">
+                · {orphans.length === 0 ? "no orphans" : `${orphans.length} orphan${orphans.length === 1 ? "" : "s"}`}
+              </span>
+            )}
+          </CardTitle>
+          {open ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent className="space-y-3 text-xs">
+          <p className="text-muted-foreground">
+            Finds library entries whose video file is missing from disk
+            (renamed or deleted outside the app). Re-link to update the
+            stored path, or remove the entry entirely.
+          </p>
+
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={scan} disabled={scanning}>
+              {scanning ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1.5 h-3 w-3" />}
+              {scanned ? "Re-scan" : "Scan for orphans"}
+            </Button>
+          </div>
+
+          {scanned && orphans.length === 0 && (
+            <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-emerald-900 dark:text-emerald-200">
+              No orphans found. Every library entry points at a real file.
+            </div>
+          )}
+
+          {orphans.map((o) => {
+            const k = keyOf(o);
+            return (
+              <div key={k} className="space-y-2 rounded-md border p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-foreground">{o.title}</div>
+                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      {o.uploadDate ? `${o.uploadDate}  ·  ` : ""}
+                      {o.wordCount !== null ? `${o.wordCount.toLocaleString()} words  ·  ` : ""}
+                      status: {o.status}
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="shrink-0 border-amber-500/40 text-amber-700 dark:text-amber-300">
+                    <AlertCircle className="mr-1 h-3 w-3" /> missing
+                  </Badge>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Old path</div>
+                  <code className="block break-all rounded bg-muted px-2 py-1 font-mono text-[11px] text-foreground">{o.videoPath}</code>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Transcript MD</div>
+                  <code className={`block break-all rounded bg-muted px-2 py-1 font-mono text-[11px] ${o.mdExists ? "text-foreground" : "text-muted-foreground line-through"}`}>
+                    {o.mdPath || "(none)"}
+                  </code>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">New absolute path</div>
+                  <Input
+                    value={relinkInput[k] || ""}
+                    onChange={(e) => setRelinkInput((p) => ({ ...p, [k]: e.target.value }))}
+                    placeholder="/absolute/path/to/the/renamed/file.mp4"
+                    className="h-8 font-mono"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    disabled={!relinkInput[k] || relinkInput[k].trim() === o.videoPath || !!busy[k]}
+                    onClick={() => relink(o)}
+                  >
+                    <Link2 className="mr-1.5 h-3 w-3" />
+                    {busy[k] ? "Re-linking…" : "Re-link"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-red-600 dark:text-red-400"
+                    disabled={!!busy[k]}
+                    onClick={() => forget(o)}
+                  >
+                    <Trash2 className="mr-1.5 h-3 w-3" />
+                    Remove from library
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </CardContent>
+      )}
+    </Card>
   );
 }

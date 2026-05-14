@@ -22,14 +22,18 @@ import {
   Filter,
   Loader2,
   Mic,
+  MoreVertical,
+  Pencil,
   Play,
   Radio,
   RefreshCw,
   RotateCcw,
   Search,
+  X,
   XCircle,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 
 interface Channel {
   id: string;
@@ -184,6 +188,9 @@ export default function Library() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [retranscribing, setRetranscribing] = useState<Record<string, boolean>>({});
+  // Rename dialog state. `target` carries the entry whose file we're
+  // about to rename; null when the dialog is closed.
+  const [renameTarget, setRenameTarget] = useState<QueueEntry | null>(null);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -281,6 +288,22 @@ export default function Library() {
   useEffect(() => {
     fetchData();
   }, [page, pageSize, status, channelId, type, hasTranscript, sort, query]);
+
+  // While any entry on this page is queued / extracting / transcribing,
+  // re-poll the queue every 4s so the spinner buttons reflect the live
+  // state. Idle when nothing's in flight (no wasted polls during normal
+  // browsing).
+  const hasInFlight = entries.some(
+    e => e.status === "queued" || e.status === "transcribing" || e.status === "extracting_audio",
+  );
+  useEffect(() => {
+    if (!hasInFlight) return;
+    const id = window.setInterval(() => { fetchData(); }, 4000);
+    return () => window.clearInterval(id);
+    // fetchData is stable enough — we explicitly want the interval to
+    // restart only when in-flight state toggles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasInFlight]);
 
   const retranscribe = async (entry: QueueEntry) => {
     const key = `${entry.channel_id}:${entry.video_id}`;
@@ -540,19 +563,63 @@ export default function Library() {
                             <Play className="h-3 w-3" />
                             <span className="ml-1">Open</span>
                           </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-8 text-xs whitespace-nowrap"
-                            disabled={!canRetranscribe || retranscribing[key]}
-                            onClick={() => retranscribe(entry)}
-                            title={`Re-transcribe with: ${model}`}
-                          >
-                            {retranscribing[key]
-                              ? <Loader2 className="h-3 w-3 animate-spin" />
-                              : <RotateCcw className="h-3 w-3" />}
-                            <span className="ml-1">Re-transcribe</span>
-                          </Button>
+                          {(() => {
+                            // The button reflects an active retranscribe via
+                            // either of two signals so the spinner stays up
+                            // for the entire job (not just the click→enqueue
+                            // millisecond):
+                            //   • retranscribing[key] — local "I just clicked"
+                            //     latch, true until fetchData replies.
+                            //   • entry.status — server-side queue state. A
+                            //     retranscribe sets it to "queued" then
+                            //     "transcribing"; revert (or "complete") on done.
+                            const inFlight = retranscribing[key]
+                              || entry.status === "queued"
+                              || entry.status === "transcribing"
+                              || entry.status === "extracting_audio";
+                            return (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 text-xs whitespace-nowrap"
+                                disabled={!canRetranscribe || inFlight}
+                                onClick={() => retranscribe(entry)}
+                                title={inFlight ? `Re-transcribing (${entry.status})` : `Re-transcribe with: ${model}`}
+                              >
+                                {inFlight
+                                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                                  : <RotateCcw className="h-3 w-3" />}
+                                <span className="ml-1">{inFlight ? entry.status === "queued" ? "Queued" : "Transcribing" : "Re-transcribe"}</span>
+                              </Button>
+                            );
+                          })()}
+
+                          {/* Row overflow menu — currently just Rename;
+                              Move-to-Trash will land here once wired. */}
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8"
+                                disabled={!entry.video_path}
+                                title="More actions"
+                              >
+                                <MoreVertical className="h-3.5 w-3.5" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-48 p-1" align="end">
+                              <button
+                                type="button"
+                                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={!entry.video_path}
+                                onClick={() => setRenameTarget(entry)}
+                              >
+                                <Pencil className="h-3 w-3" />
+                                Rename file
+                              </button>
+                            </PopoverContent>
+                          </Popover>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -611,6 +678,111 @@ export default function Library() {
         initialSeconds={drawerSeconds}
         onOpenChange={setDrawerOpen}
       />
+      {renameTarget && (
+        <RenameFileDialog
+          entry={renameTarget}
+          onClose={() => setRenameTarget(null)}
+          onSaved={() => { setRenameTarget(null); fetchData(); }}
+        />
+      )}
     </div>
+  );
+}
+
+interface RenameFileDialogProps {
+  entry: QueueEntry;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+/** Modal for renaming a video file. Lets the user edit the basename
+ *  (no path, no extension) and validates the same constraints the
+ *  server applies so the user gets fast feedback. On save the server
+ *  also renames the matching transcript MD and any .playback.m4a
+ *  sidecar so all related paths stay aligned with the DB. */
+function RenameFileDialog({ entry, onClose, onSaved }: RenameFileDialogProps) {
+  const { toast } = useToast();
+  const currentBasename = useMemo(() => {
+    if (!entry.video_path) return "";
+    const base = entry.video_path.split(/[\\/]/).pop() || "";
+    const dot = base.lastIndexOf(".");
+    return dot > 0 ? base.slice(0, dot) : base;
+  }, [entry.video_path]);
+  const [name, setName] = useState(currentBasename);
+  const [busy, setBusy] = useState(false);
+
+  // Mirror the server-side validation rules so the Save button is
+  // greyed out before the user even tries to submit a bad name.
+  const validation = useMemo(() => {
+    const trimmed = name.trim();
+    if (!trimmed) return "Name cannot be empty";
+    if (trimmed.length > 200) return "Name too long (max 200 chars)";
+    if (/[\\/]/.test(trimmed)) return "Name may not contain / or \\";
+    if (trimmed.startsWith(".")) return "Name may not start with .";
+    // eslint-disable-next-line no-control-regex
+    if (/[\x00-\x1f]/.test(trimmed)) return "Name contains control characters";
+    if (trimmed === currentBasename) return "Name is unchanged";
+    return null;
+  }, [name, currentBasename]);
+
+  const submit = async () => {
+    if (validation || busy) return;
+    setBusy(true);
+    try {
+      await apiRequest("POST", `/api/videos/library/${encodeURIComponent(entry.channel_id)}/${encodeURIComponent(entry.video_id)}/rename`, {
+        newBasename: name.trim(),
+      });
+      toast({ title: "File renamed", description: name.trim() });
+      onSaved();
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Rename failed", description: err?.message ?? String(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <DialogPrimitive.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-background/80 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-[101] w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-card p-0 shadow-lg mx-4">
+          <div className="flex items-center justify-between gap-2 border-b p-4">
+            <DialogPrimitive.Title className="text-base font-semibold">Rename file</DialogPrimitive.Title>
+            <DialogPrimitive.Close asChild>
+              <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Close">
+                <X className="h-4 w-4" />
+              </Button>
+            </DialogPrimitive.Close>
+          </div>
+          <div className="space-y-3 p-4 text-xs">
+            <DialogPrimitive.Description className="text-muted-foreground">
+              Renames the video file, transcript markdown, and playback sidecar (if present) together. The DB stays linked.
+            </DialogPrimitive.Description>
+            <div>
+              <div className="mb-1 text-muted-foreground">Current name</div>
+              <code className="block break-all rounded bg-muted px-2 py-1 font-mono text-foreground">{currentBasename}</code>
+            </div>
+            <div>
+              <label htmlFor="rename-input" className="mb-1 block text-muted-foreground">New name (no path, no extension)</label>
+              <Input
+                id="rename-input"
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+                className="font-mono"
+              />
+              {validation && <p className="mt-1 text-red-600 dark:text-red-400">{validation}</p>}
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+              <Button size="sm" onClick={submit} disabled={!!validation || busy}>
+                {busy ? "Renaming…" : "Rename"}
+              </Button>
+            </div>
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
