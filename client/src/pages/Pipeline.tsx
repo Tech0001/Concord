@@ -21,6 +21,7 @@ import {
 import { apiRequest } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { visibleModels } from "@/lib/transcription-models";
+import FolderInput from "@/components/FolderInput";
 
 interface Channel {
   id: string;
@@ -735,12 +736,24 @@ export default function PipelineStatus() {
                 onChange={e => setNewChannelName(e.target.value)}
                 className="flex-1"
               />
-              <Input
-                placeholder={newChannelKind === "folder" ? "/absolute/path/to/folder" : "https://www.youtube.com/@channel"}
-                value={newChannelUrl}
-                onChange={e => setNewChannelUrl(e.target.value)}
-                className="flex-[2] font-mono text-xs"
-              />
+              {newChannelKind === "folder" ? (
+                <div className="flex-[2]">
+                  <FolderInput
+                    value={newChannelUrl}
+                    onChange={setNewChannelUrl}
+                    placeholder="/absolute/path/to/folder"
+                    prompt="Choose the folder to scan for local media"
+                    className="font-mono text-xs"
+                  />
+                </div>
+              ) : (
+                <Input
+                  placeholder="https://www.youtube.com/@channel"
+                  value={newChannelUrl}
+                  onChange={e => setNewChannelUrl(e.target.value)}
+                  className="flex-[2] font-mono text-xs"
+                />
+              )}
               <Button size="sm" onClick={addChannel} disabled={!newChannelName || !newChannelUrl}>
                 <Plus className="h-4 w-4"/>Add
               </Button>
