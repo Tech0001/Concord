@@ -8,6 +8,7 @@ import {
   type SpeakerSpan,
 } from "./diarize-merge";
 import { findClosestSpeaker, upsertVideoSpeakerAssignment, SPEAKER_AUTOMATCH_THRESHOLD, pruneOrphanedAssignmentsForVideo } from "./db";
+import { enginesDir } from "./transcription-setup";
 
 // ---- JSON shapes on disk ----
 
@@ -71,8 +72,10 @@ export interface ParakeetOptions {
   channelId?: string;
 }
 
-const PARAKEET_SCRIPT = path.join(process.cwd(), "server", "transcribe-parakeet.py");
-const SORTFORMER_SCRIPT = path.join(process.cwd(), "server", "diarize-sortformer.py");
+// Resolve scripts via enginesDir() so the same code works in dev (source
+// tree) and in the packaged Electron app (process.resourcesPath/...).
+const PARAKEET_SCRIPT = path.join(enginesDir(), "transcribe-parakeet.py");
+const SORTFORMER_SCRIPT = path.join(enginesDir(), "diarize-sortformer.py");
 
 export async function transcribeWithParakeet(
   audioPath: string,

@@ -99,7 +99,8 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "build/icon-src/icon_1024.png", "to": "icon.png" }
+      { "from": "build/icon-src/icon_1024.png", "to": "icon.png" },
+      { "from": "server/transcription-engines", "to": "transcription-engines" }
     ],
     "asar": true,
     "asarUnpack": [

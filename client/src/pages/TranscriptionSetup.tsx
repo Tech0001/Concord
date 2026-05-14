@@ -30,6 +30,9 @@ export default function TranscriptionSetup() {
   const [progress, setProgress] = useState<ProgressLine[]>([]);
   const [done, setDone] = useState<{ ok: boolean; engine?: string; error?: string } | null>(null);
   const logBoxRef = useRef<HTMLDivElement | null>(null);
+  // Power-user toggle to surface BOTH engine cards. Default off so the
+  // common path is one button click on the recommended engine.
+  const [showAllEngines, setShowAllEngines] = useState(false);
 
   // Auto-scroll the install log to the bottom on each new line.
   useEffect(() => {
@@ -206,24 +209,60 @@ export default function TranscriptionSetup() {
             </div>
           )}
 
-          {/* Install button */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Button
-              size="lg"
-              disabled={!status.python.ok || installing}
-              onClick={() => startInstall(recommended)}
+          {/* Install button(s) — single big button when showing the
+              recommended engine; two side-by-side cards when the user
+              has opted into the manual override. */}
+          {showAllEngines ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <EngineCard
+                engine="parakeet"
+                size="~5GB"
+                speed="≈100x realtime"
+                requirements="NVIDIA GPU, ≥8GB VRAM"
+                disabled={!status.python.ok || installing}
+                installing={installing}
+                isRecommended={recommended === "parakeet"}
+                onInstall={() => startInstall("parakeet")}
+              />
+              <EngineCard
+                engine="whisper"
+                size="~1.5GB"
+                speed="varies (≈3–10x realtime)"
+                requirements="any CPU; CUDA accelerates"
+                disabled={!status.python.ok || installing}
+                installing={installing}
+                isRecommended={recommended === "whisper"}
+                onInstall={() => startInstall("whisper")}
+              />
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Button
+                size="lg"
+                disabled={!status.python.ok || installing}
+                onClick={() => startInstall(recommended)}
+              >
+                {installing
+                  ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Installing {recommended}…</>
+                  : <>Install {recommended} ({recommended === "parakeet" ? "~5GB" : "~1.5GB"})</>}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={skipSetup} disabled={installing}>
+                <SkipForward className="mr-1 h-3.5 w-3.5" /> Skip for now
+              </Button>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>Will install to <code>{status.venv.path}</code>. First-time install pulls wheels from PyPI; needs internet.</span>
+            <button
+              type="button"
+              className="underline-offset-2 hover:underline"
+              onClick={() => setShowAllEngines((v) => !v)}
+              disabled={installing}
             >
-              {installing
-                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Installing {recommended}…</>
-                : <>Install {recommended} ({recommended === "parakeet" ? "~5GB" : "~1.5GB"})</>}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={skipSetup} disabled={installing}>
-              <SkipForward className="mr-1 h-3.5 w-3.5" /> Skip for now
-            </Button>
+              {showAllEngines ? "Use recommended only" : "Show both engines"}
+            </button>
           </div>
-          <p className="text-[11px] text-muted-foreground">
-            Will install to <code>{status.venv.path}</code>. First-time install pulls wheels from PyPI; needs internet.
-          </p>
         </CardContent>
       </Card>
 
@@ -289,6 +328,38 @@ function DetectRow({ label, ok, detail, neutral }: { label: string; ok: boolean;
       <span className={`inline-block h-2 w-2 rounded-full ${color}`} />
       <span className="font-medium">{label}</span>
       <span className="ml-auto truncate text-muted-foreground" title={detail}>{detail}</span>
+    </div>
+  );
+}
+
+interface EngineCardProps {
+  engine: "parakeet" | "whisper";
+  size: string;
+  speed: string;
+  requirements: string;
+  isRecommended: boolean;
+  installing: boolean;
+  disabled: boolean;
+  onInstall: () => void;
+}
+
+function EngineCard({ engine, size, speed, requirements, isRecommended, installing, disabled, onInstall }: EngineCardProps) {
+  return (
+    <div className={`flex flex-col gap-2 rounded-md border p-3 ${isRecommended ? "border-primary/40 bg-primary/5" : ""}`}>
+      <div className="flex items-center justify-between">
+        <div className="font-semibold capitalize">{engine}</div>
+        {isRecommended && <Badge variant="secondary" className="text-[10px]">Recommended</Badge>}
+      </div>
+      <ul className="space-y-1 text-[11px] text-muted-foreground">
+        <li>Install size: {size}</li>
+        <li>Speed: {speed}</li>
+        <li>Requires: {requirements}</li>
+      </ul>
+      <Button size="sm" disabled={disabled} onClick={onInstall} className="mt-auto">
+        {installing
+          ? <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Installing…</>
+          : <>Install {engine}</>}
+      </Button>
     </div>
   );
 }

@@ -3,10 +3,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2, FileText, BookOpen, ChevronDown, ChevronUp, HardDrive } from "lucide-react";
+import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2, FileText, BookOpen, ChevronDown, ChevronUp, HardDrive, Mic, Trash2, Wrench } from "lucide-react";
+import { Link as RouterLink } from "wouter";
 import FolderInput from "@/components/FolderInput";
 import { visibleModels } from "@/lib/transcription-models";
 
@@ -312,6 +314,8 @@ export default function Settings() {
       <SummariesCard hasChatModel={Boolean(chatModel || config?.chatModel)} />
 
       <PipelineSettingsCard />
+
+      <TranscriptionEngineCard />
 
       <ModelNamingCheatsheet />
 
@@ -1184,5 +1188,138 @@ function PipelineSettingsCard() {
         </CardContent>
       )}
     </Card>
+  );
+}
+
+// ---- Transcription engine status (wizard pivot) -------------------------
+
+interface TranscriptionStatusShape {
+  platform: string;
+  skipSetup: boolean;
+  python: { ok: boolean; path: string; version: string | null; error?: string };
+  gpu: { present: boolean; name?: string; vramMb?: number };
+  recommendedEngine: "parakeet" | "whisper";
+  venv: { path: string; exists: boolean; engine: "parakeet" | "whisper" | null };
+  installed: boolean;
+}
+
+/** Read-only summary of the wizard-installed transcription engine + links
+ *  to re-run the wizard for "switch engine" / "reinstall" cases. */
+function TranscriptionEngineCard() {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState<TranscriptionStatusShape | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const r = await apiRequest("GET", `/api/transcription/status?t=${Date.now()}`);
+      setStatus(await r.json());
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Status check failed", description: err.message });
+    }
+  }, [toast]);
+
+  useEffect(() => { if (open) reload(); }, [open, reload]);
+
+  const uninstall = async () => {
+    if (!confirm("Wipe the transcription venv? You'll need to re-run the wizard before transcribing again.")) return;
+    setBusy(true);
+    try {
+      await apiRequest("POST", "/api/transcription/uninstall", {});
+      toast({ title: "Venv removed" });
+      await reload();
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Uninstall failed", description: err.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const subtitle = status
+    ? status.skipSetup
+      ? "Bundled engine on this platform"
+      : status.installed
+        ? `${status.venv.engine ?? "engine"} installed`
+        : "Not installed"
+    : "—";
+
+  return (
+    <Card>
+      <CardHeader>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+        >
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Mic className="h-4 w-4 text-muted-foreground" />
+            Transcription
+            <span className="text-xs font-normal text-muted-foreground">· {subtitle}</span>
+          </CardTitle>
+          {open ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </button>
+      </CardHeader>
+
+      {open && (
+        <CardContent className="space-y-3 text-xs">
+          {!status && <div className="text-muted-foreground">Probing…</div>}
+          {status?.skipSetup && (
+            <div className="text-muted-foreground">
+              FluidAudio is bundled with the macOS build — no Python venv needed.
+              The wizard is hidden on this platform.
+            </div>
+          )}
+          {status && !status.skipSetup && (
+            <>
+              <Row label="Platform">{status.platform}</Row>
+              <Row label="Python">
+                {status.python.ok
+                  ? <span className="text-emerald-600 dark:text-emerald-400">{status.python.version}</span>
+                  : <span className="text-red-600 dark:text-red-400">{status.python.error || "not found"}</span>}
+              </Row>
+              <Row label="GPU">
+                {status.gpu.present
+                  ? `${status.gpu.name || "NVIDIA"} (${Math.round((status.gpu.vramMb ?? 0) / 1024)}GB)`
+                  : <span className="text-muted-foreground">none detected</span>}
+              </Row>
+              <Row label="Recommended">{status.recommendedEngine}</Row>
+              <Row label="Installed engine">
+                {status.installed
+                  ? <Badge variant="secondary">{status.venv.engine ?? "unknown"}</Badge>
+                  : <span className="text-muted-foreground">none — run the wizard</span>}
+              </Row>
+              <Row label="Venv path"><code className="font-mono">{status.venv.path}</code></Row>
+
+              <div className="flex flex-wrap gap-2 pt-2">
+                <RouterLink href="/setup/transcription">
+                  <Button size="sm" variant="outline">
+                    <Wrench className="mr-1.5 h-3 w-3" />
+                    {status.installed ? "Switch engine / reinstall" : "Open setup wizard"}
+                  </Button>
+                </RouterLink>
+                {status.installed && (
+                  <Button size="sm" variant="ghost" className="text-red-600 dark:text-red-400" disabled={busy} onClick={uninstall}>
+                    <Trash2 className="mr-1.5 h-3 w-3" /> Wipe venv
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={reload} disabled={busy}>
+                  <RefreshCw className="mr-1.5 h-3 w-3" /> Re-probe
+                </Button>
+              </div>
+            </>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+      <span className="text-muted-foreground">{label}</span>
+      <span>{children}</span>
+    </div>
   );
 }

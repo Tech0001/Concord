@@ -4,6 +4,7 @@ import fs from "fs";
 import { getConfigValues } from "./db";
 import { transcribeWithFluidAudio } from "./transcribe-fluidaudio";
 import { transcribeWithParakeet } from "./transcribe-parakeet";
+import { enginesDir } from "./transcription-setup";
 
 export interface TranscriptionOptions {
   model?: string;
@@ -143,8 +144,7 @@ export function transcribeAudio(
     ? defaultPythonPath(true)
     : (pythonPath || defaultPythonPath(false));
   const scriptPath = path.join(
-    process.cwd(),
-    "server",
+    enginesDir(),
     parakeet ? "transcribe-parakeet.py" : "transcribe.py",
   );
 
