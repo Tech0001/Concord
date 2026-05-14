@@ -188,6 +188,91 @@ export function scanLocalFolder(folderUrl: string): ChannelVideo[] {
   return out;
 }
 
+// ---- Existing-file detection for channel scans -----------------------
+//
+// When a channel scan returns metadata for a video, we'd like to skip
+// the download phase entirely if the file is already sitting in the
+// channel's save folder. Two ways the file might be there:
+//
+//   1. A previous Concord download — file basename matches
+//      `datedBaseName(title, uploadDate)`.
+//   2. A yt-dlp default-template download with the videoId in the
+//      filename, e.g. `Title [VideoId].mp4` — common when the user
+//      has been downloading manually outside the app.
+//
+// We index the channel folder once per scan and return a small lookup
+// helper. Anything matched gets enqueued with status="complete" +
+// video_path set, so the pipeline doesn't re-download.
+
+const MEDIA_EXTS_FOR_MATCH = new Set([
+  ".mp4", ".mkv", ".webm", ".m4v", ".mov", ".avi",
+  ".m4a", ".mp3", ".wav", ".flac", ".aac", ".opus", ".ogg",
+]);
+
+export interface LocalFileMatcher {
+  /** Look up a downloaded file matching this video, or null. */
+  match(video: { id: string; title: string; uploadDate: string | null }): string | null;
+}
+
+/** Scan a channel's save folder and return a matcher that finds local
+ *  files corresponding to videos returned by a channel scan. Cheap to
+ *  build (one readdir + per-file string check) so it can be created at
+ *  the start of every channel-scan call. Returns a noop matcher when
+ *  the folder doesn't exist or can't be read. */
+export function buildLocalFileMatcher(
+  channelSaveFolder: string,
+  datedBaseName: (title: string, uploadDate?: string | null) => string,
+): LocalFileMatcher {
+  if (!fs.existsSync(channelSaveFolder)) {
+    return { match: () => null };
+  }
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(channelSaveFolder, { withFileTypes: true });
+  } catch {
+    return { match: () => null };
+  }
+
+  // Two indexes:
+  //   byBasename: basename (no ext) -> full path. Lookup #1 — exact
+  //               datedBaseName match.
+  //   byVideoId:  11-char YouTube id -> full path. Lookup #2 — extract
+  //               [<id>] from filenames (yt-dlp default template), or
+  //               match anywhere the id appears as a token.
+  const byBasename = new Map<string, string>();
+  const byVideoId = new Map<string, string>();
+  const videoIdPattern = /\[([A-Za-z0-9_-]{11})\]/;
+
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.name.startsWith(".")) continue;
+    const ext = path.extname(entry.name).toLowerCase();
+    if (!MEDIA_EXTS_FOR_MATCH.has(ext)) continue;
+    const stem = path.basename(entry.name, ext);
+    // Skip our own derivative files (playback sidecars, vp9 backups).
+    const stemLower = stem.toLowerCase();
+    if (stemLower.endsWith(".playback") || stemLower.endsWith(".vp9.bak")) continue;
+    const full = path.join(channelSaveFolder, entry.name);
+    byBasename.set(stem, full);
+    const idMatch = stem.match(videoIdPattern);
+    if (idMatch) byVideoId.set(idMatch[1], full);
+  }
+
+  return {
+    match(video) {
+      // 1. Exact basename match — what Concord writes itself.
+      const expected = datedBaseName(video.title, video.uploadDate);
+      const hit = byBasename.get(expected);
+      if (hit) return hit;
+
+      // 2. YouTube id in the filename — yt-dlp default template.
+      const idHit = byVideoId.get(video.id);
+      if (idHit) return idHit;
+
+      return null;
+    },
+  };
+}
+
 // ---- Config parsing ----
 
 export function parseConfigNumber(value: string | undefined, fallback: number): number {

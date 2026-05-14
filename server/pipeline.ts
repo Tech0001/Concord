@@ -45,6 +45,7 @@ import {
   type SpeedPreset,
 } from "./pipeline-types";
 import {
+  buildLocalFileMatcher,
   fileUrlToPath,
   isAudioOnlyPath,
   isLiveFlagStale,
@@ -56,6 +57,7 @@ import {
   parseSpeedPreset,
   scanLocalFolder,
   speedPresetToSleepInterval,
+  type LocalFileMatcher,
 } from "./pipeline-utils";
 
 export { DailyCapReachedError, isLocalChannel, speedPresetToSleepInterval };
@@ -385,6 +387,29 @@ export class Pipeline extends EventEmitter {
     this.emit("stopped");
   }
 
+  /** Build a matcher rooted at this channel's expected save folder, so
+   *  the next batch of scanned videos can be checked against local files
+   *  already on disk. Returns a noop matcher when the folder is missing
+   *  (covers fresh installs / channels with no downloads yet). */
+  private buildLocalMatcherForChannel(channel: ChannelConfig): LocalFileMatcher {
+    if (isLocalChannel(channel)) {
+      // Local channels already track files by path — the matcher would
+      // double up. Return a noop and let scanLocalFolder do its thing.
+      return { match: () => null };
+    }
+    const folder = path.join(this.config.videoSaveDir, channelFolderName(channel.name));
+    return buildLocalFileMatcher(folder, datedBaseName);
+  }
+
+  /** Promote a freshly-enqueued (status="pending") row to status="complete"
+   *  with the on-disk path attached, so the pipeline skips the download
+   *  step entirely. Used when a scan matches a video to a file that's
+   *  already in the channel save folder. */
+  private linkExistingDownload(videoId: string, channelId: string, videoPath: string): void {
+    updateQueueStatus(videoId, channelId, { videoPath, status: "complete", error: null });
+    console.log(`[pipeline] Linked existing local file: ${videoPath}`);
+  }
+
   // ---- Periodic check: scan recent videos, enqueue new ones ----
 
   private async checkAllChannels(): Promise<void> {
@@ -447,20 +472,33 @@ export class Pipeline extends EventEmitter {
         const allVideos = await getAllChannelVideos(channel.url, (info) => {
           this.emit("archiveProgress", { channelId: channel.id, channelName: channel.name, ...info });
         });
-        const toEnqueue = allVideos
-          .filter(v => !v.isShorts || !!channel.include_shorts)
-          .map(v => ({
-            videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
-            duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
-          }));
+        const filtered = allVideos.filter(v => !v.isShorts || !!channel.include_shorts);
+        const toEnqueue = filtered.map(v => ({
+          videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
+          duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
+        }));
         const added = enqueueVideos(toEnqueue);
-        console.log(`[pipeline] ${channel.name}: first scan queued ${added}/${toEnqueue.length} videos`);
+
+        // After enqueue, link any rows whose file is already on disk
+        // (previously downloaded by Concord OR a yt-dlp default-template
+        // download). Skips the download phase for those entries.
+        const matcher = this.buildLocalMatcherForChannel(channel);
+        let linked = 0;
+        for (const v of filtered) {
+          const hit = matcher.match({ id: v.id, title: v.title, uploadDate: v.uploadDate });
+          if (hit) { this.linkExistingDownload(v.id, channel.id, hit); linked++; }
+        }
+        console.log(`[pipeline] ${channel.name}: first scan queued ${added}/${toEnqueue.length} videos${linked ? ` (${linked} already on disk)` : ""}`);
         return added;
       }
 
       const batchSize = 25;
       let start = 1;
       let added = 0;
+      let linked = 0;
+      // Build the matcher once per scan — readdir cost shouldn't be paid
+      // on every page.
+      const matcher = this.buildLocalMatcherForChannel(channel);
 
       while (start <= 5000) {
         const videos = await getChannelVideosPage(channel.url, start, batchSize);
@@ -474,10 +512,15 @@ export class Pipeline extends EventEmitter {
           }
 
           if (v.isShorts && !channel.include_shorts) continue;
-          if (enqueueVideo({
+          const inserted = enqueueVideo({
             videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
             duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
-          })) added++;
+          });
+          if (inserted) {
+            added++;
+            const hit = matcher.match({ id: v.id, title: v.title, uploadDate: v.uploadDate });
+            if (hit) { this.linkExistingDownload(v.id, channel.id, hit); linked++; }
+          }
         }
 
         if (foundKnownVideo) {
@@ -489,7 +532,7 @@ export class Pipeline extends EventEmitter {
         start += videos.length;
       }
 
-      console.log(`[pipeline] ${channel.name}: +${added} new videos`);
+      console.log(`[pipeline] ${channel.name}: +${added} new videos${linked ? ` (${linked} already on disk)` : ""}`);
       return added;
     } catch (e) {
       console.error(`[pipeline] Error scanning ${channel.name}:`, e);
@@ -511,18 +554,27 @@ export class Pipeline extends EventEmitter {
           this.emit("archiveProgress", { channelId, channelName: channel.name, ...info });
         });
 
-    let newVideos = 0;
-    const toEnqueue = videos
-      .filter(v => !v.isShorts || !!channel.include_shorts)
-      .map(v => ({
-        videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
-        duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
-      }));
+    const filtered = videos.filter(v => !v.isShorts || !!channel.include_shorts);
+    const toEnqueue = filtered.map(v => ({
+      videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
+      duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
+    }));
 
-    newVideos = enqueueVideos(toEnqueue);
+    const newVideos = enqueueVideos(toEnqueue);
+
+    // After enqueue, link any rows whose file already exists in the
+    // channel save folder. Same matcher used by scanRecent — covers
+    // prior Concord downloads (exact basename) and stock yt-dlp
+    // template downloads ([VideoId] in the filename).
+    const matcher = this.buildLocalMatcherForChannel(channel);
+    let linked = 0;
+    for (const v of filtered) {
+      const hit = matcher.match({ id: v.id, title: v.title, uploadDate: v.uploadDate });
+      if (hit) { this.linkExistingDownload(v.id, channel.id, hit); linked++; }
+    }
 
     const skipped = videos.length - toEnqueue.length;
-    console.log(`[pipeline] Full scan done: ${videos.length} total, ${newVideos} new, ${skipped} skipped`);
+    console.log(`[pipeline] Full scan done: ${videos.length} total, ${newVideos} new, ${skipped} skipped${linked ? `, ${linked} already on disk` : ""}`);
 
     return { scanned: videos.length, newVideos };
   }
