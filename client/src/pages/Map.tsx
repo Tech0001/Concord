@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
+  ConnectionMode,
   Controls,
   MiniMap,
   ReactFlow,
@@ -40,6 +41,7 @@ import {
   LINK_KINDS,
   type ArcOrder,
   type Channel,
+  type ClipLinkHandle,
   type ClipLinkKind,
   type FlowEdgePayload,
   type GraphEdgeData,
@@ -269,68 +271,58 @@ export default function MapPage() {
   }, [generatedFlowNodes]);
 
   const flowEdges = useMemo<Edge[]>(() => graph.edges.flatMap(edge => {
+    // One ReactFlow edge per logical clip_link, regardless of how many
+    // videos each side is anchored in. The line attaches to specific
+    // handles persisted on the link (edge.fromHandle / edge.toHandle).
+    // NULL handles fall back to right→left, which matches the legacy
+    // fixed-side rendering.
+    const fromSide: ClipLinkHandle = (edge.fromHandle as ClipLinkHandle) || "right";
+    const toSide: ClipLinkHandle = (edge.toHandle as ClipLinkHandle) || "left";
+
     if (mode === "video") {
       const source = clipById.get(edge.source);
       const target = clipById.get(edge.target);
       if (!source || !target) return [];
-      // Per logical link, emit ONE edge per (sourceVideo, targetVideo)
-      // pair — NOT the full anchor × anchor cross-product. Multi-anchor
-      // notes still appear at every anchored timestamp inside their
-      // video container, but a single A→B link only draws one line in
-      // each video (pointing at the FIRST anchor of each side), so the
-      // viewer doesn't see A connecting to "every clip in video B"
-      // when it's the same target note just appearing multiple times.
-      //
-      // Standalone notes (zero anchors) pass through with no handle —
-      // they render as freestanding ClipNodes with default Handles.
-      type Appearance = { nodeId: string; handle: string | undefined; key: string };
-      const canonicalByVideo = (clip: typeof source): Map<string, Appearance> => {
-        const byVideo = new Map<string, Appearance>();
-        if (!clip.anchors?.length) {
-          byVideo.set(clip.id, { nodeId: clip.id, handle: undefined, key: "0" });
-          return byVideo;
-        }
-        for (const a of clip.anchors) {
-          const nodeId = `video:${a.channelId}:${a.videoId}`;
-          const existing = byVideo.get(nodeId);
-          if (!existing || a.ordinal < Number(existing.key)) {
-            byVideo.set(nodeId, {
-              nodeId,
-              handle: `${clip.id}:${a.ordinal}`,
-              key: String(a.ordinal),
-            });
-          }
-        }
-        return byVideo;
-      };
-      const srcByVideo = canonicalByVideo(source);
-      const tgtByVideo = canonicalByVideo(target);
 
-      const out: Edge[] = [];
-      const srcList = Array.from(srcByVideo.values());
-      const tgtList = Array.from(tgtByVideo.values());
-      for (const s of srcList) {
-        for (const t of tgtList) {
-          // Skip self-loops where both appearances live in the same node —
-          // they'd render as tiny loop arcs that just add noise.
-          if (s.nodeId === t.nodeId) continue;
-          out.push({
-            id: `${edge.id}:${s.key}->${t.key}`,
-            source: s.nodeId,
-            target: t.nodeId,
-            sourceHandle: s.handle,
-            targetHandle: t.handle,
-            ...edgeStyles(edge),
-          });
-        }
-      }
-      return out;
+      // Pick a canonical anchor per clip — the lowest-ordinal one in the
+      // alphabetically-first video the clip appears in. Multi-anchor
+      // clips still appear in every video container they touch (the
+      // VideoNode renders one row per anchor), but the cross-video link
+      // attaches to a single representative appearance.
+      const firstAnchor = (clip: typeof source) => {
+        if (!clip.anchors?.length) return null;
+        return [...clip.anchors].sort((a, b) => a.ordinal - b.ordinal)[0];
+      };
+      const sAnchor = firstAnchor(source);
+      const tAnchor = firstAnchor(target);
+
+      // Standalone notes have no anchors — they render as bare ClipNodes
+      // whose node id is the clip id and whose handles use side strings.
+      const sNodeId = sAnchor ? `video:${sAnchor.channelId}:${sAnchor.videoId}` : source.id;
+      const tNodeId = tAnchor ? `video:${tAnchor.channelId}:${tAnchor.videoId}` : target.id;
+      const sHandle = sAnchor ? `${source.id}:${sAnchor.ordinal}:${fromSide}` : fromSide;
+      const tHandle = tAnchor ? `${target.id}:${tAnchor.ordinal}:${toSide}` : toSide;
+
+      if (sNodeId === tNodeId) return [];
+
+      return [{
+        id: edge.id,
+        source: sNodeId,
+        target: tNodeId,
+        sourceHandle: sHandle,
+        targetHandle: tHandle,
+        ...edgeStyles(edge),
+      }];
     }
 
+    // Cards / clip mode: nodes ARE the clips. Handles are bare side
+    // strings ("left" | "right" | "top" | "bottom").
     return [{
       id: edge.id,
       source: edge.source,
       target: edge.target,
+      sourceHandle: fromSide,
+      targetHandle: toSide,
       ...edgeStyles(edge),
     }];
   }), [clipById, graph.edges, mode]);
@@ -422,26 +414,47 @@ export default function MapPage() {
     setDrawerOpen(true);
   }
 
-  const resolveConnectionClip = (nodeId: string | null, handleId: string | null | undefined): GraphNodeData | undefined => {
+  /** Decode the ReactFlow handle id into (clip, side). Two id shapes:
+   *    - "<clipId>:<ordinal>:<side>" — VideoNode anchor rows.
+   *    - "<side>"                   — ClipNode (Cards mode + standalone).
+   *  Falls back to right/left if the id is missing or unrecognized so
+   *  click-to-link (no drag) still produces a sensible default. */
+  const SIDES: ClipLinkHandle[] = ["left", "right", "top", "bottom"];
+  const isSide = (s: string | undefined | null): s is ClipLinkHandle =>
+    !!s && (SIDES as string[]).includes(s);
+
+  const resolveConnection = (
+    nodeId: string | null,
+    handleId: string | null | undefined,
+    fallback: ClipLinkHandle,
+  ): { clip: GraphNodeData; side: ClipLinkHandle } | undefined => {
     if (!nodeId) return undefined;
-    if (mode === "video") {
-      // Handle id is `${clipId}:${anchorOrdinal}` for video-container rows;
-      // standalone notes pass no handle (the freestanding ClipNode uses
-      // the bare node id as the clip id).
-      if (!handleId) return clipById.get(nodeId);
-      const colon = handleId.lastIndexOf(":");
-      const clipKey = colon > 0 ? handleId.slice(0, colon) : handleId;
-      return clipById.get(clipKey);
+    if (mode === "video" && handleId && handleId.includes(":")) {
+      const parts = handleId.split(":");
+      const maybeSide = parts[parts.length - 1];
+      const clipKey = parts.slice(0, -2).join(":") || parts.slice(0, -1).join(":");
+      const clip = clipById.get(clipKey);
+      if (!clip) return undefined;
+      return { clip, side: isSide(maybeSide) ? maybeSide : fallback };
     }
-    return clipById.get(nodeId);
+    const clip = clipById.get(nodeId);
+    if (!clip) return undefined;
+    return { clip, side: isSide(handleId) ? handleId : fallback };
   };
 
-  const createManualLink = async (source: GraphNodeData, target: GraphNodeData) => {
+  const createManualLink = async (
+    source: GraphNodeData,
+    target: GraphNodeData,
+    fromHandle: ClipLinkHandle = "right",
+    toHandle: ClipLinkHandle = "left",
+  ) => {
     try {
       await apiRequest("POST", `/api/clips/${source.clipId}/links`, {
         toId: target.clipId,
         kind: linkKind,
         note: linkNote.trim() || null,
+        fromHandle,
+        toHandle,
       });
       toast({ title: "Note link created", description: `${source.title} → ${target.title}` });
       // Stay in linking mode so the user can fan out from one source —
@@ -485,6 +498,9 @@ export default function MapPage() {
         toId: graphEdge.target,
         kind: newKind,
         note: graphEdge.note || null,
+        // Preserve the user's chosen sides — only the kind is changing.
+        fromHandle: graphEdge.fromHandle ?? null,
+        toHandle: graphEdge.toHandle ?? null,
       });
       toast({ title: "Link type changed", description: newKind.replace("_", " ") });
       // Reload first (loadGraph clears selectedEdge), then re-apply our
@@ -508,15 +524,17 @@ export default function MapPage() {
 
   const reconnectManualEdge = async (oldEdge: Edge, connection: Connection) => {
     const graphEdge = oldEdge.data as GraphEdgeData | undefined;
-    const source = resolveConnectionClip(connection.source, connection.sourceHandle);
-    const target = resolveConnectionClip(connection.target, connection.targetHandle);
-    if (!graphEdge || graphEdge.kind !== "manual" || !graphEdge.manualKind || !source || !target || source.id === target.id) return;
+    const src = resolveConnection(connection.source, connection.sourceHandle, "right");
+    const tgt = resolveConnection(connection.target, connection.targetHandle, "left");
+    if (!graphEdge || graphEdge.kind !== "manual" || !graphEdge.manualKind || !src || !tgt || src.clip.id === tgt.clip.id) return;
     try {
       await apiRequest("DELETE", `/api/clips/${graphEdge.source}/links/${graphEdge.target}/${graphEdge.manualKind}`);
-      await apiRequest("POST", `/api/clips/${source.clipId}/links`, {
-        toId: target.clipId,
+      await apiRequest("POST", `/api/clips/${src.clip.clipId}/links`, {
+        toId: tgt.clip.clipId,
         kind: graphEdge.manualKind,
         note: graphEdge.note || null,
+        fromHandle: src.side,
+        toHandle: tgt.side,
       });
       toast({ title: "Clip link reconnected" });
       await loadGraph();
@@ -564,10 +582,10 @@ export default function MapPage() {
   };
 
   const onConnect = async (connection: Connection) => {
-    const source = resolveConnectionClip(connection.source, connection.sourceHandle);
-    const target = resolveConnectionClip(connection.target, connection.targetHandle);
-    if (!source || !target || source.id === target.id) return;
-    await createManualLink(source, target);
+    const src = resolveConnection(connection.source, connection.sourceHandle, "right");
+    const tgt = resolveConnection(connection.target, connection.targetHandle, "left");
+    if (!src || !tgt || src.clip.id === tgt.clip.id) return;
+    await createManualLink(src.clip, tgt.clip, src.side, tgt.side);
   };
 
   const onEdgeClick: EdgeMouseHandler = (event, edge) => {
@@ -854,6 +872,7 @@ export default function MapPage() {
                 nodes={flowNodesState}
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
+                connectionMode={ConnectionMode.Loose}
                 onNodeClick={onNodeClick}
                 onNodeDoubleClick={onNodeDoubleClick}
                 onConnect={onConnect}

@@ -48,6 +48,9 @@ export interface GraphNodeData extends Record<string, unknown> {
   anchors: GraphAnchorData[];
 }
 
+export type ClipLinkHandle = "left" | "right" | "top" | "bottom";
+export const CLIP_LINK_HANDLES: ClipLinkHandle[] = ["left", "right", "top", "bottom"];
+
 export interface GraphEdgeData {
   id: string;
   source: string;
@@ -58,6 +61,11 @@ export interface GraphEdgeData {
   tags?: string[];
   manualKind?: string;
   note?: string | null;
+  // Per-link handle attachment, persisted in DB. NULL means use the default
+  // (right→left). Renderers (Cards / Videos) translate this into a real
+  // ReactFlow handle id at render time.
+  fromHandle?: ClipLinkHandle | null;
+  toHandle?: ClipLinkHandle | null;
 }
 
 export type FlowEdgePayload = GraphEdgeData & Record<string, unknown>;

@@ -12,6 +12,7 @@ import {
   addNoteAnchor,
   createTranscriptClip,
   CLIP_LINK_KINDS,
+  type ClipLinkHandle,
   type ClipLinkKind,
   deleteClipTag,
   deleteTranscriptClip,
@@ -390,12 +391,19 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
 
   app.post("/api/clips/:clipId/links", (req: Request<{ clipId: string }>, res: Response) => {
     try {
-      const { toId, kind, note } = req.body || {};
+      const { toId, kind, note, fromHandle, toHandle } = req.body || {};
       if (!toId || !kind) return res.status(400).json({ error: "toId and kind are required" });
       if (!CLIP_LINK_KINDS.includes(kind)) {
         return res.status(400).json({ error: `kind must be one of ${CLIP_LINK_KINDS.join(", ")}` });
       }
-      const result = addClipLink(req.params.clipId, String(toId), kind as ClipLinkKind, note ? String(note) : null);
+      const result = addClipLink(
+        req.params.clipId,
+        String(toId),
+        kind as ClipLinkKind,
+        note ? String(note) : null,
+        fromHandle ? (String(fromHandle) as ClipLinkHandle) : null,
+        toHandle ? (String(toHandle) as ClipLinkHandle) : null,
+      );
       res.json({ success: true, ...result });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed to add link" });
