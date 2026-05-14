@@ -16,7 +16,7 @@ import {
   Play, Square, RefreshCw, Plus, Trash2, Activity,
   CheckCircle, XCircle, Clock, AlertCircle, Radio,
   FileText, Download, Mic, FileDown, Loader2, Archive, List,
-  HardDrive, RotateCcw, ChevronDown, FileAudio, FolderOpen, Globe
+  HardDrive, RotateCcw, ChevronDown, FileAudio, FolderOpen, Globe, Pencil
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -251,6 +251,42 @@ export default function PipelineStatus() {
   const toggleChannelShorts = async (id: string, include_shorts: boolean) => {
     await apiRequest("PATCH", `/api/pipeline/channels/${id}`, { include_shorts });
     fetchConfig();
+  };
+
+  /** Rename a channel's display name. The folder on disk keeps its
+   *  current name (renaming would shift video_path for every existing
+   *  entry); new downloads land in a folder based on the new name. */
+  const renameChannel = async (ch: { id: string; name: string }) => {
+    const next = window.prompt(`Rename channel "${ch.name}":`, ch.name);
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === ch.name) return;
+    try {
+      await apiRequest("PATCH", `/api/pipeline/channels/${ch.id}`, { name: trimmed });
+      toast({ title: "Channel renamed", description: trimmed });
+      fetchConfig();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Rename failed", description: e.message });
+    }
+  };
+
+  /** Walk the channel's videoSaveDir folder and queue any media files
+   *  that aren't already tracked in video_queue. Used to import local
+   *  files (e.g. a manually-downloaded video sitting alongside the
+   *  channel's other content). */
+  const importChannelFolder = async (ch: { id: string; name: string }) => {
+    if (!confirm(`Scan "${ch.name}"'s save folder for local files to add to the library? Files already tracked are skipped.`)) return;
+    try {
+      const r = await apiRequest("POST", `/api/pipeline/channels/${ch.id}/import-folder`, {});
+      const data = await r.json() as { added: number; skipped: number; scanned: number; folder: string };
+      toast({
+        title: data.added > 0 ? `Imported ${data.added} file${data.added === 1 ? "" : "s"}` : "Nothing new to import",
+        description: `Scanned ${data.scanned} in ${data.folder}${data.skipped ? `, ${data.skipped} already tracked` : ""}`,
+      });
+      fetchState();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Import failed", description: e.message });
+    }
   };
 
   const toggleGlobalDiarize = async (enabled: boolean) => {
@@ -523,6 +559,24 @@ export default function PipelineStatus() {
                     >
                       {archiving[ch.id] ? <Loader2 className="h-3 w-3 animate-spin"/> : <Archive className="h-3 w-3"/>}
                       {isLocal ? "Rescan" : "Full Scan"}
+                    </Button>
+                    {!isLocal && (
+                      <Button
+                        size="sm" variant="ghost"
+                        onClick={() => importChannelFolder(ch)}
+                        title="Scan this channel's save folder for local files to import"
+                      >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        Import folder
+                      </Button>
+                    )}
+                    <Button
+                      size="icon" variant="ghost"
+                      onClick={() => renameChannel(ch)}
+                      aria-label="Rename channel"
+                      title="Rename channel"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
                     </Button>
                     <Button size="icon" variant="ghost" onClick={() => removeChannel(ch.id)} aria-label="Remove channel">
                       <Trash2 className="h-4 w-4 text-destructive"/>

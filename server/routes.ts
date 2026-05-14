@@ -22,8 +22,10 @@ import {
   getArchiveStatus,
 } from "./db";
 import { registerChatRoutes } from "./routes-chat";
+import { registerLlmRoutes } from "./routes-llm";
 import { registerNotesRoutes } from "./routes-notes";
 import { registerSpeakerRoutes } from "./routes-speakers";
+import { registerSystemRoutes } from "./routes-system";
 import { registerTranscriptionSetupRoutes } from "./routes-transcription-setup";
 import {
   countByStatus,
@@ -48,6 +50,7 @@ import fs from "fs";
 import { nanoid } from "nanoid";
 import { spawn, execFile } from "child_process";
 import { promisify } from "util";
+import crypto from "crypto";
 
 const execFileAsync = promisify(execFile);
 
@@ -413,7 +416,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
 
             const existingEntry = getQueueEntryByVideoId(download.videoId);
-            const dbChannelId = existingEntry?.channel_id || download.channelId || "manual";
+            // Prefer the readable channel name (yt-dlp's `channel` field,
+            // e.g. "Rick Joyner") over the UC... id so the Library shows
+            // the human-friendly name and matches the on-disk folder
+            // (which is already named via channelFolderName(channelName)
+            // above). Manual one-off downloads don't create a channels
+            // row, so the channel_id IS the only signal the UI has.
+            const dbChannelId = existingEntry?.channel_id
+              || (download.channelName ? String(download.channelName) : null)
+              || download.channelId
+              || "manual";
             enqueueVideo({
               videoId: download.videoId,
               channelId: dbChannelId,
@@ -742,379 +754,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const pipeline = getPipeline();
 
   // Get pipeline state
-  app.get("/api/pipeline/status", (_req, res) => {
-    res.json(pipeline.getState());
-  });
+  // ---- System / status / config / dialog ----
+  // /api/pipeline/status, /api/status, /api/pipeline/config (get+post),
+  // /api/pipeline/ytdlp-health, /api/system/*, /api/dialog/pick-folder
+  // — all registered in routes-system.ts.
+  registerSystemRoutes(app, pipeline, httpServer);
 
-  // Whole-archive status snapshot — powers the Status dashboard. Bundles
-  // the pipeline state with coverage counts so the page renders from a
-  // single fetch. Cheap aggregate queries; safe to poll every few seconds.
-  app.get("/api/status", (_req, res) => {
-    try {
-      const cfg = pipeline.getConfig();
-      const snapshot = getArchiveStatus(cfg.llm.embeddingModel || null);
-      res.json({
-        pipeline: pipeline.getState(),
-        ...snapshot,
-      });
-    } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : "Failed to assemble status snapshot",
-      });
-    }
-  });
-
-  // Get pipeline config
-  app.get("/api/pipeline/config", (_req, res) => {
-    res.json(pipeline.getConfig());
-  });
-
-  // Update pipeline config
-  app.post("/api/pipeline/config", (req, res) => {
-    try {
-      pipeline.updateConfig(req.body);
-      res.json({ success: true, config: pipeline.getConfig() });
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid config" });
-    }
-  });
-
-  // yt-dlp health indicator. We deliberately do NOT auto-update yt-dlp anywhere;
-  // this endpoint just probes `yt-dlp --version` so the UI can show whether the
-  // binary is reachable and what version is installed. The result is cached for
-  // 60s — version doesn't change between user-initiated package upgrades.
-  let ytdlpHealthCache: { at: number; data: Awaited<ReturnType<typeof probeYtdlpHealth>> } | null = null;
-  app.get("/api/pipeline/ytdlp-health", async (req, res) => {
-    const force = req.query.force === "1" || req.query.force === "true";
-    if (!force && ytdlpHealthCache && Date.now() - ytdlpHealthCache.at < 60_000) {
-      return res.json({ ...ytdlpHealthCache.data, cached: true });
-    }
-    const data = await probeYtdlpHealth();
-    ytdlpHealthCache = { at: Date.now(), data };
-    res.json({ ...data, cached: false });
-  });
-
-  // ---- System info (for client-side platform-aware UI filtering) ----
-  app.get("/api/system/info", (_req, res) => {
-    res.json({ platform: process.platform, arch: process.arch });
-  });
-
-  // ---- LAN URL (for "open on your phone" UX) ----
-  // Returns the first non-internal IPv4 address bound on this machine so
-  // the UI can surface a URL the user types into their phone's browser.
-  // Only meaningful when lanAccess is enabled in pipeline config; the
-  // client gates display on that flag, but the endpoint always answers
-  // so the UI can show "save config and restart to enable" hints.
-  app.get("/api/system/lan-url", async (_req, res) => {
-    const os = await import("os");
-    const port = (httpServer.address() as { port?: number } | null)?.port;
-    const lanAccess = pipeline.getConfig().lanAccess === true;
-    const ifaces = os.networkInterfaces();
-    let ip: string | null = null;
-    for (const list of Object.values(ifaces)) {
-      for (const i of list || []) {
-        if (i.family === "IPv4" && !i.internal) { ip = i.address; break; }
-      }
-      if (ip) break;
-    }
-    res.json({
-      lanAccess,
-      ip,
-      port: port ?? null,
-      url: lanAccess && ip && port ? `http://${ip}:${port}` : null,
-    });
-  });
-
-  // ---- Native folder picker (macOS / future Electron) ----
-  // Spawns AppleScript's `choose folder` dialog so users can pick paths in
-  // Finder instead of typing them. Server-side because the app runs locally
-  // on the user's machine — the dialog appears on their desktop. When we
-  // package as Electron later, swap this for dialog.showOpenDialog.
-  app.post("/api/dialog/pick-folder", async (req, res) => {
-    if (process.platform !== "darwin") {
-      return res.status(501).json({
-        error: "Folder picker not supported on this platform yet",
-        platform: process.platform,
-      });
-    }
-    const { prompt = "Choose folder", defaultPath } = req.body || {};
-    const escape = (s: string) => String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    let script = `POSIX path of (choose folder with prompt "${escape(prompt)}"`;
-    if (defaultPath && fs.existsSync(defaultPath)) {
-      script += ` default location POSIX file "${escape(defaultPath)}"`;
-    }
-    script += `)`;
-    try {
-      const { stdout } = await execFileAsync("osascript", ["-e", script]);
-      res.json({ path: stdout.trim() });
-    } catch (err: unknown) {
-      const e = err as { stderr?: string; message?: string };
-      const stderr = String(e?.stderr || "");
-      // osascript exits 1 with "User canceled. (-128)" when the user dismisses.
-      if (stderr.includes("User canceled") || stderr.includes("(-128)")) {
-        return res.json({ cancelled: true });
-      }
-      res.status(500).json({ error: stderr || e?.message || "osascript failed" });
-    }
-  });
-
-  // ---- LLM (oMLX / Ollama / any OpenAI-compatible) ----
-
-  // Read current LLM config. Never returns the raw API key — only `hasApiKey`.
-  app.get("/api/llm/config", (_req, res) => {
-    const llm = pipeline.getConfig().llm;
-    res.json({
-      baseUrl: llm.baseUrl,
-      chatModel: llm.chatModel,
-      embeddingModel: llm.embeddingModel,
-      hasApiKey: Boolean(llm.apiKey),
-    });
-  });
-
-  // Update LLM config. Body may contain any subset of
-  // { baseUrl, apiKey, chatModel, embeddingModel }. Sending apiKey overwrites
-  // the stored value (including with "" to clear). Omit apiKey to leave it.
-  app.post("/api/llm/config", (req, res) => {
-    try {
-      const updates: Partial<{ baseUrl: string; apiKey: string; chatModel: string; embeddingModel: string }> = {};
-      const body = req.body || {};
-      if (typeof body.baseUrl === "string") updates.baseUrl = body.baseUrl.trim();
-      if (typeof body.apiKey === "string") updates.apiKey = body.apiKey;
-      if (typeof body.chatModel === "string") updates.chatModel = body.chatModel.trim();
-      if (typeof body.embeddingModel === "string") updates.embeddingModel = body.embeddingModel.trim();
-      pipeline.updateConfig({ llm: { ...pipeline.getConfig().llm, ...updates } });
-      const llm = pipeline.getConfig().llm;
-      res.json({
-        success: true,
-        config: {
-          baseUrl: llm.baseUrl,
-          chatModel: llm.chatModel,
-          embeddingModel: llm.embeddingModel,
-          hasApiKey: Boolean(llm.apiKey),
-        },
-      });
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid config" });
-    }
-  });
-
-  // Quick reachability + identity probe. Always 200; the body says reachable=false on error.
-  app.get("/api/llm/status", async (_req, res) => {
-    res.json(await llmProbeStatus());
-  });
-
-  // ---- Semantic search & embedding management ----
-
-  // Stats: how many videos × segments are embedded, per model.
-  app.get("/api/llm/embeddings/stats", (_req, res) => {
-    res.json(getEmbeddingStats());
-  });
-
-  // Reindex everything. Walks every transcribed video and re-embeds. Slow
-  // for big libraries (hundreds of API calls of 50 segments each), so it
-  // streams progress over SSE rather than holding a long HTTP request.
-  app.post("/api/llm/embeddings/reindex", async (req, res) => {
-    const cfg = pipeline.getConfig().llm;
-    const model = (req.body?.model as string | undefined) || cfg.embeddingModel;
-    if (!model) {
-      return res.status(400).json({ error: "No embedding model configured (set on AI page first)" });
-    }
-
-    const wipe = req.body?.wipe === true;
-    if (wipe) clearAllEmbeddings(model);
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
-
-    const sse = (event: string, data: unknown) => {
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
-
-    // Fire a "preparing" event immediately so the UI knows the request is
-    // alive while we compute the work list. Without this, the user sees
-    // nothing happen for a few seconds and assumes the connection died.
-    sse("preparing", { model });
-
-    // Default behavior: catch-up only — skip videos that already have
-    // embeddings for this model. Wipe forces a full re-embed (used when
-    // changing models or rebuilding from scratch). Single SQL query for
-    // the covered set instead of N round-trips through hasVideoEmbeddings.
-    const allVideos = getQueueList({ status: "complete", limit: 100000 }).rows;
-    let videos = allVideos;
-    if (!wipe) {
-      const covered = new Set(
-        getCoveredVideoKeysForModel(model).map(({ videoId, channelId }) => `${videoId}|${channelId}`),
-      );
-      videos = allVideos.filter((v) => !covered.has(`${v.video_id}|${v.channel_id}`));
-    }
-    const alreadyCovered = allVideos.length - videos.length;
-
-    sse("start", { total: videos.length, model, alreadyCovered });
-
-    let done = 0;
-    let totalSegments = 0;
-    let skipped = 0;
-    for (const v of videos) {
-      try {
-        const r = await embedSegmentsForVideo(v.video_id, v.channel_id, model);
-        if (r.skipped) {
-          skipped++;
-          // Server log echo for debuggability — the SSE event also carries
-          // the reason, but having it in the dev log makes "why was THIS
-          // video skipped?" answerable without diffing the browser.
-          console.log(`[reindex] skipped ${v.video_id}: ${r.skipped}`);
-        } else {
-          totalSegments += r.segmentCount;
-        }
-        sse("video", { ...r, done: ++done, total: videos.length });
-      } catch (err) {
-        sse("video", {
-          videoId: v.video_id, channelId: v.channel_id, model, segmentCount: 0,
-          error: err instanceof Error ? err.message : String(err),
-          done: ++done, total: videos.length,
-        });
-      }
-    }
-
-    sse("done", { total: videos.length, totalSegments, skipped, model });
-    res.end();
-  });
+  // ---- LLM (config, status, embeddings reindex, summaries, semantic
+  // search, models proxy) ---- registered in routes-llm.ts.
+  registerLlmRoutes(app, pipeline);
 
   // ---- AI chat (RAG over the archive) ----
   // /api/chat/* + /api/llm/ask registered in routes-chat.ts.
   registerChatRoutes(app, pipeline);
-
-  // Regenerate the AI summary for a single video. Used by the per-video
-  // "Regenerate" button in the transcript drawer. Synchronous (no SSE)
-  // since it's one chat call — the UI can show a spinner.
-  app.post("/api/videos/library/:channelId/:videoId/ai-summary/regenerate", async (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
-    try {
-      const cfg = pipeline.getConfig().llm;
-      const model = cfg.chatModel;
-      if (!model) return res.status(400).json({ error: "No chat model configured (set on AI page first)" });
-
-      // Clear so summarizeVideo's "already populated by this model" guard
-      // doesn't short-circuit the regen.
-      setVideoAiSummary(req.params.videoId, req.params.channelId, null, null);
-
-      const result = await summarizeVideo(req.params.videoId, req.params.channelId, model);
-      if (result.skipped) return res.status(400).json({ error: result.skipped, model: result.model });
-      res.json({
-        success: true,
-        model: result.model,
-        charsIn: result.charsIn,
-        charsOut: result.charsOut,
-      });
-    } catch (err) {
-      if (err instanceof LlmConfigError) return res.status(400).json({ error: err.message });
-      if (err instanceof LlmUnreachableError) return res.status(503).json({ error: err.message });
-      res.status(500).json({ error: err instanceof Error ? err.message : "Unknown" });
-    }
-  });
-
-  // Bulk-generate AI summaries for every transcribed video. SSE-streamed
-  // since iterating + calling chat() per video is slow (multi-second per
-  // call). By default, skips videos whose notes are already populated;
-  // pass `overwrite: true` to regenerate everything (uses are: model
-  // changed, prompt tweaked).
-  app.post("/api/llm/summaries/regenerate", async (req, res) => {
-    const cfg = pipeline.getConfig().llm;
-    const model = (req.body?.model as string | undefined) || cfg.chatModel;
-    if (!model) {
-      return res.status(400).json({ error: "No chat model configured (set on AI page first)" });
-    }
-
-    const overwrite = req.body?.overwrite === true;
-    const videos = getQueueList({ status: "complete", limit: 100000 }).rows;
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
-
-    const sse = (event: string, data: unknown) => {
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
-    sse("start", { total: videos.length, model, overwrite });
-
-    let done = 0;
-    let written = 0;
-    let skipped = 0;
-    for (const v of videos) {
-      try {
-        if (overwrite) {
-          // Clear so summarizeVideo doesn't short-circuit on the
-          // "already populated by this model" idempotency guard.
-          setVideoAiSummary(v.video_id, v.channel_id, null, null);
-        }
-        const r = await summarizeVideo(v.video_id, v.channel_id, model);
-        if (r.skipped) skipped++;
-        else written++;
-        sse("video", { ...r, done: ++done, total: videos.length });
-      } catch (err) {
-        sse("video", {
-          videoId: v.video_id, channelId: v.channel_id, model,
-          charsIn: 0, charsOut: 0,
-          error: err instanceof Error ? err.message : String(err),
-          done: ++done, total: videos.length,
-        });
-      }
-    }
-
-    sse("done", { total: videos.length, written, skipped, model });
-    res.end();
-  });
-
-  // Semantic search — embeds the query, cosines vs all stored vectors.
-  app.post("/api/transcripts/search-semantic", async (req, res) => {
-    try {
-      const query = String(req.body?.query || "").trim();
-      if (!query) return res.status(400).json({ error: "query required" });
-
-      const cfg = pipeline.getConfig().llm;
-      const model = cfg.embeddingModel;
-      if (!model) {
-        return res.status(400).json({ error: "No embedding model configured (set on AI page first)" });
-      }
-
-      const out = await searchSemantic({
-        query,
-        model,
-        limit: req.body?.limit,
-        minScore: typeof req.body?.minScore === "number" ? req.body.minScore : undefined,
-        filters: req.body?.filters,
-      });
-      res.json(out);
-    } catch (err) {
-      if (err instanceof LlmConfigError) return res.status(400).json({ error: err.message });
-      if (err instanceof LlmUnreachableError) return res.status(503).json({ error: err.message });
-      if (err instanceof LlmHttpError) return res.status(err.status).json({ error: err.message, body: err.body });
-      res.status(500).json({ error: err instanceof Error ? err.message : "Unknown" });
-    }
-  });
-
-  // Proxy to provider's /v1/models so the AI page can populate model dropdowns.
-  app.get("/api/llm/models", async (_req, res) => {
-    try {
-      const models = await llmListModels();
-      res.json({ models });
-    } catch (error) {
-      if (error instanceof LlmConfigError) {
-        return res.status(400).json({ error: error.message, kind: "config" });
-      }
-      if (error instanceof LlmUnreachableError) {
-        return res.status(503).json({ error: error.message, kind: "unreachable" });
-      }
-      if (error instanceof LlmHttpError) {
-        return res.status(error.status).json({ error: error.message, kind: "http", body: error.body });
-      }
-      res.status(500).json({ error: error instanceof Error ? error.message : "Unknown" });
-    }
-  });
 
   // Start pipeline
   app.post("/api/pipeline/start", (_req, res) => {
@@ -1292,8 +944,149 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (req.body.enabled !== undefined) channel.enabled = req.body.enabled;
     if (req.body.diarize !== undefined) channel.diarize = !!req.body.diarize;
     if (req.body.include_shorts !== undefined) channel.include_shorts = !!req.body.include_shorts;
+    if (typeof req.body.name === "string" && req.body.name.trim()) {
+      // The folder on disk uses the OLD name as its name. We don't move
+      // the folder here because every video's video_path is absolute —
+      // the path keeps working regardless of channel display name. New
+      // videos go to a folder built from the new name, which can create
+      // a second folder for the channel; the user can manually merge
+      // those if they care, but functionally everything resolves fine.
+      channel.name = req.body.name.trim();
+    }
     pipeline.updateConfig(config);
     res.json({ success: true, channel });
+  });
+
+  /**
+   * Scan a channel's local save folder for video files not yet tracked
+   * in video_queue, and queue them as local-import entries. Use case:
+   * user has a manually-downloaded video sitting in the channel folder
+   * that should be indexed/transcribed alongside the rest.
+   *
+   * The channel's expected folder is
+   *   `<videoSaveDir>/<channelFolderName(channel.name)>/`
+   * Anything that isn't already in video_queue (by path match) gets a
+   * fresh local-* video_id and a "pending" status; the pipeline picks
+   * them up on its next run like any other queued entry.
+   */
+  app.post("/api/pipeline/channels/:channelId/import-folder", (req, res) => {
+    try {
+      const config = pipeline.getConfig();
+      const channel = config.channels.find(c => c.id === req.params.channelId);
+      if (!channel) return res.status(404).json({ error: "Channel not found" });
+
+      const channelFolder = channelFolderName(channel.name);
+      const folder = path.join(config.videoSaveDir, channelFolder);
+      if (!fs.existsSync(folder)) {
+        return res.status(404).json({ error: `Channel folder not found: ${folder}` });
+      }
+
+      // Pull existing paths once so the per-file lookup is in-memory.
+      const existing = new Set<string>(
+        (getDb()
+          .prepare("SELECT video_path FROM video_queue WHERE channel_id = ? AND video_path IS NOT NULL AND video_path <> ''")
+          .all(channel.id) as { video_path: string }[])
+          .map(r => r.video_path),
+      );
+
+      // Filter passes:
+      //   1. Skip dotfiles and non-media extensions.
+      //   2. Skip our own derivative files: <stem>.playback.<ext>
+      //      (browser-friendly AAC sidecar) and <stem>.vp9.bak (rollback
+      //      file from the VP9→H.264 transcode script).
+      //   3. Skip audio files whose stem matches an existing video file
+      //      in the same folder — that's a keepAudio sidecar
+      //      (<videoStem>.m4a alongside <videoStem>.mp4), not a
+      //      standalone audio item the user wants to import.
+      const VIDEO_EXTS = new Set([".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v"]);
+      const AUDIO_EXTS = new Set([".mp3", ".m4a", ".wav", ".flac", ".aac", ".opus", ".ogg"]);
+
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(folder, { withFileTypes: true });
+      } catch (err) {
+        return res.status(500).json({ error: `Read folder failed: ${err instanceof Error ? err.message : String(err)}` });
+      }
+
+      // Two-pass: first collect every video-file stem we'll see so the
+      // audio-pass can skip any with a matching video sibling.
+      const videoStems = new Set<string>();
+      for (const e of entries) {
+        if (!e.isFile() || e.name.startsWith(".")) continue;
+        const ext = path.extname(e.name).toLowerCase();
+        if (!VIDEO_EXTS.has(ext)) continue;
+        const stem = path.basename(e.name, ext);
+        if (stem.toLowerCase().endsWith(".playback")) continue;
+        if (stem.toLowerCase().endsWith(".vp9.bak")) continue;
+        videoStems.add(stem);
+      }
+
+      const found: string[] = [];
+      for (const e of entries) {
+        if (!e.isFile() || e.name.startsWith(".")) continue;
+        const ext = path.extname(e.name).toLowerCase();
+        const stem = path.basename(e.name, ext);
+        const stemLower = stem.toLowerCase();
+        if (stemLower.endsWith(".playback")) continue;
+        if (stemLower.endsWith(".vp9.bak")) continue;
+        if (VIDEO_EXTS.has(ext)) {
+          // pass
+        } else if (AUDIO_EXTS.has(ext)) {
+          // Skip if there's a video with the same stem (it's a sidecar,
+          // not a standalone item).
+          if (videoStems.has(stem)) continue;
+        } else {
+          continue;
+        }
+        const full = path.join(folder, e.name);
+        if (existing.has(full)) continue;
+        found.push(full);
+      }
+
+      const added: { videoId: string; title: string; videoPath: string }[] = [];
+      const skipped: { videoPath: string; reason: string }[] = [];
+      for (const full of found) {
+        const stem = path.basename(full, path.extname(full));
+        // Filename pattern is `YYYY-MM-DD - Title` (datedBaseName output).
+        // Strip the prefix when present; fall back to the bare stem.
+        const dateMatch = stem.match(/^(\d{4})-(\d{2})-(\d{2})\s+-\s+(.+)$/);
+        const uploadDate = dateMatch ? `${dateMatch[1]}${dateMatch[2]}${dateMatch[3]}` : null;
+        const title = dateMatch ? dateMatch[4].replace(/_/g, " ") : stem;
+
+        // Stable id derived from the absolute path; same scheme as
+        // local-folder channels so a path-based dedup still works.
+        const hash = crypto.createHash("sha256").update(full).digest("hex");
+        const videoId = `local-${hash.substring(0, 11)}`;
+
+        const inserted = enqueueVideo({
+          videoId,
+          channelId: channel.id,
+          title,
+          url: `file://${full}`,
+          duration: null,
+          isLive: false,
+          isShorts: false,
+          uploadDate,
+        });
+        if (!inserted) {
+          skipped.push({ videoPath: full, reason: "Already queued under this id" });
+          continue;
+        }
+        updateQueueStatus(videoId, channel.id, { videoPath: full });
+        added.push({ videoId, title, videoPath: full });
+      }
+
+      res.json({
+        ok: true,
+        folder,
+        scanned: found.length,
+        added: added.length,
+        skipped: skipped.length,
+        details: { added, skipped },
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Import folder failed" });
+    }
   });
 
   // Re-transcribe a video with an optional different model
