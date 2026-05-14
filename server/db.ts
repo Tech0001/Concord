@@ -372,6 +372,14 @@ function runMigrations(database: Database.Database) {
   // NULL = use video_path directly (the original is browser-compatible).
   ensureColumn("video_queue", "playback_path", "TEXT");
 
+  // Per-link handle side ("left" | "right" | "top" | "bottom"). NULL = the
+  // Map page falls back to right→left, matching the legacy fixed-side
+  // behavior. The user picks sides explicitly by dragging from one handle
+  // to another (loose connection mode), so each link can attach where the
+  // user dropped it instead of being forced into a single LTR flow.
+  ensureColumn("clip_links", "from_handle", "TEXT");
+  ensureColumn("clip_links", "to_handle", "TEXT");
+
   // Renamed link kind: same_scripture → same_topic. Migrate any existing rows.
   database
     .prepare("UPDATE clip_links SET kind = 'same_topic' WHERE kind = 'same_scripture'")

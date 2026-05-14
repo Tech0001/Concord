@@ -63,18 +63,22 @@ export function VideoNode({ data, selected }: { data: VideoNodeData; selected?: 
               }
             }}
           >
-            <Handle
-              id={`${clip.id}:${typeof clip.anchorOrdinal === "number" ? clip.anchorOrdinal : 1}`}
-              type="target"
-              position={Position.Left}
-              className="!left-2 !h-5 !w-5 !border-2 !border-background !bg-primary"
-            />
-            <Handle
-              id={`${clip.id}:${typeof clip.anchorOrdinal === "number" ? clip.anchorOrdinal : 1}`}
-              type="source"
-              position={Position.Right}
-              className="!right-2 !h-5 !w-5 !border-2 !border-background !bg-primary"
-            />
+            {/* Four handles per row (loose connectionMode at the canvas level
+             *  lets any handle connect to any other). Handle ids encode the
+             *  side so the edge renderer can address them precisely. Top /
+             *  bottom are small to avoid eating row height — they sit on
+             *  the row's top/bottom border. */}
+            {(() => {
+              const ord = typeof clip.anchorOrdinal === "number" ? clip.anchorOrdinal : 1;
+              return (
+                <>
+                  <Handle id={`${clip.id}:${ord}:left`}   type="source" position={Position.Left}   className="!left-2 !h-5 !w-5 !border-2 !border-background !bg-primary" />
+                  <Handle id={`${clip.id}:${ord}:right`}  type="source" position={Position.Right}  className="!right-2 !h-5 !w-5 !border-2 !border-background !bg-primary" />
+                  <Handle id={`${clip.id}:${ord}:top`}    type="source" position={Position.Top}    className="!h-2 !w-2 !border-2 !border-background !bg-primary" />
+                  <Handle id={`${clip.id}:${ord}:bottom`} type="source" position={Position.Bottom} className="!h-2 !w-2 !border-2 !border-background !bg-primary" />
+                </>
+              );
+            })()}
             <span className="pointer-events-none absolute left-8 top-1/2 h-px w-3 -translate-y-1/2 bg-primary/35" />
             <span className="pointer-events-none absolute right-8 top-1/2 h-px w-3 -translate-y-1/2 bg-primary/35" />
             <div className="flex items-center justify-between gap-2">
@@ -91,7 +95,7 @@ export function VideoNode({ data, selected }: { data: VideoNodeData; selected?: 
         ))}
       </div>
       <div className="border-t px-3 py-2 text-[11px] text-muted-foreground">
-        Drag from the right dot of one clip to the left dot of another.
+        Drag from any handle (top / right / bottom / left) to any other.
       </div>
     </div>
   );

@@ -358,12 +358,21 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
 
   // Return every saved clip whose [start, end] overlaps this segment.
   // Used to render inline tag pills + note for clipped transcript segments
-  // so the user can see what they tagged at a glance.
+  // so the user can see what they tagged at a glance. A clip is anchored
+  // to the FIRST segment its range overlaps, even when the range spans
+  // many — otherwise a single multi-segment clip echoes the same tag/note
+  // block on every segment in the range and looks like ten clips. The
+  // visual span of the clip is still shown via the row-background tint
+  // driven by isSegmentClipped(), which separately checks overlap.
   const clipsForSegment = (segment: TranscriptSegment): RelatedClip[] => {
     const matches: RelatedClip[] = [];
     for (const clip of sameVideoClips) {
       if (clip.start_seconds >= segment.end) continue;
       if (clip.end_seconds <= segment.start) continue;
+      // Anchor each clip to the earliest segment it touches: skip if
+      // this segment ends at-or-before the clip starts (i.e. the clip
+      // begins inside an even earlier segment which is the real anchor).
+      if (segment.start > clip.start_seconds) continue;
       matches.push(clip);
     }
     return matches;

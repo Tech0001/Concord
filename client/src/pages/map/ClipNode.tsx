@@ -26,8 +26,14 @@ export function ClipNode({ data, selected }: { data: GraphNodeData; selected?: b
       )}
       style={{ width: DEFAULT_CLIP_WIDTH, borderLeft: `4px solid ${channelColor(data.channelId)}` }}
     >
-      <Handle type="target" position={Position.Left} className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
-      <Handle type="source" position={Position.Right} className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
+      {/* One handle per side, type="source"; ReactFlow runs in loose
+       *  connectionMode at the canvas level so any handle can be dragged to
+       *  any other handle (right→right, top→bottom, etc.). Multiple links
+       *  can share the same handle — the edges fan out via bezier curves. */}
+      <Handle id="left"   type="source" position={Position.Left}   className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
+      <Handle id="right"  type="source" position={Position.Right}  className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
+      <Handle id="top"    type="source" position={Position.Top}    className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
+      <Handle id="bottom" type="source" position={Position.Bottom} className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
       <div className="line-clamp-2 text-xs font-medium leading-4">{data.title}</div>
       <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
         {standalone

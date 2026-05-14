@@ -610,11 +610,16 @@ export type ClipLinkKind = (typeof CLIP_LINK_KINDS)[number];
 
 const SYMMETRIC_LINK_KINDS = new Set<ClipLinkKind>(["same_claim", "contradicts", "same_topic"]);
 
+export type ClipLinkHandle = "left" | "right" | "top" | "bottom";
+export const CLIP_LINK_HANDLES: ClipLinkHandle[] = ["left", "right", "top", "bottom"];
+
 export interface ClipLink {
   from_clip_id: string;
   to_clip_id: string;
   kind: ClipLinkKind;
   note: string | null;
+  from_handle: ClipLinkHandle | null;
+  to_handle: ClipLinkHandle | null;
   created_at: string;
 }
 
@@ -628,21 +633,33 @@ export function addClipLink(
   toId: string,
   kind: ClipLinkKind,
   note?: string | null,
+  fromHandle?: ClipLinkHandle | null,
+  toHandle?: ClipLinkHandle | null,
 ): { inserted: number } {
   if (fromId === toId) throw new Error("A clip cannot link to itself");
   if (!CLIP_LINK_KINDS.includes(kind)) throw new Error(`Unknown link kind: ${kind}`);
+  if (fromHandle && !CLIP_LINK_HANDLES.includes(fromHandle)) {
+    throw new Error(`Unknown handle: ${fromHandle}`);
+  }
+  if (toHandle && !CLIP_LINK_HANDLES.includes(toHandle)) {
+    throw new Error(`Unknown handle: ${toHandle}`);
+  }
 
   const cleanedNote = note?.trim() || null;
+  const fh = fromHandle ?? null;
+  const th = toHandle ?? null;
   const db = getDb();
   return db.transaction(() => {
     const main = db
-      .prepare(`INSERT OR REPLACE INTO clip_links (from_clip_id, to_clip_id, kind, note) VALUES (?, ?, ?, ?)`)
-      .run(fromId, toId, kind, cleanedNote);
+      .prepare(`INSERT OR REPLACE INTO clip_links (from_clip_id, to_clip_id, kind, note, from_handle, to_handle) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(fromId, toId, kind, cleanedNote, fh, th);
     let inserted = main.changes;
     if (SYMMETRIC_LINK_KINDS.has(kind)) {
+      // Mirror row reverses direction, so the handles swap too — A.right →
+      // B.left becomes B.left → A.right when viewed from the other side.
       const mirror = db
-        .prepare(`INSERT OR REPLACE INTO clip_links (from_clip_id, to_clip_id, kind, note) VALUES (?, ?, ?, ?)`)
-        .run(toId, fromId, kind, cleanedNote);
+        .prepare(`INSERT OR REPLACE INTO clip_links (from_clip_id, to_clip_id, kind, note, from_handle, to_handle) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(toId, fromId, kind, cleanedNote, th, fh);
       inserted += mirror.changes;
     }
     return { inserted };
@@ -770,6 +787,8 @@ export interface GraphEdge {
   tags?: string[];
   manualKind?: ClipLinkKind;
   note?: string | null;
+  fromHandle?: ClipLinkHandle | null;
+  toHandle?: ClipLinkHandle | null;
 }
 
 export interface ClipGraph {
@@ -864,6 +883,14 @@ export function getClipGraph(filters: {
         AND to_clip_id IN (${placeholders})
     `).all(...clipIds, ...clipIds) as ClipLink[];
 
+    // For symmetric kinds we keep the canonical (a < b) row. We pick it by
+    // scanning for an exact match in `links` instead of inferring, because
+    // each row has its own from_handle/to_handle that must travel with it
+    // — flipping just the ids would mis-attach the line.
+    const linkByKey = new Map<string, ClipLink>();
+    for (const link of links) {
+      linkByKey.set(`${link.from_clip_id}|${link.to_clip_id}|${link.kind}`, link);
+    }
     const seenSymmetric = new Set<string>();
     for (const link of links) {
       if (SYMMETRIC_LINK_KINDS.has(link.kind)) {
@@ -873,6 +900,7 @@ export function getClipGraph(filters: {
         const key = `${a}|${b}|${link.kind}`;
         if (seenSymmetric.has(key)) continue;
         seenSymmetric.add(key);
+        const canonical = linkByKey.get(`${a}|${b}|${link.kind}`) ?? link;
         edges.push({
           id: `manual:${a}:${b}:${link.kind}`,
           source: a,
@@ -881,7 +909,9 @@ export function getClipGraph(filters: {
           label: link.kind,
           weight: 1,
           manualKind: link.kind,
-          note: link.note,
+          note: canonical.note,
+          fromHandle: canonical.from_handle,
+          toHandle: canonical.to_handle,
         });
       } else {
         edges.push({
@@ -893,6 +923,8 @@ export function getClipGraph(filters: {
           weight: 1,
           manualKind: link.kind,
           note: link.note,
+          fromHandle: link.from_handle,
+          toHandle: link.to_handle,
         });
       }
       manualEdgeCount += 1;

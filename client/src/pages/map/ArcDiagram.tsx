@@ -120,6 +120,11 @@ export function ArcDiagram({
         .attr("class", edge => `arc-link ${edge.source === selectedId || edge.target === selectedId ? "selected" : ""}`)
         .attr("fill", "none")
         .attr("stroke", edge => {
+          // Manual links are visually meaningful per-kind (Same Topic,
+          // Contradicts, etc.) — use the kind color even when there's a
+          // shared tag. Auto-generated shared_tag edges still color by
+          // tag so the arc clusters by category.
+          if (edge.kind === "manual") return edgeColor(edge.kind, edge.manualKind);
           const tag = sharedTag(edge);
           return tag ? color(tag) : edgeColor(edge.kind);
         })

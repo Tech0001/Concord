@@ -124,7 +124,10 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": true
+      "notarize": true,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Concord uses the microphone to record voice notes that get transcribed and added to your library."
+      }
     },
     "dmg": {
       "title": "Concord ${version}"

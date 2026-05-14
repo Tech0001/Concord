@@ -10,6 +10,7 @@ import { registerPipelineRoutes } from "./routes-pipeline";
 import { registerSpeakerRoutes } from "./routes-speakers";
 import { registerSystemRoutes } from "./routes-system";
 import { registerTranscriptionSetupRoutes } from "./routes-transcription-setup";
+import { registerVoiceNoteRoutes } from "./routes-voice-notes";
 
 /**
  * Top-level HTTP wire-up. Every actual endpoint lives in a sibling
@@ -61,6 +62,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // orphans), and /api/pipeline/queue listings — registered in
   // routes-library.ts.
   registerLibraryRoutes(app, pipeline);
+
+  // ---- Voice notes (mic dictation) ----
+  // /api/voice-notes/{start, :id/chunk, :id/finalize, :id/cancel} —
+  // start a recording, push raw PCM chunks, finalize for offline
+  // FluidAudio processing. Registered in routes-voice-notes.ts.
+  registerVoiceNoteRoutes(app, pipeline);
 
   // ---- Pipeline lifecycle + channel management ----
   // /api/pipeline/{start,stop,check-now,process,events,transcripts,

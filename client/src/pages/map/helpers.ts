@@ -1,6 +1,6 @@
 import type { Edge } from "@xyflow/react";
 import type { VideoDrawerEntry } from "@/components/VideoDrawer";
-import type { GraphNodeData, GraphEdgeData, FlowEdgePayload, LayoutMode } from "./types";
+import { LINK_KIND_COLORS, type ClipLinkKind, type GraphNodeData, type GraphEdgeData, type FlowEdgePayload, type LayoutMode } from "./types";
 
 // Display helpers ----------------------------------------------------------
 
@@ -25,8 +25,17 @@ export function formatTimestamp(seconds: number): string {
 
 // Color choices ------------------------------------------------------------
 
-export function edgeColor(kind: GraphEdgeData["kind"]): string {
-  if (kind === "manual") return "var(--primary)";
+/** Pick the stroke color for an edge. Manual links dispatch on their
+ *  specific sub-kind (Same Topic = blue, Contradicts = red, etc. — see
+ *  LINK_KINDS in types.ts). Automatically-generated edges (shared_tag,
+ *  same_video) use theme tokens so they recede behind the manual ones. */
+export function edgeColor(kind: GraphEdgeData["kind"], manualKind?: string | null): string {
+  if (kind === "manual") {
+    if (manualKind && manualKind in LINK_KIND_COLORS) {
+      return LINK_KIND_COLORS[manualKind as ClipLinkKind];
+    }
+    return "var(--primary)";
+  }
   if (kind === "same_video") return "var(--muted-foreground)";
   return "var(--ring)";
 }
@@ -104,7 +113,7 @@ export function edgeStyles(edge: GraphEdgeData): Partial<Edge> {
     animated: false,
     reconnectable: edge.kind === "manual",
     style: {
-      stroke: edgeColor(edge.kind),
+      stroke: edgeColor(edge.kind, edge.manualKind),
       strokeWidth: edge.kind === "manual" ? 3 : Math.max(1, Math.min(5, edge.weight)),
       opacity: edge.kind === "shared_tag" ? 0.45 : 0.9,
     },

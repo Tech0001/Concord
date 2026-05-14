@@ -619,6 +619,15 @@ export class Pipeline extends EventEmitter {
 
   // ---- Queue processor: pick next video and run the pipeline ----
 
+  /** Public nudge — tells the pipeline "there might be a new pending row,
+   *  please look." Used by voice-notes finalize and any other code path
+   *  that drops a row in via SQL without going through scanEnabledChannels.
+   *  Fire-and-forget: returns immediately; processing happens on the
+   *  microtask queue and re-arms itself via the activeJobs `finally`. */
+  kickQueue(): void {
+    void this.processNextInQueue();
+  }
+
   private async processNextInQueue(): Promise<void> {
     if (this.activeJobs >= this.maxConcurrent) {
       // Already busy — the active job's `finally` will call this again
@@ -899,9 +908,13 @@ export class Pipeline extends EventEmitter {
       job.status = "complete";
       job.progress = 100;
       job.completedAt = new Date().toISOString();
-      this.maybeEmbedSegments(video.id, channel.id);
-      this.maybeSummarizeVideo(video.id, channel.id);
 
+      // Persist the new paths BEFORE kicking off embed/summary. Both helpers
+      // read `md_path` off the queue row to locate the transcript file
+      // (getTranscriptSegmentsForVideo → entry.md_path), so calling them
+      // before this updateQueueStatus would have them silently bail with
+      // "no segments" on every first-time transcribe. Retranscribe didn't
+      // hit this because the prior run's md_path was already persisted.
       updateQueueStatus(video.id, channel.id, {
         status: "complete",
         videoPath: job.videoPath || null,
@@ -909,6 +922,9 @@ export class Pipeline extends EventEmitter {
         mdPath: job.mdPath || null,
         wordCount: result.word_count,
       });
+
+      this.maybeEmbedSegments(video.id, channel.id);
+      this.maybeSummarizeVideo(video.id, channel.id);
 
       console.log(`[pipeline] ✅ ${video.title} (${result.word_count} words, ${result.realtime_factor}x realtime)`);
       this.emit("jobUpdated", job);
@@ -1335,10 +1351,13 @@ export class Pipeline extends EventEmitter {
       job.status = "complete";
       job.progress = 100;
       job.completedAt = new Date().toISOString();
+
+      // Persist md_path before embed/summary — see auto-pipeline comment;
+      // same ordering bug bit the third call site for fresh rows.
+      updateQueueStatus(videoId, channelId, { mdPath, wordCount: result.word_count, status: "complete" });
+
       this.maybeEmbedSegments(videoId, channelId);
       this.maybeSummarizeVideo(videoId, channelId);
-
-      updateQueueStatus(videoId, channelId, { mdPath, wordCount: result.word_count, status: "complete" });
       if (audioPath) {
         try { fs.unlinkSync(audioPath); } catch {}
       }
