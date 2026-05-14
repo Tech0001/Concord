@@ -391,7 +391,7 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
 
   app.post("/api/clips/:clipId/links", (req: Request<{ clipId: string }>, res: Response) => {
     try {
-      const { toId, kind, note, fromHandle, toHandle } = req.body || {};
+      const { toId, kind, note, fromHandle, toHandle, fromOrdinal, toOrdinal } = req.body || {};
       if (!toId || !kind) return res.status(400).json({ error: "toId and kind are required" });
       if (!CLIP_LINK_KINDS.includes(kind)) {
         return res.status(400).json({ error: `kind must be one of ${CLIP_LINK_KINDS.join(", ")}` });
@@ -403,6 +403,8 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
         note ? String(note) : null,
         fromHandle ? (String(fromHandle) as ClipLinkHandle) : null,
         toHandle ? (String(toHandle) as ClipLinkHandle) : null,
+        Number.isFinite(Number(fromOrdinal)) ? Number(fromOrdinal) : null,
+        Number.isFinite(Number(toOrdinal)) ? Number(toOrdinal) : null,
       );
       res.json({ success: true, ...result });
     } catch (error) {

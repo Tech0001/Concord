@@ -284,17 +284,21 @@ export default function MapPage() {
       const target = clipById.get(edge.target);
       if (!source || !target) return [];
 
-      // Pick a canonical anchor per clip — the lowest-ordinal one in the
-      // alphabetically-first video the clip appears in. Multi-anchor
-      // clips still appear in every video container they touch (the
-      // VideoNode renders one row per anchor), but the cross-video link
-      // attaches to a single representative appearance.
-      const firstAnchor = (clip: typeof source) => {
+      // Resolve the specific anchor row this link attaches to. If the
+      // link persisted a from/to ordinal, honor it; otherwise fall back
+      // to the lowest-ordinal anchor (first appearance). This is what
+      // keeps every link visually anchored to the row the user dragged
+      // from instead of collapsing onto anchor #1.
+      const pickAnchor = (clip: typeof source, ord: number | null | undefined) => {
         if (!clip.anchors?.length) return null;
+        if (ord != null) {
+          const exact = clip.anchors.find(a => a.ordinal === ord);
+          if (exact) return exact;
+        }
         return [...clip.anchors].sort((a, b) => a.ordinal - b.ordinal)[0];
       };
-      const sAnchor = firstAnchor(source);
-      const tAnchor = firstAnchor(target);
+      const sAnchor = pickAnchor(source, edge.fromOrdinal ?? null);
+      const tAnchor = pickAnchor(target, edge.toOrdinal ?? null);
 
       // Standalone notes have no anchors — they render as bare ClipNodes
       // whose node id is the clip id and whose handles use side strings.
@@ -430,19 +434,24 @@ export default function MapPage() {
     nodeId: string | null,
     handleId: string | null | undefined,
     fallback: ClipLinkHandle,
-  ): { clip: GraphNodeData; side: ClipLinkHandle } | undefined => {
+  ): { clip: GraphNodeData; side: ClipLinkHandle; ordinal: number | null } | undefined => {
     if (!nodeId) return undefined;
     if (mode === "video" && handleId && handleId.includes(":")) {
       const parts = handleId.split(":");
       const maybeSide = parts[parts.length - 1];
+      const maybeOrd = Number(parts[parts.length - 2]);
       const clipKey = parts.slice(0, -2).join(":") || parts.slice(0, -1).join(":");
       const clip = clipById.get(clipKey);
       if (!clip) return undefined;
-      return { clip, side: isSide(maybeSide) ? maybeSide : fallback };
+      return {
+        clip,
+        side: isSide(maybeSide) ? maybeSide : fallback,
+        ordinal: Number.isFinite(maybeOrd) ? maybeOrd : null,
+      };
     }
     const clip = clipById.get(nodeId);
     if (!clip) return undefined;
-    return { clip, side: isSide(handleId) ? handleId : fallback };
+    return { clip, side: isSide(handleId) ? handleId : fallback, ordinal: null };
   };
 
   const createManualLink = async (
@@ -450,6 +459,8 @@ export default function MapPage() {
     target: GraphNodeData,
     fromHandle: ClipLinkHandle = "right",
     toHandle: ClipLinkHandle = "left",
+    fromOrdinal: number | null = null,
+    toOrdinal: number | null = null,
   ) => {
     try {
       await apiRequest("POST", `/api/clips/${source.clipId}/links`, {
@@ -458,6 +469,8 @@ export default function MapPage() {
         note: linkNote.trim() || null,
         fromHandle,
         toHandle,
+        fromOrdinal,
+        toOrdinal,
       });
       toast({ title: "Note link created", description: `${source.title} → ${target.title}` });
       // Stay in linking mode so the user can fan out from one source —
@@ -501,9 +514,11 @@ export default function MapPage() {
         toId: graphEdge.target,
         kind: newKind,
         note: graphEdge.note || null,
-        // Preserve the user's chosen sides — only the kind is changing.
+        // Preserve the user's chosen sides + anchors — only the kind is changing.
         fromHandle: graphEdge.fromHandle ?? null,
         toHandle: graphEdge.toHandle ?? null,
+        fromOrdinal: graphEdge.fromOrdinal ?? null,
+        toOrdinal: graphEdge.toOrdinal ?? null,
       });
       toast({ title: "Link type changed", description: newKind.replace("_", " ") });
       // Reload first (loadGraph clears selectedEdge), then re-apply our
@@ -538,6 +553,8 @@ export default function MapPage() {
         note: graphEdge.note || null,
         fromHandle: src.side,
         toHandle: tgt.side,
+        fromOrdinal: src.ordinal,
+        toOrdinal: tgt.ordinal,
       });
       toast({ title: "Clip link reconnected" });
       await loadGraph();
@@ -588,7 +605,7 @@ export default function MapPage() {
     const src = resolveConnection(connection.source, connection.sourceHandle, "right");
     const tgt = resolveConnection(connection.target, connection.targetHandle, "left");
     if (!src || !tgt || src.clip.id === tgt.clip.id) return;
-    await createManualLink(src.clip, tgt.clip, src.side, tgt.side);
+    await createManualLink(src.clip, tgt.clip, src.side, tgt.side, src.ordinal, tgt.ordinal);
   };
 
   const onEdgeClick: EdgeMouseHandler = (event, edge) => {

@@ -380,6 +380,14 @@ function runMigrations(database: Database.Database) {
   ensureColumn("clip_links", "from_handle", "TEXT");
   ensureColumn("clip_links", "to_handle", "TEXT");
 
+  // Anchor ordinal — which appearance of the note the link attaches to.
+  // Multi-anchor notes appear as multiple rows in a video container;
+  // without persisting the ordinal, every link visually collapses onto
+  // the first anchor regardless of which row the user dragged from.
+  // NULL falls back to first anchor.
+  ensureColumn("clip_links", "from_ordinal", "INTEGER");
+  ensureColumn("clip_links", "to_ordinal", "INTEGER");
+
   // Renamed link kind: same_scripture → same_topic. Migrate any existing rows.
   database
     .prepare("UPDATE clip_links SET kind = 'same_topic' WHERE kind = 'same_scripture'")

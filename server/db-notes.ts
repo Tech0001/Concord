@@ -620,6 +620,8 @@ export interface ClipLink {
   note: string | null;
   from_handle: ClipLinkHandle | null;
   to_handle: ClipLinkHandle | null;
+  from_ordinal: number | null;
+  to_ordinal: number | null;
   created_at: string;
 }
 
@@ -635,6 +637,8 @@ export function addClipLink(
   note?: string | null,
   fromHandle?: ClipLinkHandle | null,
   toHandle?: ClipLinkHandle | null,
+  fromOrdinal?: number | null,
+  toOrdinal?: number | null,
 ): { inserted: number } {
   if (fromId === toId) throw new Error("A clip cannot link to itself");
   if (!CLIP_LINK_KINDS.includes(kind)) throw new Error(`Unknown link kind: ${kind}`);
@@ -648,18 +652,21 @@ export function addClipLink(
   const cleanedNote = note?.trim() || null;
   const fh = fromHandle ?? null;
   const th = toHandle ?? null;
+  const fo = Number.isFinite(fromOrdinal) ? Number(fromOrdinal) : null;
+  const to = Number.isFinite(toOrdinal) ? Number(toOrdinal) : null;
   const db = getDb();
   return db.transaction(() => {
     const main = db
-      .prepare(`INSERT OR REPLACE INTO clip_links (from_clip_id, to_clip_id, kind, note, from_handle, to_handle) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(fromId, toId, kind, cleanedNote, fh, th);
+      .prepare(`INSERT OR REPLACE INTO clip_links (from_clip_id, to_clip_id, kind, note, from_handle, to_handle, from_ordinal, to_ordinal) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(fromId, toId, kind, cleanedNote, fh, th, fo, to);
     let inserted = main.changes;
     if (SYMMETRIC_LINK_KINDS.has(kind)) {
-      // Mirror row reverses direction, so the handles swap too — A.right →
-      // B.left becomes B.left → A.right when viewed from the other side.
+      // Mirror row reverses direction, so handles AND ordinals swap — the
+      // line viewed from the other side starts at what used to be the
+      // target.
       const mirror = db
-        .prepare(`INSERT OR REPLACE INTO clip_links (from_clip_id, to_clip_id, kind, note, from_handle, to_handle) VALUES (?, ?, ?, ?, ?, ?)`)
-        .run(toId, fromId, kind, cleanedNote, th, fh);
+        .prepare(`INSERT OR REPLACE INTO clip_links (from_clip_id, to_clip_id, kind, note, from_handle, to_handle, from_ordinal, to_ordinal) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(toId, fromId, kind, cleanedNote, th, fh, to, fo);
       inserted += mirror.changes;
     }
     return { inserted };
@@ -789,6 +796,8 @@ export interface GraphEdge {
   note?: string | null;
   fromHandle?: ClipLinkHandle | null;
   toHandle?: ClipLinkHandle | null;
+  fromOrdinal?: number | null;
+  toOrdinal?: number | null;
 }
 
 export interface ClipGraph {
@@ -912,6 +921,8 @@ export function getClipGraph(filters: {
           note: canonical.note,
           fromHandle: canonical.from_handle,
           toHandle: canonical.to_handle,
+          fromOrdinal: canonical.from_ordinal,
+          toOrdinal: canonical.to_ordinal,
         });
       } else {
         edges.push({
@@ -925,6 +936,8 @@ export function getClipGraph(filters: {
           note: link.note,
           fromHandle: link.from_handle,
           toHandle: link.to_handle,
+          fromOrdinal: link.from_ordinal,
+          toOrdinal: link.to_ordinal,
         });
       }
       manualEdgeCount += 1;

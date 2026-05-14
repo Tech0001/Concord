@@ -66,6 +66,12 @@ export interface GraphEdgeData {
   // ReactFlow handle id at render time.
   fromHandle?: ClipLinkHandle | null;
   toHandle?: ClipLinkHandle | null;
+  // Which anchor (row inside a video container) the link attaches to.
+  // Multi-anchor notes have N rows in the same VideoNode; without
+  // ordinal, every link visually collapses onto the first anchor.
+  // NULL = first anchor.
+  fromOrdinal?: number | null;
+  toOrdinal?: number | null;
 }
 
 export type FlowEdgePayload = GraphEdgeData & Record<string, unknown>;
