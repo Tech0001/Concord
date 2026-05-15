@@ -147,7 +147,14 @@ export async function probeYtdlpHealth(): Promise<YtdlpHealth> {
     ? { binaryPath: resolved.path, kind: resolved.kind }
     : { binaryPath: zipappPath(), kind: "zipapp" as const };
   try {
-    const { stdout } = await execFileAsync(r.binaryPath, ["--version"], { timeout: 5000 });
+    // 30s, not 5s: yt-dlp is a PyInstaller bundle, and the very first
+    // exec from a new process context unpacks ~35 MB of Python files
+    // into a per-process temp dir. That cold-start can take 5–10s.
+    // Electron's spawned children don't share TMPDIR with your terminal,
+    // so the cache warmed by `yt-dlp --version` at a shell prompt doesn't
+    // help — the app's first probe pays the full extraction cost. Warm
+    // subsequent runs finish in <500ms regardless.
+    const { stdout } = await execFileAsync(r.binaryPath, ["--version"], { timeout: 30000 });
     return {
       ok: true,
       version: stdout.trim(),

@@ -244,7 +244,9 @@ async function updateBundledYtdlp(): Promise<YtdlpUpdateResult> {
   // 4. Capture the current version (if any) for the response.
   let fromVersion: string | null = null;
   try {
-    const { stdout } = await execFileAsync(userYtdlpPath(), ["--version"], { timeout: 5000 });
+    // Generous timeout — yt-dlp is a PyInstaller bundle and a cold
+    // exec can take 5-10s while it unpacks. See yt-dlp-bin.ts.
+    const { stdout } = await execFileAsync(userYtdlpPath(), ["--version"], { timeout: 30000 });
     fromVersion = stdout.trim();
   } catch { /* no current binary or it doesn't run — fine, this IS the fix */ }
 
@@ -259,7 +261,7 @@ async function updateBundledYtdlp(): Promise<YtdlpUpdateResult> {
   // print its version, bailing now means we don't lose a working old copy.
   let toVersion: string;
   try {
-    const { stdout } = await execFileAsync(tmp, ["--version"], { timeout: 5000 });
+    const { stdout } = await execFileAsync(tmp, ["--version"], { timeout: 30000 });
     toVersion = stdout.trim();
   } catch (err) {
     try { await fs.promises.unlink(tmp); } catch { /* ignore */ }
