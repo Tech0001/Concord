@@ -135,8 +135,9 @@ export default function PipelineStatus() {
   // Config editing now lives on /settings (PipelineSettingsCard) — this
   // page just displays the resolved config read-only. State for the form
   // fields was removed; see the Configuration card render below.
-  const [ytdlpHealth, setYtdlpHealth] = useState<{ ok: boolean; version: string | null; kind: "native" | "bundled"; path: string; error?: string } | null>(null);
+  const [ytdlpHealth, setYtdlpHealth] = useState<{ ok: boolean; version: string | null; kind: "user" | "bundled" | "native" | "zipapp"; path: string; updatable?: boolean; error?: string } | null>(null);
   const [ytdlpHealthChecking, setYtdlpHealthChecking] = useState(false);
+  const [ytdlpUpdating, setYtdlpUpdating] = useState(false);
 
   // Download state (same pattern as main page)
   const [videoData, setVideoData] = useState<VideoInfo | null>(null);
@@ -159,6 +160,29 @@ export default function PipelineStatus() {
       setYtdlpHealth({ ok: false, version: null, kind: "bundled", path: "", error: "Probe failed" });
     } finally {
       setYtdlpHealthChecking(false);
+    }
+  };
+
+  const updateYtdlp = async () => {
+    if (ytdlpUpdating) return;
+    setYtdlpUpdating(true);
+    try {
+      const r = await apiRequest("POST", "/api/pipeline/ytdlp-update", {});
+      const data = await r.json() as { fromVersion?: string | null; toVersion?: string; error?: string };
+      if (data.error) throw new Error(data.error);
+      toast({
+        title: "yt-dlp updated",
+        description: `${data.fromVersion ?? "(none)"} → ${data.toVersion ?? "?"}`,
+      });
+      await fetchYtdlpHealth(true);
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "yt-dlp update failed",
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setYtdlpUpdating(false);
     }
   };
 
@@ -492,6 +516,17 @@ export default function PipelineStatus() {
               >
                 {ytdlpHealthChecking ? "checking…" : "recheck"}
               </button>
+              {ytdlpHealth?.updatable && (
+                <button
+                  type="button"
+                  className="ml-1 underline-offset-2 hover:underline disabled:opacity-50"
+                  onClick={updateYtdlp}
+                  disabled={ytdlpUpdating || ytdlpHealthChecking}
+                  title="Download the latest yt-dlp release from GitHub, verify it, sign it for Apple Silicon, and swap it in. The .app's signed bundle is unaffected."
+                >
+                  {ytdlpUpdating ? "updating…" : "update"}
+                </button>
+              )}
             </span>
             {state?.lastCheck && <span>Last check: {new Date(state.lastCheck).toLocaleTimeString()}</span>}
           </div>

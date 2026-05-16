@@ -189,13 +189,30 @@ export function pickRecommendedEngine(gpu: GpuInfo): EngineId {
 /** Top-level status — what the UI needs to render the wizard / Settings
  *  page in one round trip. */
 export function getSetupStatus(): SetupStatus {
+  // On macOS we ship FluidAudio inside the .app and never run a Python
+  // engine, so don't probe for python at all — invoking the `/usr/bin/python3`
+  // stub triggers macOS's "Install Command Line Developer Tools?" dialog on
+  // a fresh Mac, which is a terrible first-launch experience for a tool
+  // that doesn't even need Python. Same for nvidia-smi (always absent) and
+  // the wizard venv (skipSetup=true means we never create one).
+  if (process.platform === "darwin") {
+    return {
+      platform: "darwin",
+      skipSetup: true,
+      python: { ok: false, path: "python3", version: null, versionParts: null, error: "not applicable on macOS (FluidAudio bundled)" },
+      gpu: { present: false, error: "not applicable on macOS" },
+      recommendedEngine: "whisper", // unused when skipSetup is true
+      venv: { exists: false, path: venvDir(), engine: null },
+      installed: false,
+    };
+  }
   const python = detectPython();
   const gpu = detectGpu();
   const venv = detectVenv();
   const recommendedEngine = pickRecommendedEngine(gpu);
   return {
     platform: process.platform,
-    skipSetup: process.platform === "darwin",
+    skipSetup: false,
     python,
     gpu,
     recommendedEngine,

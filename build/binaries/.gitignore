@@ -1,0 +1,4 @@
+# Bundled external binaries — fetched / copied by scripts/fetch-binaries.sh
+# before packaging. Not source, not committed.
+fluidaudiocli
+yt-dlp
