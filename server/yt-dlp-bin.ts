@@ -38,10 +38,28 @@ function userDataDir(): string {
   return path.join(process.env.XDG_DATA_HOME || path.join(home, ".local", "share"), "concord");
 }
 
-/** Writable copy of yt-dlp under the per-user data directory. The
- *  "Update yt-dlp" endpoint writes here; we always execute from here. */
+/** Writable copy of yt-dlp. The "Update yt-dlp" endpoint writes here;
+ *  we always execute from here.
+ *
+ *  Special-case for macOS: the canonical data dir is "Application
+ *  Support/Concord" — but the embedded space breaks `youtube-dl-exec`'s
+ *  tinyspawn, which naively does `input.split(' ')` on the binary path
+ *  and tries to spawn the first segment as the command. Stashing the
+ *  binary in `~/.concord/bin` instead sidesteps the bug entirely — the
+ *  path has no spaces, so split-on-space is a no-op.
+ *
+ *  Linux + Windows aren't affected (their data dirs already have no
+ *  spaces), so they keep using the standard userdata location for
+ *  consistency with everything else under that tree. */
+function ytdlpBinDir(): string {
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), ".concord", "bin");
+  }
+  return path.join(userDataDir(), "bin");
+}
+
 export function userYtdlpPath(): string {
-  return path.join(userDataDir(), "bin", "yt-dlp");
+  return path.join(ytdlpBinDir(), "yt-dlp");
 }
 
 /** Read-only seed copy inside the packaged .app. Undefined under
