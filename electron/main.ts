@@ -85,6 +85,32 @@ function flushLogBufferToRenderer(): void {
 
 installConsoleForwarding();
 
+/** Prepend the common install locations to PATH so child processes can
+ *  find tools like `node` (needed by yt-dlp's player JS decoder) on a
+ *  fresh user Mac. GUI-launched apps on macOS get a minimal PATH
+ *  (/usr/bin:/bin:/usr/sbin:/sbin) and DON'T inherit the user's shell
+ *  PATH from ~/.zshrc / ~/.bashrc — so even though `node` lives at
+ *  /usr/local/bin/node, the .app's children can't find it. Augmenting
+ *  here once propagates to every subsequent spawn (yt-dlp → node,
+ *  ffmpeg, FluidAudio, etc.) because Node merges process.env into the
+ *  default child env.
+ *
+ *  Specifically this resolves the "Requested format is not available"
+ *  yt-dlp error on Macs without /usr/local/bin in their default GUI PATH —
+ *  yt-dlp's player JS decoder silently fails to find node, falls back to
+ *  the android_vr API which returns an empty/incomplete format list, and
+ *  the default `bv*+ba/b` selector can't match anything. */
+function augmentPathForGuiLaunch(): void {
+  if (process.platform !== "darwin") return;
+  const extras = ["/usr/local/bin", "/opt/homebrew/bin"];
+  const current = (process.env.PATH || "").split(":").filter(Boolean);
+  const missing = extras.filter((p) => !current.includes(p));
+  if (missing.length === 0) return;
+  process.env.PATH = [...missing, ...current].join(":");
+  console.log(`[electron] PATH augmented for GUI launch: prepended ${missing.join(", ")}`);
+}
+augmentPathForGuiLaunch();
+
 /** Resolve the master icon PNG. In a packaged app it's at
  *  process.resourcesPath/icon.png (copied via build.extraResources in
  *  package.json). In dev runs (electron:dev) it sits in the source tree
