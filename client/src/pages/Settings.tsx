@@ -955,7 +955,7 @@ interface PipelineConfigShape {
   dailyDownloadCap?: number;
   lanAccess?: boolean;
   checkIntervalMinutes?: number;
-  transcription?: { model?: string };
+  transcription?: { model?: string; engine?: "" | "parakeet" | "whisper" };
   processing?: { keepAudio?: boolean; keepVideo?: boolean; waitForLiveToFinish?: boolean; diarizationEnabled?: boolean };
   // unknown fields preserved on save round-trip
   [key: string]: unknown;
@@ -1226,7 +1226,7 @@ function PipelineSettingsCard() {
             <Select value={transcriptionModel} onValueChange={setTranscriptionModel}>
               <SelectTrigger className="h-8"><SelectValue placeholder="Model" /></SelectTrigger>
               <SelectContent>
-                {visibleModels(platform, transcriptionModel).map((opt) => (
+                {visibleModels(platform, transcriptionModel, config?.transcription?.engine || null).map((opt) => (
                   <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
                 ))}
               </SelectContent>

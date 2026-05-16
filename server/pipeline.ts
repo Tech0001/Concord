@@ -63,6 +63,19 @@ import {
 export { DailyCapReachedError, isLocalChannel, speedPresetToSleepInterval };
 export type { PipelineConfig, PipelineJob, PipelineState, PipelineStatus };
 
+/** Map a model name to its engine family. Used by loadConfig to detect
+ *  stale (engine, model) pairings — e.g. wizard installed Parakeet but
+ *  the saved model is `large-v3` — and migrate to a compatible default. */
+function inferModelEngine(model: string): "parakeet" | "whisper" | "fluid" | null {
+  if (!model) return null;
+  const m = model.toLowerCase();
+  if (m.startsWith("fluid-")) return "fluid";
+  if (m.includes("parakeet")) return "parakeet";
+  // The whisper family — large-v3, large-v3-turbo, medium, small, tiny.
+  if (m === "large-v3" || m === "large-v3-turbo" || m === "medium" || m === "small" || m === "tiny") return "whisper";
+  return null;
+}
+
 // ---- Pipeline ----
 
 export class Pipeline extends EventEmitter {
@@ -273,19 +286,33 @@ export class Pipeline extends EventEmitter {
       youtubeSpeedPreset: parseSpeedPreset(stored.youtubeSpeedPreset, defaults.youtubeSpeedPreset),
       dailyDownloadCap: parseConfigNumber(stored.dailyDownloadCap, defaults.dailyDownloadCap),
       lanAccess: parseConfigBoolean(stored.lanAccess, defaults.lanAccess),
-      transcription: {
-        model: stored["transcription.model"] || defaults.transcription.model,
-        language: stored["transcription.language"] || defaults.transcription.language,
-        device: stored["transcription.device"] || defaults.transcription.device,
-        computeType: stored["transcription.computeType"] || defaults.transcription.computeType,
-        beamSize: parseConfigNumber(stored["transcription.beamSize"], defaults.transcription.beamSize),
-        pythonVenv: stored["transcription.pythonVenv"] || defaults.transcription.pythonVenv,
-        // Wizard-managed fields. engine = "" until the wizard runs (or
-        // explicitly set via Settings); venvPath = "" → fall back to the
-        // legacy cwd-relative resolution in transcribe.ts.
-        engine: (stored["transcription.engine"] as "parakeet" | "whisper" | "") || (defaults.transcription.engine ?? ""),
-        venvPath: stored["transcription.venvPath"] || (defaults.transcription.venvPath ?? ""),
-      },
+      transcription: (() => {
+        const engine = (stored["transcription.engine"] as "parakeet" | "whisper" | "") || (defaults.transcription.engine ?? "");
+        let model = stored["transcription.model"] || defaults.transcription.model;
+        // Heal stale config: if the wizard installed Parakeet but the
+        // saved model is a Whisper variant (or vice versa), the spawn
+        // would fail with "venv not found" — auto-migrate to a sensible
+        // default for the installed engine so retranscribe just works.
+        const modelEngine = inferModelEngine(model);
+        if (engine && modelEngine && engine !== modelEngine) {
+          model = engine === "parakeet"
+            ? (process.platform === "darwin" ? "fluid-parakeet-tdt-v3" : "nvidia/parakeet-tdt-0.6b-v3")
+            : "large-v3";
+        }
+        return {
+          model,
+          language: stored["transcription.language"] || defaults.transcription.language,
+          device: stored["transcription.device"] || defaults.transcription.device,
+          computeType: stored["transcription.computeType"] || defaults.transcription.computeType,
+          beamSize: parseConfigNumber(stored["transcription.beamSize"], defaults.transcription.beamSize),
+          pythonVenv: stored["transcription.pythonVenv"] || defaults.transcription.pythonVenv,
+          // Wizard-managed fields. engine = "" until the wizard runs (or
+          // explicitly set via Settings); venvPath = "" → fall back to the
+          // legacy cwd-relative resolution in transcribe.ts.
+          engine,
+          venvPath: stored["transcription.venvPath"] || (defaults.transcription.venvPath ?? ""),
+        };
+      })(),
       llm: {
         baseUrl: stored["llm.baseUrl"] || defaults.llm.baseUrl,
         apiKey: stored["llm.apiKey"] ?? defaults.llm.apiKey,

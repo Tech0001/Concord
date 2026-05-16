@@ -82,7 +82,7 @@ interface Config {
   youtubeSpeedPreset: "fast" | "balanced" | "conservative";
   dailyDownloadCap: number;
   lanAccess: boolean;
-  transcription: { model: string; language: string; device: string };
+  transcription: { model: string; language: string; device: string; engine?: "" | "parakeet" | "whisper" };
   processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean; diarizationEnabled: boolean };
 }
 
@@ -820,7 +820,7 @@ export default function PipelineStatus() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {visibleModels(platform, retransModel).map((opt) => (
+                          {visibleModels(platform, retransModel, config?.transcription?.engine || null).map((opt) => (
                             <SelectItem key={opt.value} value={opt.value} className="text-xs">{opt.label}</SelectItem>
                           ))}
                         </SelectContent>

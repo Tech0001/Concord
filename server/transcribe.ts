@@ -293,10 +293,17 @@ function spawnTranscriber(argsInput: {
     });
 
     proc.on("error", (err) => {
-      const packageHint = parakeet
-        ? "/usr/bin/python3.12 -m venv venv-parakeet && ./venv-parakeet/bin/pip install -r requirements-parakeet.txt"
-        : "python3 -m venv venv && ./venv/bin/pip install faster-whisper";
-      reject(new Error(`Failed to start Python transcriber: ${err.message}\nMake sure the virtual environment is set up: ${packageHint}`));
+      // ENOENT here usually means the requested model's engine doesn't
+      // match what the wizard installed (e.g. user picked whisper but
+      // only Parakeet is set up). Point them at the wizard rather than
+      // suggesting a manual `python3 -m venv ...` recipe that doesn't
+      // line up with how Concord actually manages its venvs.
+      const wanted = parakeet ? "Parakeet" : "Whisper";
+      reject(new Error(
+        `Failed to start Python transcriber (${wanted}): ${err.message}\n`
+        + `Tried: ${resolvedPythonPath}\n`
+        + `Re-run the transcription setup wizard, or change the model in Settings → Transcription to one your installed engine supports.`,
+      ));
     });
   });
 }

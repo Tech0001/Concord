@@ -71,7 +71,7 @@ interface QueueResponse {
 
 interface ConfigResponse {
   channels: Channel[];
-  transcription?: { model?: string };
+  transcription?: { model?: string; engine?: "" | "parakeet" | "whisper" };
 }
 
 const LIBRARY_SETTINGS_KEY = "concord-library-settings-v1";
@@ -157,6 +157,7 @@ function modelSelector(
   platform: NodeJS.Platform | null,
   value: string,
   onChange: (value: string) => void,
+  installedEngine: "" | "parakeet" | "whisper" | null | undefined,
 ) {
   return (
     <Select value={value} onValueChange={onChange}>
@@ -164,7 +165,7 @@ function modelSelector(
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        {visibleModels(platform, value).map((opt) => (
+        {visibleModels(platform, value, installedEngine || null).map((opt) => (
           <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
         ))}
       </SelectContent>
@@ -177,6 +178,7 @@ export default function Library() {
   const [entries, setEntries] = useState<QueueEntry[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [installedEngine, setInstalledEngine] = useState<"" | "parakeet" | "whisper">("");
   const [model, setModel] = useState(savedSettings.model || "large-v3");
   const [query, setQuery] = useState(savedSettings.query || "");
   const [status, setStatus] = useState(savedSettings.status || "all");
@@ -269,6 +271,7 @@ export default function Library() {
       setCounts(queue.counts || {});
       setTotal(queue.total || 0);
       setChannels(config.channels || []);
+      setInstalledEngine(config.transcription?.engine || "");
       setModel(current => current || config.transcription?.model || "large-v3");
       // Best-effort batched speaker fetch — silently noop if the speakers
       // tables don't exist yet or the call fails. Doesn't block the page.
@@ -482,7 +485,7 @@ export default function Library() {
             </span>
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground">Re-transcribe model</span>
-              {modelSelector(platform, model, setModel)}
+              {modelSelector(platform, model, setModel, installedEngine)}
             </div>
           </div>
 
