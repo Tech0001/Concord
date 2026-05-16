@@ -156,6 +156,43 @@ export function registerSystemRoutes(app: Express, pipeline: Pipeline, httpServe
       res.status(500).json({ error: stderr || e?.message || "osascript failed" });
     }
   });
+
+  // Native file picker — siblings the folder picker above. Used by the
+  // FileInput component for things like the cookies.txt path (so the user
+  // doesn't have to copy-paste an absolute path from Finder).
+  app.post("/api/dialog/pick-file", async (req, res) => {
+    if (process.platform !== "darwin") {
+      return res.status(501).json({
+        error: "File picker not supported on this platform yet",
+        platform: process.platform,
+      });
+    }
+    const { prompt = "Choose file", defaultPath } = req.body || {};
+    const escape = (s: string) => String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    let script = `POSIX path of (choose file with prompt "${escape(prompt)}"`;
+    // `choose file`'s `default location` accepts a folder, so when the
+    // caller hands us a file path we use its parent.
+    if (defaultPath) {
+      const dir = fs.existsSync(defaultPath) && !fs.statSync(defaultPath).isDirectory()
+        ? defaultPath.replace(/\/[^/]*$/, "") || defaultPath
+        : defaultPath;
+      if (fs.existsSync(dir)) {
+        script += ` default location POSIX file "${escape(dir)}"`;
+      }
+    }
+    script += `)`;
+    try {
+      const { stdout } = await execFileAsync("osascript", ["-e", script]);
+      res.json({ path: stdout.trim() });
+    } catch (err: unknown) {
+      const e = err as { stderr?: string; message?: string };
+      const stderr = String(e?.stderr || "");
+      if (stderr.includes("User canceled") || stderr.includes("(-128)")) {
+        return res.json({ cancelled: true });
+      }
+      res.status(500).json({ error: stderr || e?.message || "osascript failed" });
+    }
+  });
 }
 
 // ---- yt-dlp self-update helpers --------------------------------------------

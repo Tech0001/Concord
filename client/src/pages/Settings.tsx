@@ -10,6 +10,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2, FileText, BookOpen, ChevronDown, ChevronUp, HardDrive, Mic, Trash2, Wrench, Link2, AlertCircle } from "lucide-react";
 import { Link as RouterLink } from "wouter";
 import FolderInput from "@/components/FolderInput";
+import FileInput from "@/components/FileInput";
 import { visibleModels } from "@/lib/transcription-models";
 
 interface LlmConfig {
@@ -1209,12 +1210,13 @@ function PipelineSettingsCard() {
           <div className="grid grid-cols-[160px_1fr] items-start gap-2">
             <label className="text-muted-foreground pt-1.5" htmlFor="settings-cookiesFile">Cookies file</label>
             <div className="space-y-1">
-              <Input
+              <FileInput
                 id="settings-cookiesFile"
                 value={youtubeCookiesFile}
-                onChange={(e) => setYoutubeCookiesFile(e.target.value)}
+                onChange={setYoutubeCookiesFile}
                 className="h-8 font-mono"
                 placeholder="/path/to/cookies.txt (overrides browser dropdown when set)"
+                prompt="Pick your YouTube cookies.txt"
               />
               <p className="text-[10px] leading-tight text-muted-foreground">
                 Netscape-format cookies.txt. Export via a browser extension like "Get cookies.txt LOCALLY". Overrides the browser dropdown above. Skips Keychain prompts.
