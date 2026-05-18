@@ -135,3 +135,106 @@ export function mergeSpeakers<W extends TimedWithSpeaker, S extends TimedWithSpe
   const speakerCount = new Set(spans.map((s) => s.speaker)).size;
   return { words, segments, speakerCount };
 }
+
+/**
+ * Cut multi-speaker segments into single-speaker pieces using word-level
+ * speaker labels. ASR engines emit segments based on prosody / pauses,
+ * which can easily span a speaker turn; the resulting "30-second chunk
+ * with two voices in it" muddies the per-chunk speaker assignment UI
+ * AND the voice fingerprint trained from that audio.
+ *
+ * Algorithm: for each input segment, group its words into same-speaker
+ * runs, absorb any run shorter than `minLengthSeconds` into the longer
+ * adjacent run, then re-merge adjacent same-speaker runs (created by
+ * absorption) and emit one segment per surviving run.
+ *
+ * Generic-over-segment so callers keep their richer shape (text, etc.).
+ * Run mergeSpeakers FIRST so words have their per-word speaker labels.
+ */
+export function splitSegmentsByTurn<
+  S extends TimedWithSpeaker & { text: string },
+  W extends TimedWithSpeaker & { text: string },
+>(
+  segments: S[],
+  words: W[],
+  minLengthSeconds = 1.5,
+): S[] {
+  if (segments.length === 0 || words.length === 0) return segments;
+
+  const sortedWords = [...words].sort((a, b) => a.start - b.start);
+  const result: S[] = [];
+
+  for (const seg of segments) {
+    const segWords = sortedWords.filter(w => w.end > seg.start && w.start < seg.end);
+    if (segWords.length === 0) {
+      result.push(seg);
+      continue;
+    }
+
+    type Run = { speaker: string | null; words: W[]; start: number; end: number };
+    const runs: Run[] = [];
+    for (const w of segWords) {
+      const sp = w.speaker ?? null;
+      const last = runs[runs.length - 1];
+      if (last && last.speaker === sp) {
+        last.words.push(w);
+        last.end = w.end;
+      } else {
+        runs.push({ speaker: sp, words: [w], start: w.start, end: w.end });
+      }
+    }
+
+    // Absorb short runs into the longer adjacent run so we don't emit
+    // half-second crumbs. Multiple passes because absorbing can leave
+    // another short run newly-isolated.
+    let changed = true;
+    while (changed && runs.length > 1) {
+      changed = false;
+      for (let i = 0; i < runs.length; i++) {
+        const run = runs[i];
+        if (run.end - run.start >= minLengthSeconds) continue;
+        const prev = i > 0 ? runs[i - 1] : null;
+        const next = i + 1 < runs.length ? runs[i + 1] : null;
+        const prevDur = prev ? prev.end - prev.start : -1;
+        const nextDur = next ? next.end - next.start : -1;
+        if (prev && (!next || prevDur >= nextDur)) {
+          prev.words.push(...run.words);
+          prev.end = run.end;
+          runs.splice(i, 1);
+        } else if (next) {
+          next.words.unshift(...run.words);
+          next.start = run.start;
+          runs.splice(i, 1);
+        } else {
+          continue;
+        }
+        changed = true;
+        break;
+      }
+    }
+
+    // Re-merge adjacent same-speaker runs created by the absorption pass.
+    const merged: Run[] = [];
+    for (const run of runs) {
+      const last = merged[merged.length - 1];
+      if (last && last.speaker === run.speaker) {
+        last.words.push(...run.words);
+        last.end = run.end;
+      } else {
+        merged.push(run);
+      }
+    }
+
+    for (const run of merged) {
+      result.push({
+        ...seg,
+        start: run.start,
+        end: run.end,
+        text: run.words.map(w => w.text).join(" ").replace(/\s+/g, " ").trim(),
+        speaker: run.speaker,
+      });
+    }
+  }
+
+  return result;
+}

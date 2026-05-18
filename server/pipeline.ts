@@ -82,6 +82,7 @@ export class Pipeline extends EventEmitter {
   private config: PipelineConfig;
   private jobs: PipelineJob[] = [];
   private timer: NodeJS.Timeout | null = null;
+  private watcherTimer: NodeJS.Timeout | null = null;
   private status: PipelineStatus = "idle";
   private lastCheck: string | null = null;
   private nextCheck: string | null = null;
@@ -415,14 +416,33 @@ export class Pipeline extends EventEmitter {
     const intervalMs = this.config.checkIntervalMinutes * 60 * 1000;
     this.timer = setInterval(() => this.checkAllChannels(), intervalMs);
 
+    // YouTube Discover watchers tick on the same channel-scan cadence —
+    // each watcher has its own poll_interval_hours so this just gives
+    // them a chance to fire. Background work, errors don't kill the
+    // pipeline.
+    void this.tickWatchers();
+    this.watcherTimer = setInterval(() => this.tickWatchers(), intervalMs);
+
     this.emit("started");
   }
 
   stop(): void {
     this.status = "stopped";
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.watcherTimer) { clearInterval(this.watcherTimer); this.watcherTimer = null; }
     console.log("[pipeline] Stopped");
     this.emit("stopped");
+  }
+
+  private async tickWatchers(): Promise<void> {
+    try {
+      const { pollDueWatchers } = await import("./youtube-discover");
+      await pollDueWatchers();
+    } catch (err) {
+      // Missing API key etc. is a configuration issue — log it once per
+      // tick instead of crashing the loop.
+      console.warn("[pipeline] Watcher tick failed:", err instanceof Error ? err.message : err);
+    }
   }
 
   /** Build a matcher rooted at this channel's expected save folder, so

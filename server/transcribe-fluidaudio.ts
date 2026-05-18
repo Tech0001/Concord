@@ -5,6 +5,7 @@ import os from "os";
 import type { TranscriptionResult } from "./transcribe";
 import {
   mergeSpeakers,
+  splitSegmentsByTurn,
   spansFromFluidAudio,
   normalizeFluidAudioSpeakerId,
   type SpeakerSpan,
@@ -208,8 +209,11 @@ function postProcess(args: {
     end: w.endTime,
     text: w.word,
   }));
-  const segments = groupWordsIntoSegments(words);
+  let segments = groupWordsIntoSegments(words);
   const { speakerCount } = mergeSpeakers(words, segments, speakerSpans);
+  // Split any segments that span multiple speaker turns so each chunk
+  // in the transcript / UI / fingerprint flow is single-speaker.
+  if (speakerSpans.length > 0) segments = splitSegmentsByTurn(segments, words);
 
   const fullText = (raw.text || segments.map((s) => s.text).join(" ")).trim();
   const wordCount = fullText ? fullText.split(/\s+/).length : 0;

@@ -4,6 +4,7 @@ import fs from "fs";
 import type { TranscriptionResult } from "./transcribe";
 import {
   mergeSpeakers,
+  splitSegmentsByTurn,
   spansFromFluidAudio,
   type SpeakerSpan,
 } from "./diarize-merge";
@@ -190,12 +191,23 @@ function postProcess(args: {
 
   // mergeSpeakers mutates raw.words and raw.segments in place AND returns them.
   const { speakerCount } = mergeSpeakers(raw.words, raw.segments, speakerSpans);
+  // Cut multi-speaker segments at turn boundaries so each chunk is
+  // single-speaker — keeps the per-chunk speaker assignment UI and
+  // the voice fingerprint training honest. Skipped when there are no
+  // diarization spans (mergeSpeakers nulled all word.speaker fields).
+  const splitSegments = speakerSpans.length > 0
+    ? splitSegmentsByTurn(raw.segments, raw.words)
+    : raw.segments;
 
   // Bump schema and add speaker_count (the only new top-level field).
+  // segment_count reflects the post-split count so downstream consumers
+  // (chunk progress, library stats) match what's actually written.
   const updated = {
     ...raw,
     schema_version: 3,
     speaker_count: speakerCount,
+    segments: splitSegments,
+    segment_count: splitSegments.length,
   };
 
   fs.writeFileSync(jsonPath, JSON.stringify(updated, null, 2));

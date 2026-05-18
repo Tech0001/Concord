@@ -11,6 +11,7 @@ import { registerSpeakerRoutes } from "./routes-speakers";
 import { registerSystemRoutes } from "./routes-system";
 import { registerTranscriptionSetupRoutes } from "./routes-transcription-setup";
 import { registerVoiceNoteRoutes } from "./routes-voice-notes";
+import { registerYouTubeRoutes } from "./routes-youtube";
 
 /**
  * Top-level HTTP wire-up. Every actual endpoint lives in a sibling
@@ -68,6 +69,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // start a recording, push raw PCM chunks, finalize for offline
   // FluidAudio processing. Registered in routes-voice-notes.ts.
   registerVoiceNoteRoutes(app, pipeline);
+
+  // ---- YouTube Discover (search + watchers + inbox) ----
+  // /api/youtube/{search, watchers, inbox} — manual search via the
+  // YouTube Data API v3 plus saved-search watchers that poll on a
+  // configurable cadence. Registered in routes-youtube.ts.
+  registerYouTubeRoutes(app);
 
   // ---- Pipeline lifecycle + channel management ----
   // /api/pipeline/{start,stop,check-now,process,events,transcripts,

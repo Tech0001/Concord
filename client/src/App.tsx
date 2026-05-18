@@ -29,10 +29,14 @@ import Speakers from "@/pages/Speakers";
 import Status from "@/pages/Status";
 import Settings from "@/pages/Settings";
 import TranscriptionSetup from "@/pages/TranscriptionSetup";
+import Discover from "@/pages/Discover";
+import Watchers from "@/pages/Watchers";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
   Activity,
+  Binoculars,
+  Compass,
   Database,
   Gauge,
   Map as MapIcon,
@@ -50,15 +54,37 @@ import { VoiceRecorder } from "@/components/VoiceRecorder";
 
 const MapPage = lazy(() => import("@/pages/Map"));
 
-const NAV_ITEMS = [
-  { href: "/status", label: "Status", icon: Gauge },
-  { href: "/library", label: "Library", icon: Database },
-  { href: "/search", label: "Search", icon: SearchIcon },
-  { href: "/notes", label: "Notes", icon: NotebookText },
-  { href: "/speakers", label: "Speakers", icon: Users },
-  { href: "/map", label: "Map", icon: MapIcon },
-  { href: "/pipeline", label: "Pipeline", icon: Activity },
-  { href: "/ai", label: "AI", icon: Sparkles },
+// Grouped nav. Items inside a group sit together; a thin divider
+// renders between groups in the desktop bar (and a header label in
+// the mobile sheet). "Content" = stuff to browse/save, "Analysis" =
+// tools that operate on what's already saved, "Ops" = pipeline /
+// status surfaces.
+const NAV_GROUPS = [
+  {
+    name: "Content",
+    items: [
+      { href: "/library",     label: "Library",     icon: Database },
+      { href: "/discover",    label: "Discover",    icon: Compass },
+      { href: "/watchers",    label: "Watchers",    icon: Binoculars },
+      { href: "/search",      label: "Transcripts", icon: SearchIcon },
+      { href: "/notes",       label: "Notes",       icon: NotebookText },
+    ],
+  },
+  {
+    name: "Analysis",
+    items: [
+      { href: "/speakers",    label: "Speakers",    icon: Users },
+      { href: "/map",         label: "Map",         icon: MapIcon },
+      { href: "/ai",          label: "AI",          icon: Sparkles },
+    ],
+  },
+  {
+    name: "Ops",
+    items: [
+      { href: "/pipeline",    label: "Pipeline",    icon: Activity },
+      { href: "/status",      label: "Status",      icon: Gauge },
+    ],
+  },
 ] as const;
 
 function TopBar() {
@@ -111,24 +137,31 @@ function TopBar() {
         </div>
 
         {/* Desktop nav — visible md and up. Phone gets the hamburger below.
-            no-drag so the nav links are clickable inside the draggable header. */}
+            no-drag so the nav links are clickable inside the draggable header.
+            Thin divider between groups so the visual chunking matches the
+            mental chunking (Content / Analysis / Ops). */}
         <nav className="hidden flex-1 items-center gap-1 text-sm md:flex [-webkit-app-region:no-drag]">
-          {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-            const active = location === href;
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={cn(
-                  "inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-muted-foreground transition-colors hover:text-foreground",
-                  active && "bg-secondary text-foreground"
-                )}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                <span>{label}</span>
-              </Link>
-            );
-          })}
+          {NAV_GROUPS.map((group, groupIdx) => (
+            <div key={group.name} className="flex items-center gap-1">
+              {groupIdx > 0 && <span aria-hidden className="mx-1 h-4 w-px bg-border" />}
+              {group.items.map(({ href, label, icon: Icon }) => {
+                const active = location === href;
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={cn(
+                      "inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-muted-foreground transition-colors hover:text-foreground",
+                      active && "bg-secondary text-foreground"
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    <span>{label}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
         {/* Right-side controls — no-drag so settings/theme/hamburger
@@ -176,35 +209,44 @@ function TopBar() {
                 <SheetTitle className="text-base">Concord</SheetTitle>
               </SheetHeader>
               <nav className="flex flex-col gap-0.5 p-2">
-                {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-                  const active = location === href;
-                  return (
-                    <SheetClose asChild key={href}>
-                      <Link
-                        href={href}
-                        className={cn(
-                          "inline-flex h-10 items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
-                          active && "bg-secondary text-foreground"
-                        )}
-                      >
-                        <Icon className="h-4 w-4" />
-                        <span>{label}</span>
-                      </Link>
-                    </SheetClose>
-                  );
-                })}
-                <SheetClose asChild>
-                  <Link
-                    href="/settings"
-                    className={cn(
-                      "inline-flex h-10 items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
-                      location === "/settings" && "bg-secondary text-foreground"
-                    )}
-                  >
-                    <SettingsIcon className="h-4 w-4" />
-                    <span>Settings</span>
-                  </Link>
-                </SheetClose>
+                {NAV_GROUPS.map((group, groupIdx) => (
+                  <div key={group.name} className={cn("flex flex-col gap-0.5", groupIdx > 0 && "mt-2 border-t pt-2")}>
+                    <p className="px-3 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                      {group.name}
+                    </p>
+                    {group.items.map(({ href, label, icon: Icon }) => {
+                      const active = location === href;
+                      return (
+                        <SheetClose asChild key={href}>
+                          <Link
+                            href={href}
+                            className={cn(
+                              "inline-flex h-10 items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+                              active && "bg-secondary text-foreground"
+                            )}
+                          >
+                            <Icon className="h-4 w-4" />
+                            <span>{label}</span>
+                          </Link>
+                        </SheetClose>
+                      );
+                    })}
+                  </div>
+                ))}
+                <div className="mt-2 flex flex-col gap-0.5 border-t pt-2">
+                  <SheetClose asChild>
+                    <Link
+                      href="/settings"
+                      className={cn(
+                        "inline-flex h-10 items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+                        location === "/settings" && "bg-secondary text-foreground"
+                      )}
+                    >
+                      <SettingsIcon className="h-4 w-4" />
+                      <span>Settings</span>
+                    </Link>
+                  </SheetClose>
+                </div>
               </nav>
               <div className="space-y-3 border-t p-4">
                 <div className="space-y-1.5">
@@ -279,6 +321,8 @@ function Router() {
       <Route path="/status" component={Status} />
       <Route path="/pipeline" component={Pipeline} />
       <Route path="/library" component={Library} />
+      <Route path="/discover" component={Discover} />
+      <Route path="/watchers" component={Watchers} />
       <Route path="/search" component={Search} />
       <Route path="/notes" component={Clips} />
       <Route path="/clips" component={Clips} />
