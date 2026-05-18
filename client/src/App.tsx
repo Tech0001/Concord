@@ -29,10 +29,14 @@ import Speakers from "@/pages/Speakers";
 import Status from "@/pages/Status";
 import Settings from "@/pages/Settings";
 import TranscriptionSetup from "@/pages/TranscriptionSetup";
+import Discover from "@/pages/Discover";
+import Watchers from "@/pages/Watchers";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
   Activity,
+  Binoculars,
+  Compass,
   Database,
   Gauge,
   Map as MapIcon,
@@ -53,6 +57,8 @@ const MapPage = lazy(() => import("@/pages/Map"));
 const NAV_ITEMS = [
   { href: "/status", label: "Status", icon: Gauge },
   { href: "/library", label: "Library", icon: Database },
+  { href: "/discover", label: "Discover", icon: Compass },
+  { href: "/watchers", label: "Watchers", icon: Binoculars },
   { href: "/search", label: "Search", icon: SearchIcon },
   { href: "/notes", label: "Notes", icon: NotebookText },
   { href: "/speakers", label: "Speakers", icon: Users },
@@ -279,6 +285,8 @@ function Router() {
       <Route path="/status" component={Status} />
       <Route path="/pipeline" component={Pipeline} />
       <Route path="/library" component={Library} />
+      <Route path="/discover" component={Discover} />
+      <Route path="/watchers" component={Watchers} />
       <Route path="/search" component={Search} />
       <Route path="/notes" component={Clips} />
       <Route path="/clips" component={Clips} />

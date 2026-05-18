@@ -269,6 +269,51 @@ const SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_vsa_speaker_id ON video_speaker_assignments(speaker_id);
   CREATE INDEX IF NOT EXISTS idx_vsa_video ON video_speaker_assignments(video_id, channel_id);
+
+  -- ---- YouTube Discover ----
+  --
+  -- A "watcher" is a saved search group: one or more title phrase
+  -- variants ("with John Smith", "interview with John Smith", ...) plus
+  -- optional channel allow/block lists. Polled on a configurable cadence
+  -- via YouTube Data API v3 search.list.
+  --
+  -- Hits land in youtube_inbox for review unless the watcher has
+  -- auto_queue=1, in which case they go straight into video_queue.
+  CREATE TABLE IF NOT EXISTS youtube_watchers (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    label               TEXT NOT NULL,
+    phrase_variants     TEXT NOT NULL,
+    allowed_channels    TEXT,
+    blocked_channels    TEXT,
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    auto_queue          INTEGER NOT NULL DEFAULT 0,
+    poll_interval_hours INTEGER NOT NULL DEFAULT 24,
+    last_polled_at      TEXT,
+    last_error          TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- One row per (watcher, video) hit. Dedupes within a watcher so
+  -- repeated polls don't re-surface the same video. Cross-watcher
+  -- duplicates are fine — different watchers may legitimately match the
+  -- same video for different reasons.
+  CREATE TABLE IF NOT EXISTS youtube_inbox (
+    watcher_id      INTEGER NOT NULL REFERENCES youtube_watchers(id) ON DELETE CASCADE,
+    video_id        TEXT NOT NULL,
+    channel_id      TEXT NOT NULL,
+    channel_name    TEXT,
+    title           TEXT NOT NULL,
+    description     TEXT,
+    thumbnail_url   TEXT,
+    published_at    TEXT,
+    found_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    status          TEXT NOT NULL DEFAULT 'new',
+    PRIMARY KEY (watcher_id, video_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_yt_inbox_status ON youtube_inbox(status, found_at);
+  CREATE INDEX IF NOT EXISTS idx_yt_inbox_video  ON youtube_inbox(video_id);
 `;
 
 

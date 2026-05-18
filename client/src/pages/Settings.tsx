@@ -349,6 +349,8 @@ export default function Settings() {
 
       <PipelineSettingsCard />
 
+      <YouTubeApiKeyCard />
+
       <TranscriptionEngineCard />
 
       <LibraryMaintenanceCard />
@@ -1564,6 +1566,93 @@ function LibraryMaintenanceCard() {
           })}
         </CardContent>
       )}
+    </Card>
+  );
+}
+
+/** Stores the YouTube Data API v3 key used by /discover and /watchers.
+ *  The value is write-only on the wire — the server returns a masked
+ *  preview ("AIza…xyz") plus a hasKey boolean instead of echoing the
+ *  full secret back into the form. */
+function YouTubeApiKeyCard() {
+  const { toast } = useToast();
+  const [hasKey, setHasKey] = useState(false);
+  const [preview, setPreview] = useState("");
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await apiRequest("GET", "/api/youtube/auth");
+      const data = await r.json() as { hasKey: boolean; preview: string };
+      setHasKey(data.hasKey);
+      setPreview(data.preview);
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Load failed", description: err.message });
+    }
+  }, [toast]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await apiRequest("POST", "/api/youtube/auth", { apiKey: draft });
+      setDraft("");
+      setEditing(false);
+      await load();
+      toast({ title: draft ? "Key saved" : "Key cleared" });
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Save failed", description: err.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm">YouTube Data API</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p className="text-xs text-muted-foreground">
+          Powers the Discover page and Watchers. Create a key in Google Cloud Console
+          (APIs & Services → Credentials), enable "YouTube Data API v3", and paste it here.
+          Free tier: 10,000 quota units/day; each search costs 100 (~100 searches/day).
+        </p>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Current:</span>
+          {hasKey
+            ? <code className="rounded bg-muted px-2 py-0.5 font-mono text-xs">{preview}</code>
+            : <span className="text-xs text-muted-foreground">not set</span>}
+        </div>
+        {editing ? (
+          <div className="flex gap-2">
+            <Input
+              type="password"
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="AIza..."
+              className="font-mono text-xs"
+            />
+            <Button size="sm" onClick={save} disabled={saving}>Save</Button>
+            <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setDraft(""); }}>Cancel</Button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+              {hasKey ? "Replace key" : "Set key"}
+            </Button>
+            {hasKey && (
+              <Button size="sm" variant="ghost" onClick={async () => { setDraft(""); await save(); }}>
+                Clear
+              </Button>
+            )}
+          </div>
+        )}
+      </CardContent>
     </Card>
   );
 }
