@@ -79,29 +79,27 @@ export type SearchOrder = "relevance" | "date" | "viewCount" | "rating" | "title
 export interface SearchPage {
   hits: YouTubeSearchHit[];
   nextPageToken: string | null;
+  pagesScanned: number;
 }
 
-/** Single search.list call. Caller is responsible for any post-filtering
- *  (title-contains, channel allow/block). Returns up to `maxResults`
- *  hits plus a nextPageToken for pagination — pass it back via `pageToken`
- *  to fetch the next page. */
-export async function searchYouTube(query: string, opts?: {
-  maxResults?: number;
-  order?: SearchOrder;
+/** One raw search.list call. Pure pass-through — no post-filtering. */
+async function searchYouTubeRaw(query: string, opts: {
+  maxResults: number;
+  order: SearchOrder;
   publishedAfter?: string;
   pageToken?: string | null;
-}): Promise<SearchPage> {
+}): Promise<{ hits: YouTubeSearchHit[]; nextPageToken: string | null }> {
   const apiKey = getApiKey();
   const params = new URLSearchParams({
     part: "snippet",
     q: query,
     type: "video",
-    maxResults: String(Math.min(Math.max(opts?.maxResults ?? 50, 1), 50)),
-    order: opts?.order ?? "relevance",
+    maxResults: String(Math.min(Math.max(opts.maxResults, 1), 50)),
+    order: opts.order,
     key: apiKey,
   });
-  if (opts?.publishedAfter) params.set("publishedAfter", opts.publishedAfter);
-  if (opts?.pageToken) params.set("pageToken", opts.pageToken);
+  if (opts.publishedAfter) params.set("publishedAfter", opts.publishedAfter);
+  if (opts.pageToken) params.set("pageToken", opts.pageToken);
 
   const url = `https://www.googleapis.com/youtube/v3/search?${params.toString()}`;
   const res = await fetch(url);
@@ -137,6 +135,71 @@ export async function searchYouTube(query: string, opts?: {
       publishedAt: item.snippet?.publishedAt ?? null,
     }));
   return { hits, nextPageToken: data.nextPageToken ?? null };
+}
+
+/** Search YouTube and (optionally) auto-paginate through the API until
+ *  we've collected `maxResults` hits whose title contains an include
+ *  phrase (or `maxPages` is exhausted, whichever comes first). When no
+ *  title filter is supplied, this is a single page fetch — same shape
+ *  as before, just one of pagesScanned. */
+export async function searchYouTube(query: string, opts?: {
+  maxResults?: number;
+  order?: SearchOrder;
+  publishedAfter?: string;
+  pageToken?: string | null;
+  titleMustContain?: string[];
+  titleMustNotContain?: string[];
+  maxPages?: number;
+}): Promise<SearchPage> {
+  const maxResults = Math.min(Math.max(opts?.maxResults ?? 50, 1), 50);
+  const order = opts?.order ?? "relevance";
+  const includes = (opts?.titleMustContain ?? []).map(s => s.toLowerCase()).filter(Boolean);
+  const excludes = (opts?.titleMustNotContain ?? []).map(s => s.toLowerCase()).filter(Boolean);
+  const filtering = includes.length > 0 || excludes.length > 0;
+  // Cap quota damage: each page costs 100 units. Default 5 pages = 500
+  // units per Search click in filter mode. User can keep hitting "Load
+  // more" to scan further.
+  const maxPages = Math.min(Math.max(opts?.maxPages ?? 5, 1), 10);
+
+  const accumulated: YouTubeSearchHit[] = [];
+  let token: string | null = opts?.pageToken ?? null;
+  let pagesScanned = 0;
+  let lastNext: string | null = null;
+
+  do {
+    const page = await searchYouTubeRaw(query, {
+      maxResults,
+      order,
+      publishedAfter: opts?.publishedAfter,
+      pageToken: token,
+    });
+    pagesScanned += 1;
+    lastNext = page.nextPageToken;
+
+    const passing = filtering
+      ? page.hits.filter(hit => {
+          const title = hit.title.toLowerCase();
+          if (excludes.length && excludes.some(p => title.includes(p))) return false;
+          if (includes.length && !includes.some(p => title.includes(p))) return false;
+          return true;
+        })
+      : page.hits;
+    accumulated.push(...passing);
+
+    token = page.nextPageToken;
+    // Stop if (a) we have enough filtered hits, (b) we've used the
+    // page budget, or (c) YouTube has no more pages.
+    if (accumulated.length >= maxResults) break;
+    if (pagesScanned >= maxPages) break;
+    if (!token) break;
+    if (!filtering) break; // unfiltered: one page is the contract
+  } while (true);
+
+  return {
+    hits: accumulated.slice(0, maxResults),
+    nextPageToken: lastNext,
+    pagesScanned,
+  };
 }
 
 // ---- Watcher CRUD ----

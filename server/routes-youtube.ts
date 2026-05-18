@@ -45,11 +45,17 @@ export function registerYouTubeRoutes(app: Express): void {
     const order = (allowedOrders.has(orderParam) ? orderParam : "relevance") as
       "relevance" | "date" | "viewCount" | "rating" | "title";
     const pageToken = req.query.pageToken ? String(req.query.pageToken) : null;
+    const csv = (v: unknown): string[] =>
+      typeof v === "string" && v.trim()
+        ? v.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+        : [];
     try {
       const page = await searchYouTube(q, {
         order,
         maxResults: Number(req.query.maxResults ?? 50),
         pageToken,
+        titleMustContain: csv(req.query.titleMustContain),
+        titleMustNotContain: csv(req.query.titleMustNotContain),
       });
       res.json(page);
     } catch (err) {

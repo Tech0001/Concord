@@ -54,6 +54,7 @@ export default function Discover() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+  const [pagesScanned, setPagesScanned] = useState(0);
   const [downloading, setDownloading] = useState<Record<string, boolean>>({});
 
   const includes = useMemo(() => parsePhraseList(includePhrases), [includePhrases]);
@@ -88,8 +89,10 @@ export default function Discover() {
   }, [hits, includes, excludes]);
 
   // `append` distinguishes "fresh search" (replace) from "Load more"
-  // (append). YouTube's pagination is opaque page tokens, so we feed
-  // back whatever the server returned without inspecting it.
+  // (append). When include phrases are set, the server auto-paginates
+  // YouTube up to maxPages (default 5) and post-filters by title, so a
+  // single click can scan ~250 raw results to return 50 title matches.
+  // Quota cost is `pagesScanned * 100` units per click.
   const fetchPage = async (pageToken: string | null, append: boolean) => {
     const q = query.trim();
     if (!q) return;
@@ -98,11 +101,19 @@ export default function Discover() {
     try {
       const params = new URLSearchParams({ q, order });
       if (pageToken) params.set("pageToken", pageToken);
+      if (includes.length) params.set("titleMustContain", includes.join(","));
+      if (excludes.length) params.set("titleMustNotContain", excludes.join(","));
       const res = await apiRequest("GET", `/api/youtube/search?${params.toString()}`);
-      const data = await res.json() as { hits?: SearchHit[]; nextPageToken?: string | null; error?: string };
+      const data = await res.json() as {
+        hits?: SearchHit[];
+        nextPageToken?: string | null;
+        pagesScanned?: number;
+        error?: string;
+      };
       if (data.error) throw new Error(data.error);
       setHits(prev => append ? [...prev, ...(data.hits ?? [])] : (data.hits ?? []));
       setNextPageToken(data.nextPageToken ?? null);
+      setPagesScanned(prev => append ? prev + (data.pagesScanned ?? 0) : (data.pagesScanned ?? 0));
     } catch (err: any) {
       toast({ variant: "destructive", title: append ? "Load more failed" : "Search failed", description: err.message });
     } finally {
@@ -295,6 +306,11 @@ export default function Discover() {
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
           <div className="flex flex-wrap items-center gap-3">
             <span>{hits.length} loaded</span>
+            {pagesScanned > 0 && (
+              <span title={`${pagesScanned * 100} quota units`}>
+                · {pagesScanned} page{pagesScanned === 1 ? "" : "s"} scanned ({pagesScanned * 100} units)
+              </span>
+            )}
             {(includes.length > 0 || excludes.length > 0) && (
               <>
                 <span className="flex items-center gap-1.5">
