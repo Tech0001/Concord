@@ -60,13 +60,17 @@ export default function Discover() {
   const excludes = useMemo(() => parsePhraseList(excludePhrases), [excludePhrases]);
 
   const tintFor = (hit: SearchHit): Tint => {
-    const t = hit.title.toLowerCase();
+    // Match against title AND description — YouTube's API search already
+    // pulls in description hits, so the tinting needs to look at the
+    // same surface or we'd mark cards "neutral" when the phrase is the
+    // very reason YouTube returned them.
+    const haystack = `${hit.title}\n${hit.description ?? ""}`.toLowerCase();
     // Exclude wins over include — a "reacting to" video that happens to
     // also say "with X" is still noise. Order doesn't really matter
     // since we're just classifying, but this matches the intent users
     // express: "I want to see what would get filtered out".
-    if (excludes.some(p => t.includes(p))) return "exclude";
-    if (includes.length && includes.some(p => t.includes(p))) return "include";
+    if (excludes.some(p => haystack.includes(p))) return "exclude";
+    if (includes.length && includes.some(p => haystack.includes(p))) return "include";
     return "neutral";
   };
 
@@ -191,7 +195,7 @@ export default function Discover() {
             <div className="space-y-1">
               <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                Include if title contains (highlights green)
+                Include if title or description contains (highlights green)
               </label>
               <Input
                 value={includePhrases}
@@ -203,7 +207,7 @@ export default function Discover() {
             <div className="space-y-1">
               <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="inline-block h-2 w-2 rounded-full bg-rose-500" />
-                Exclude if title contains (dims to red)
+                Exclude if title or description contains (dims to red)
               </label>
               <Input
                 value={excludePhrases}
