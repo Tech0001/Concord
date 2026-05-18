@@ -74,24 +74,34 @@ function getApiKey(): string {
   return key;
 }
 
+export type SearchOrder = "relevance" | "date" | "viewCount" | "rating" | "title";
+
+export interface SearchPage {
+  hits: YouTubeSearchHit[];
+  nextPageToken: string | null;
+}
+
 /** Single search.list call. Caller is responsible for any post-filtering
  *  (title-contains, channel allow/block). Returns up to `maxResults`
- *  hits, ordered by relevance (default) or date when requested. */
+ *  hits plus a nextPageToken for pagination — pass it back via `pageToken`
+ *  to fetch the next page. */
 export async function searchYouTube(query: string, opts?: {
   maxResults?: number;
-  order?: "date" | "relevance";
+  order?: SearchOrder;
   publishedAfter?: string;
-}): Promise<YouTubeSearchHit[]> {
+  pageToken?: string | null;
+}): Promise<SearchPage> {
   const apiKey = getApiKey();
   const params = new URLSearchParams({
     part: "snippet",
     q: query,
     type: "video",
-    maxResults: String(Math.min(Math.max(opts?.maxResults ?? 25, 1), 50)),
+    maxResults: String(Math.min(Math.max(opts?.maxResults ?? 50, 1), 50)),
     order: opts?.order ?? "relevance",
     key: apiKey,
   });
   if (opts?.publishedAfter) params.set("publishedAfter", opts.publishedAfter);
+  if (opts?.pageToken) params.set("pageToken", opts.pageToken);
 
   const url = `https://www.googleapis.com/youtube/v3/search?${params.toString()}`;
   const res = await fetch(url);
@@ -100,6 +110,7 @@ export async function searchYouTube(query: string, opts?: {
     throw new Error(`YouTube API search.list failed (${res.status}): ${body.slice(0, 300)}`);
   }
   const data = await res.json() as {
+    nextPageToken?: string;
     items?: Array<{
       id?: { videoId?: string };
       snippet?: {
@@ -112,7 +123,7 @@ export async function searchYouTube(query: string, opts?: {
       };
     }>;
   };
-  return (data.items ?? [])
+  const hits: YouTubeSearchHit[] = (data.items ?? [])
     .filter(item => !!item.id?.videoId)
     .map(item => ({
       videoId: item.id!.videoId!,
@@ -125,6 +136,7 @@ export async function searchYouTube(query: string, opts?: {
         ?? null,
       publishedAt: item.snippet?.publishedAt ?? null,
     }));
+  return { hits, nextPageToken: data.nextPageToken ?? null };
 }
 
 // ---- Watcher CRUD ----
@@ -274,9 +286,9 @@ export async function pollWatcher(watcher: Watcher): Promise<{ inserted: number;
 
   for (const variant of watcher.phrase_variants) {
     try {
-      const hits = await searchYouTube(variant, { order: "date", maxResults: 25 });
+      const page = await searchYouTube(variant, { order: "date", maxResults: 50 });
       const needle = variant.toLowerCase();
-      for (const hit of hits) {
+      for (const hit of page.hits) {
         // Strict title-contains so YouTube's fuzzy match doesn't sneak in
         // unrelated videos that only mention the name in description/tags.
         if (!hit.title.toLowerCase().includes(needle)) continue;

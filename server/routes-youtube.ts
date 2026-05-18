@@ -40,12 +40,18 @@ export function registerYouTubeRoutes(app: Express): void {
   app.get("/api/youtube/search", async (req: Request, res: Response) => {
     const q = String(req.query.q ?? "").trim();
     if (!q) return res.status(400).json({ error: "q is required" });
+    const allowedOrders = new Set(["relevance", "date", "viewCount", "rating", "title"]);
+    const orderParam = String(req.query.order ?? "relevance");
+    const order = (allowedOrders.has(orderParam) ? orderParam : "relevance") as
+      "relevance" | "date" | "viewCount" | "rating" | "title";
+    const pageToken = req.query.pageToken ? String(req.query.pageToken) : null;
     try {
-      const hits = await searchYouTube(q, {
-        order: (req.query.order as "date" | "relevance" | undefined) ?? "relevance",
-        maxResults: Number(req.query.maxResults ?? 25),
+      const page = await searchYouTube(q, {
+        order,
+        maxResults: Number(req.query.maxResults ?? 50),
+        pageToken,
       });
-      res.json({ hits });
+      res.json(page);
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : "search failed" });
     }
