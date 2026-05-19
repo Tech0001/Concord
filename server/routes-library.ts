@@ -14,6 +14,7 @@ import {
   refreshTranscriptSearchIndex,
   searchTranscriptSegments,
   setVideoNotes,
+  setVideoStarred,
   updateQueueStatus,
   getVideoSpeakerSummary,
   getVideoSpeakerSummariesBatch,
@@ -595,6 +596,19 @@ function registerLibraryMutators(app: Express, pipeline: Pipeline): void {
     },
   );
 
+  app.patch(
+    "/api/videos/library/:channelId/:videoId/starred",
+    (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
+      try {
+        const { starred } = req.body || {};
+        setVideoStarred(req.params.videoId, req.params.channelId, !!starred);
+        res.json({ success: true });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : "Failed to toggle star" });
+      }
+    },
+  );
+
   // Queue listings live here too since the Library UI is the main
   // consumer of both (channel-scoped + global).
   app.get("/api/pipeline/queue/:channelId", (req, res) => {
@@ -616,6 +630,7 @@ function registerLibraryMutators(app: Express, pipeline: Pipeline): void {
       channelId: String(req.query.channelId || "all"),
       type: String(req.query.type || "all"),
       hasTranscript: String(req.query.hasTranscript || "all"),
+      starred: String(req.query.starred || "all"),
       q: req.query.q ? String(req.query.q) : "",
       sort: String(req.query.sort || "upload_desc"),
     });

@@ -1691,6 +1691,7 @@ export class Pipeline extends EventEmitter {
       notes: null,
       ai_summary: null,
       ai_summary_model: null,
+      starred: 0,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };

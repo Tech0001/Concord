@@ -42,6 +42,8 @@ export interface QueueEntry {
    *  recorded alongside so the UI can flag stale summaries. */
   ai_summary: string | null;
   ai_summary_model: string | null;
+  /** User-toggled star flag. 1 = important / crucial reference; 0 = default. */
+  starred: number;
   created_at: string;
   updated_at: string;
 }
@@ -53,6 +55,8 @@ export interface QueueListFilters {
   channelId?: string;
   type?: string;
   hasTranscript?: string;
+  /** "yes" to limit to starred rows; anything else is no-op. */
+  starred?: string;
   q?: string;
   sort?: string;
 }
@@ -305,6 +309,9 @@ export function getQueueList(filters: QueueListFilters = {}): QueueListResult {
   } else if (filters.hasTranscript === "no") {
     where.push("(q.md_path IS NULL OR q.md_path = '')");
   }
+  if (filters.starred === "yes") {
+    where.push("q.starred = 1");
+  }
   if (filters.q?.trim()) {
     const like = `%${filters.q.trim()}%`;
     where.push(`(
@@ -355,6 +362,14 @@ function queueOrderSql(sort?: string): string {
 }
 
 // ---- Per-video user notes + AI summary (kept on the queue row) ----
+
+export function setVideoStarred(videoId: string, channelId: string, starred: boolean): void {
+  getDb().prepare(`
+    UPDATE video_queue
+    SET starred = ?, updated_at = datetime('now')
+    WHERE video_id = ? AND channel_id = ?
+  `).run(starred ? 1 : 0, videoId, channelId);
+}
 
 export function setVideoNotes(videoId: string, channelId: string, notes: string | null): void {
   const trimmed = notes?.trim() ? notes.trim() : null;

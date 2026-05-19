@@ -417,6 +417,11 @@ function runMigrations(database: Database.Database) {
   // NULL = use video_path directly (the original is browser-compatible).
   ensureColumn("video_queue", "playback_path", "TEXT");
 
+  // User-starred videos. Lets the user mark "this one's crucial"
+  // independent of system status — surfaces in the Library with a
+  // dedicated filter chip.
+  ensureColumn("video_queue", "starred", "INTEGER NOT NULL DEFAULT 0");
+
   // Per-link handle side ("left" | "right" | "top" | "bottom"). NULL = the
   // Map page falls back to right→left, matching the legacy fixed-side
   // behavior. The user picks sides explicitly by dragging from one handle

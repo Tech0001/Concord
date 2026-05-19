@@ -29,12 +29,14 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Star,
   Trash2,
   X,
   XCircle,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { cn } from "@/lib/utils";
 
 interface Channel {
   id: string;
@@ -58,6 +60,7 @@ interface QueueEntry {
   word_count: number;
   error: string | null;
   retries: number;
+  starred?: number;
   updated_at: string;
 }
 
@@ -84,6 +87,7 @@ interface LibrarySettings {
   channelId?: string;
   type?: string;
   hasTranscript?: string;
+  starred?: string;
   sort?: string;
   page?: number;
   pageSize?: number;
@@ -185,6 +189,7 @@ export default function Library() {
   const [channelId, setChannelId] = useState(savedSettings.channelId || "all");
   const [type, setType] = useState(savedSettings.type || "all");
   const [hasTranscript, setHasTranscript] = useState(savedSettings.hasTranscript || "all");
+  const [starredOnly, setStarredOnly] = useState(savedSettings.starred === "yes");
   const [sort, setSort] = useState(savedSettings.sort || "upload_desc");
   const [page, setPage] = useState(savedSettings.page || 0);
   const [pageSize, setPageSize] = useState(savedSettings.pageSize || 50);
@@ -231,7 +236,7 @@ export default function Library() {
 
   useEffect(() => {
     setPage(0);
-  }, [channelId, hasTranscript, pageSize, query, sort, status, type]);
+  }, [channelId, hasTranscript, starredOnly, pageSize, query, sort, status, type]);
 
   useEffect(() => {
     window.localStorage.setItem(LIBRARY_SETTINGS_KEY, JSON.stringify({
@@ -241,11 +246,12 @@ export default function Library() {
       channelId,
       type,
       hasTranscript,
+      starred: starredOnly ? "yes" : "all",
       sort,
       page,
       pageSize,
     }));
-  }, [channelId, hasTranscript, model, page, pageSize, query, sort, status, type]);
+  }, [channelId, hasTranscript, starredOnly, model, page, pageSize, query, sort, status, type]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -257,6 +263,7 @@ export default function Library() {
         channelId,
         type,
         hasTranscript,
+        starred: starredOnly ? "yes" : "all",
         sort,
         q: query.trim(),
         t: String(Date.now()),
@@ -293,7 +300,7 @@ export default function Library() {
 
   useEffect(() => {
     fetchData();
-  }, [page, pageSize, status, channelId, type, hasTranscript, sort, query]);
+  }, [page, pageSize, status, channelId, type, hasTranscript, starredOnly, sort, query]);
 
   // While any entry on this page is queued / extracting / transcribing,
   // re-poll the queue every 4s so the spinner buttons reflect the live
@@ -310,6 +317,27 @@ export default function Library() {
     // restart only when in-flight state toggles.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasInFlight]);
+
+  const toggleStar = async (entry: QueueEntry) => {
+    const next = entry.starred ? 0 : 1;
+    // Optimistic update — the star is a binary toggle the user expects
+    // to feel instant; on error we reload to recover the truth.
+    setEntries(prev => prev.map(e =>
+      e.video_id === entry.video_id && e.channel_id === entry.channel_id
+        ? { ...e, starred: next }
+        : e,
+    ));
+    try {
+      await apiRequest(
+        "PATCH",
+        `/api/videos/library/${encodeURIComponent(entry.channel_id)}/${encodeURIComponent(entry.video_id)}/starred`,
+        { starred: !!next },
+      );
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Star toggle failed", description: error.message });
+      fetchData();
+    }
+  };
 
   const retranscribe = async (entry: QueueEntry) => {
     const key = `${entry.channel_id}:${entry.video_id}`;
@@ -381,6 +409,20 @@ export default function Library() {
                 {channels.map(ch => <SelectItem key={ch.id} value={ch.id}>{ch.name}</SelectItem>)}
               </SelectContent>
             </Select>
+
+            {/* Star filter chip — fast-access for "show only my starred
+                videos". Yellow tint when active so it's visually distinct
+                from the rest of the row. */}
+            <Button
+              size="sm"
+              variant={starredOnly ? "default" : "outline"}
+              className={cn("h-9", starredOnly && "bg-amber-500 text-amber-50 hover:bg-amber-600")}
+              onClick={() => setStarredOnly(v => !v)}
+              title={starredOnly ? "Showing starred only — click to clear" : "Show starred only"}
+            >
+              <Star className={cn("h-3.5 w-3.5", starredOnly && "fill-current")} />
+              Starred
+            </Button>
 
             {(() => {
               const activeFilterCount =
@@ -493,6 +535,7 @@ export default function Library() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[36px]" aria-label="Starred"></TableHead>
                   <TableHead className="w-[110px]">Upload</TableHead>
                   <TableHead>Title</TableHead>
                   <TableHead className="w-[150px]">Channel</TableHead>
@@ -508,6 +551,20 @@ export default function Library() {
                   const canRetranscribe = !!entry.video_path && entry.status !== "downloading" && entry.status !== "transcribing";
                   return (
                     <TableRow key={key}>
+                      <TableCell className="py-2 pr-0">
+                        <button
+                          type="button"
+                          aria-label={entry.starred ? "Unstar" : "Star"}
+                          title={entry.starred ? "Starred" : "Star this video"}
+                          onClick={() => toggleStar(entry)}
+                          className={cn(
+                            "p-1 rounded hover:bg-secondary transition-colors",
+                            entry.starred ? "text-amber-500" : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          <Star className={cn("h-4 w-4", entry.starred && "fill-current")} />
+                        </button>
+                      </TableCell>
                       <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
                         {formatDate(entry.upload_date) || "No date"}
                         {entry.duration ? <div>{formatDuration(entry.duration)}</div> : null}
