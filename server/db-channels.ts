@@ -124,6 +124,33 @@ export function updateChannelDiarize(channelId: string, diarize: boolean): Store
   return row ? rowToChannel(row) : undefined;
 }
 
+/** Find a configured channel that matches a YouTube channel's identifying
+ *  info — used to attach manual downloads to their existing pipeline
+ *  channel rather than creating an orphan row keyed by the display name.
+ *
+ *  Match order:
+ *    1. URL contains the YouTube UC... id (most specific — survives renames).
+ *    2. Case-insensitive name equality (covers channels added before
+ *       yt-dlp started returning channel ids, or local-folder channels).
+ *  Returns undefined when there's no match; the caller is responsible
+ *  for the legacy "treat the display name as the channel id" fallback. */
+export function findChannelByYouTubeInfo(
+  youtubeChannelId: string | null | undefined,
+  youtubeChannelName: string | null | undefined,
+): StoredChannel | undefined {
+  const channels = getChannels();
+  if (youtubeChannelId) {
+    const byUrl = channels.find(c => c.url.includes(youtubeChannelId));
+    if (byUrl) return byUrl;
+  }
+  if (youtubeChannelName) {
+    const needle = youtubeChannelName.toLowerCase().trim();
+    const byName = channels.find(c => c.name.toLowerCase().trim() === needle);
+    if (byName) return byName;
+  }
+  return undefined;
+}
+
 export function getChannelById(channelId: string): StoredChannel | undefined {
   const row = getDb().prepare(
     "SELECT id, name, url, enabled, diarize, include_shorts FROM channels WHERE id = ?"

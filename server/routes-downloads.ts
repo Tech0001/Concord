@@ -8,6 +8,7 @@ import { copyAudioTrack } from "./audio";
 import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
 import {
   enqueueVideo,
+  findChannelByYouTubeInfo,
   getQueueEntryByVideoId,
   updateQueueStatus,
 } from "./db";
@@ -239,10 +240,19 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
               }
 
               const existingEntry = getQueueEntryByVideoId(download.videoId);
+              // Attach to an already-configured channel when possible (matches
+              // by YouTube UC id in the channel URL or by case-insensitive
+              // name) — without this, a manual download of e.g. a live that
+              // just ended creates an orphan row keyed by the display name
+              // ("Last Days") instead of the channel's configured id
+              // ("ch-..."), so it doesn't show up when you filter by that
+              // channel in Library.
+              const matchedChannel = findChannelByYouTubeInfo(download.channelId, download.channelName);
               // Prefer the readable channel name (yt-dlp's `channel` field,
               // e.g. "Rick Joyner") over the UC... id so the Library shows
               // the human-friendly name and matches the on-disk folder.
               const dbChannelId = existingEntry?.channel_id
+                || matchedChannel?.id
                 || (download.channelName ? String(download.channelName) : null)
                 || download.channelId
                 || "manual";
