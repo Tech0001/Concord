@@ -65,33 +65,65 @@ interface ProgressCallback {
   (progress: { percent: number; downloaded_bytes: number; total_bytes: number }): void;
 }
 
-export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoInfo> {
-  try {
-    const cookieOpts = youtubeCookieOpts();
-    const sleep = youtubeSleep();
-    // Get video info with available formats
-    const result = await youtubedl(url, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      // Using proper properties for youtube-dl-exec
-      preferFreeFormats: true,
-      // Adding cache dir to improve speed
-      cacheDir: './youtube-dl-cache',
-      // Without a JS runtime yt-dlp can't decode YouTube's player and falls
-      // back to the android_vr API, which only exposes H.264. Pointing it
-      // at the local node binary unlocks the full AV1/VP9 format list.
-      jsRuntimes: 'node',
-      // Auth cookies — defeats the "Sign in to confirm you're not a bot"
-      // gate. Prefers cookies.txt file over browser extraction.
-      ...cookieOpts,
-      sleepInterval: sleep.min,
-      maxSleepInterval: sleep.max,
-    } as Parameters<typeof youtubedl>[1]);
+// yt-dlp emits this when a YouTube live stream has just ended but the
+// post-broadcast VOD hasn't been processed yet. YouTube's web player has
+// fallback logic for that transition window; the InnerTube API yt-dlp
+// uses doesn't. Window is typically minutes-to-hours, longer for
+// multi-hour streams. Sometimes a different player_client serves the
+// VOD earlier — we retry once with web/android/mweb before giving up.
+const LIVE_ENDED_PATTERN = /This live event has ended/i;
+const isLiveEndedError = (err: unknown): boolean =>
+  err instanceof Error && LIVE_ENDED_PATTERN.test(err.message);
+const LIVE_ENDED_FRIENDLY =
+  "YouTube hasn't processed this live stream's VOD yet. "
+  + "The video is fine — try again in 10-30 minutes (longer for multi-hour streams). "
+  + "This is a known yt-dlp transition window after a stream ends.";
 
+export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoInfo> {
+  const cookieOpts = youtubeCookieOpts();
+  const sleep = youtubeSleep();
+  const baseOpts = {
+    dumpSingleJson: true,
+    noWarnings: true,
+    // Using proper properties for youtube-dl-exec
+    preferFreeFormats: true,
+    // Adding cache dir to improve speed
+    cacheDir: './youtube-dl-cache',
+    // Without a JS runtime yt-dlp can't decode YouTube's player and falls
+    // back to the android_vr API, which only exposes H.264. Pointing it
+    // at the local node binary unlocks the full AV1/VP9 format list.
+    jsRuntimes: 'node',
+    // Auth cookies — defeats the "Sign in to confirm you're not a bot"
+    // gate. Prefers cookies.txt file over browser extraction.
+    ...cookieOpts,
+    sleepInterval: sleep.min,
+    maxSleepInterval: sleep.max,
+  } as Parameters<typeof youtubedl>[1];
+
+  try {
+    const result = await youtubedl(url, baseOpts);
     return result as unknown as YouTubeDlVideoInfo;
-  } catch (error) {
-    console.error("Error in youtube-dl:", error);
-    throw new Error(`Failed to get video info: ${error instanceof Error ? error.message : "Unknown error"}`);
+  } catch (firstErr) {
+    if (isLiveEndedError(firstErr)) {
+      // Just-ended live: retry with alternative player clients before
+      // surfacing a user-visible error.
+      try {
+        const retry = await youtubedl(url, {
+          ...baseOpts,
+          extractorArgs: "youtube:player_client=web,android,mweb",
+        } as Parameters<typeof youtubedl>[1]);
+        return retry as unknown as YouTubeDlVideoInfo;
+      } catch (secondErr) {
+        if (isLiveEndedError(secondErr)) {
+          console.error("Live-ended VOD not yet available:", secondErr);
+          throw new Error(LIVE_ENDED_FRIENDLY);
+        }
+        console.error("Error in youtube-dl (retry):", secondErr);
+        throw new Error(`Failed to get video info: ${secondErr instanceof Error ? secondErr.message : "Unknown error"}`);
+      }
+    }
+    console.error("Error in youtube-dl:", firstErr);
+    throw new Error(`Failed to get video info: ${firstErr instanceof Error ? firstErr.message : "Unknown error"}`);
   }
 }
 
