@@ -130,7 +130,7 @@ function TopBar() {
 
   return (
     <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 [-webkit-app-region:drag]">
-      <div className="mx-auto flex h-12 max-w-7xl items-center gap-3 px-3 md:gap-6 md:px-4">
+      <div className="flex h-12 items-center gap-3 px-3 md:gap-6 md:px-4">
         <div className="flex items-center gap-2">
           <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-foreground text-[11px] font-semibold text-background tracking-tight">
             C
@@ -140,33 +140,10 @@ function TopBar() {
           </span>
         </div>
 
-        {/* Desktop nav — visible md and up. Phone gets the hamburger below.
-            no-drag so the nav links are clickable inside the draggable header.
-            Thin divider between groups so the visual chunking matches the
-            mental chunking (Content / Analysis / Ops). */}
-        <nav className="hidden flex-1 items-center gap-1 text-sm md:flex [-webkit-app-region:no-drag]">
-          {NAV_GROUPS.map((group, groupIdx) => (
-            <div key={group.name} className="flex items-center gap-1">
-              {groupIdx > 0 && <span aria-hidden className="mx-1 h-4 w-px bg-border" />}
-              {group.items.map(({ href, label, icon: Icon }) => {
-                const active = location === href;
-                return (
-                  <Link
-                    key={href}
-                    href={href}
-                    className={cn(
-                      "inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-muted-foreground transition-colors hover:text-foreground",
-                      active && "bg-secondary text-foreground"
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    <span>{label}</span>
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
-        </nav>
+        {/* Spacer — desktop nav lives in the left sidebar now (Sidebar
+            component below). Phone still uses the hamburger sheet to
+            the right. */}
+        <div className="hidden flex-1 md:block" />
 
         {/* Right-side controls — no-drag so settings/theme/hamburger
             buttons remain clickable inside the draggable header. */}
@@ -409,6 +386,46 @@ function TranscriptionSetupGate() {
   return null;
 }
 
+/** Left-side primary nav. Visible on md+; mobile still uses the
+ *  hamburger sheet in the top bar. Groups (Content / Analysis / Ops)
+ *  render as their own labeled sections so the eye can chunk a long
+ *  list. Fixed-width — collapsible mode is a future polish. */
+function Sidebar() {
+  const [location] = useLocation();
+  return (
+    <aside
+      className="hidden md:flex md:w-[200px] md:shrink-0 md:flex-col md:border-r md:bg-background/40
+                 md:sticky md:top-12 md:h-[calc(100vh-3rem)] md:overflow-y-auto"
+    >
+      <nav className="flex flex-col gap-3 p-3 text-sm">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.name} className="flex flex-col gap-0.5">
+            <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+              {group.name}
+            </p>
+            {group.items.map(({ href, label, icon: Icon }) => {
+              const active = location === href;
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={cn(
+                    "inline-flex h-8 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+                    active && "bg-secondary text-foreground"
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{label}</span>
+                </Link>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+    </aside>
+  );
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -416,9 +433,12 @@ function App() {
         <div className="min-h-screen bg-background text-foreground">
           <TopBar />
           <TranscriptionSetupGate />
-          <main className="pb-12">
-            <Router />
-          </main>
+          <div className="flex">
+            <Sidebar />
+            <main className="min-w-0 flex-1 pb-12">
+              <Router />
+            </main>
+          </div>
           <Toaster />
         </div>
       </CategoryProvider>
