@@ -173,12 +173,12 @@ export class Pipeline extends EventEmitter {
       video_id: string; channel_id: string; title: string; url: string;
       upload_date: string | null; is_live: number;
       c_id: string; c_name: string; c_url: string;
-      c_enabled: number; c_diarize: number;
+      c_enabled: number; c_diarize: number; c_category: string;
     }
     const rows = getDb().prepare(`
       SELECT q.video_id, q.channel_id, q.title, q.url, q.upload_date, q.is_live,
              c.id AS c_id, c.name AS c_name, c.url AS c_url,
-             c.enabled AS c_enabled, c.diarize AS c_diarize
+             c.enabled AS c_enabled, c.diarize AS c_diarize, c.category AS c_category
       FROM video_queue q
       JOIN channels c ON c.id = q.channel_id
       WHERE q.status = 'waiting_live' AND c.enabled = 1
@@ -208,6 +208,7 @@ export class Pipeline extends EventEmitter {
         url: row.c_url,
         enabled: !!row.c_enabled,
         diarize: !!row.c_diarize,
+        category: row.c_category === "work" ? "work" : "personal",
       };
       const jitterMs = Math.random() * windowMs;
       setTimeout(() => this.recheckLive(video, channel), jitterMs);
@@ -1692,6 +1693,7 @@ export class Pipeline extends EventEmitter {
       ai_summary: null,
       ai_summary_model: null,
       starred: 0,
+      category: channel.category ?? "personal",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };

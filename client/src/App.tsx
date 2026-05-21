@@ -51,6 +51,7 @@ import {
   Users,
 } from "lucide-react";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
+import { CategoryProvider, useCategory, type Category } from "@/hooks/use-category";
 
 const MapPage = lazy(() => import("@/pages/Map"));
 
@@ -167,6 +168,7 @@ function TopBar() {
         {/* Right-side controls — no-drag so settings/theme/hamburger
             buttons remain clickable inside the draggable header. */}
         <div className="ml-auto flex items-center gap-1 md:ml-0 [-webkit-app-region:no-drag]">
+          <CategoryToggle />
           <LlmStatusDot />
 
           {/* Voice-note recorder — sits next to the LLM status dot so it's
@@ -265,6 +267,43 @@ function TopBar() {
         </div>
       </div>
     </header>
+  );
+}
+
+/** Segmented toggle for Personal / Work / Both — the global category
+ *  filter that affects every list page. Lives in the top bar so it
+ *  reads as a viewing setting, not a per-page filter. */
+function CategoryToggle() {
+  const { category, setCategory } = useCategory();
+  const opts: { value: Category; label: string }[] = [
+    { value: "personal", label: "Personal" },
+    { value: "work",     label: "Work" },
+    { value: "both",     label: "Both" },
+  ];
+  return (
+    <div
+      className="hidden md:inline-flex items-center gap-0.5 rounded-md border bg-card p-0.5 text-xs"
+      role="radiogroup"
+      aria-label="Category filter"
+    >
+      {opts.map(o => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={category === o.value}
+          onClick={() => setCategory(o.value)}
+          className={cn(
+            "rounded px-2 py-0.5 transition-colors",
+            category === o.value
+              ? "bg-secondary text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -369,14 +408,16 @@ function TranscriptionSetupGate() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen bg-background text-foreground">
-        <TopBar />
-        <TranscriptionSetupGate />
-        <main className="pb-12">
-          <Router />
-        </main>
-        <Toaster />
-      </div>
+      <CategoryProvider>
+        <div className="min-h-screen bg-background text-foreground">
+          <TopBar />
+          <TranscriptionSetupGate />
+          <main className="pb-12">
+            <Router />
+          </main>
+          <Toaster />
+        </div>
+      </CategoryProvider>
     </QueryClientProvider>
   );
 }

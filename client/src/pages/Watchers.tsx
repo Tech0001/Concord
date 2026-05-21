@@ -4,8 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { useCategory } from "@/hooks/use-category";
 import {
   Binoculars, Check, Download, Inbox, Loader2, Pencil, Plus, RefreshCw, Trash2, X,
 } from "lucide-react";
@@ -21,6 +23,7 @@ interface Watcher {
   poll_interval_hours: number;
   last_polled_at: string | null;
   last_error: string | null;
+  category: "personal" | "work";
 }
 
 interface InboxEntry {
@@ -45,6 +48,7 @@ interface WatcherDraft {
   enabled: boolean;
   auto_queue: boolean;
   poll_interval_hours: number;
+  category: "personal" | "work";
 }
 
 const EMPTY_DRAFT: WatcherDraft = {
@@ -55,6 +59,7 @@ const EMPTY_DRAFT: WatcherDraft = {
   enabled: true,
   auto_queue: false,
   poll_interval_hours: 24,
+  category: "personal",
 };
 
 function parseList(s: string): string[] {
@@ -63,6 +68,7 @@ function parseList(s: string): string[] {
 
 export default function Watchers() {
   const { toast } = useToast();
+  const { category: headerCategory, serverCategory } = useCategory();
   const [watchers, setWatchers] = useState<Watcher[]>([]);
   const [inbox, setInbox] = useState<InboxEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -72,9 +78,15 @@ export default function Watchers() {
   const load = async () => {
     setLoading(true);
     try {
+      const wUrl = serverCategory
+        ? `/api/youtube/watchers?category=${serverCategory}`
+        : "/api/youtube/watchers";
+      const iUrl = serverCategory
+        ? `/api/youtube/inbox?category=${serverCategory}`
+        : "/api/youtube/inbox";
       const [wRes, iRes] = await Promise.all([
-        apiRequest("GET", "/api/youtube/watchers"),
-        apiRequest("GET", "/api/youtube/inbox"),
+        apiRequest("GET", wUrl),
+        apiRequest("GET", iUrl),
       ]);
       const wData = await wRes.json() as { watchers?: Watcher[] };
       const iData = await iRes.json() as { entries?: InboxEntry[] };
@@ -87,7 +99,7 @@ export default function Watchers() {
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [serverCategory]);
 
   const saveDraft = async () => {
     if (!draft) return;
@@ -99,6 +111,7 @@ export default function Watchers() {
       enabled: draft.enabled,
       auto_queue: draft.auto_queue,
       poll_interval_hours: draft.poll_interval_hours,
+      category: draft.category,
     };
     try {
       if (draft.id) {
@@ -177,7 +190,12 @@ export default function Watchers() {
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </Button>
-          <Button size="sm" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
+          <Button size="sm" onClick={() => setDraft({
+            ...EMPTY_DRAFT,
+            // Default to the current header toggle so users don't have to
+            // remember to set it; falls back to 'personal' when toggle is 'both'.
+            category: headerCategory === "work" ? "work" : "personal",
+          })}>
             <Plus className="h-4 w-4" />
             New watcher
           </Button>
@@ -248,6 +266,9 @@ export default function Watchers() {
                       {w.phrase_variants.length} phrase{w.phrase_variants.length === 1 ? "" : "s"}
                     </Badge>
                     {w.auto_queue && <Badge className="text-[10px]">Auto-queue</Badge>}
+                    <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+                      {w.category ?? "personal"}
+                    </Badge>
                   </div>
                   <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
                     {w.phrase_variants.map(v => `"${v}"`).join("  ·  ")}
@@ -295,6 +316,7 @@ export default function Watchers() {
                     enabled: w.enabled,
                     auto_queue: w.auto_queue,
                     poll_interval_hours: w.poll_interval_hours,
+                    category: w.category ?? "personal",
                   })}
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -356,7 +378,7 @@ export default function Watchers() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
                   <label className="text-xs text-muted-foreground">Poll interval (hours)</label>
                   <Input
@@ -366,6 +388,21 @@ export default function Watchers() {
                     onChange={(e) => setDraft({ ...draft, poll_interval_hours: Math.max(1, Number(e.target.value) || 24) })}
                   />
                 </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Category</label>
+                  <Select
+                    value={draft.category}
+                    onValueChange={(v) => setDraft({ ...draft, category: v as "personal" | "work" })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="personal">Personal</SelectItem>
+                      <SelectItem value="work">Work</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="flex items-center gap-2">
                   <Switch
                     checked={draft.enabled}

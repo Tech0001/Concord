@@ -63,9 +63,11 @@ export function registerYouTubeRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/youtube/watchers", (_req, res) => {
+  app.get("/api/youtube/watchers", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ watchers: listWatchers() });
+    const catParam = String(req.query.category || "both");
+    const category = catParam === "personal" || catParam === "work" ? catParam : undefined;
+    res.json({ watchers: listWatchers({ category }) });
   });
 
   app.post("/api/youtube/watchers", (req, res) => {
@@ -113,7 +115,9 @@ export function registerYouTubeRoutes(app: Express): void {
   app.get("/api/youtube/inbox", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const status = (req.query.status as "new" | "queued" | "dismissed" | undefined) ?? "new";
-    res.json({ entries: listInbox({ status }) });
+    const catParam = String(req.query.category || "both");
+    const category = catParam === "personal" || catParam === "work" ? catParam : undefined;
+    res.json({ entries: listInbox({ status, category }) });
   });
 
   app.post(
@@ -132,6 +136,7 @@ export function registerYouTubeRoutes(app: Express): void {
         title: entry.title,
         url: `https://www.youtube.com/watch?v=${entry.video_id}`,
         uploadDate: entry.published_at?.slice(0, 10).replace(/-/g, "") ?? null,
+        category: watcher.category,
       });
       setInboxStatus(watcherId, videoId, "queued");
       res.json({ queued: enqueued });

@@ -631,6 +631,7 @@ function registerLibraryMutators(app: Express, pipeline: Pipeline): void {
       type: String(req.query.type || "all"),
       hasTranscript: String(req.query.hasTranscript || "all"),
       starred: String(req.query.starred || "all"),
+      category: String(req.query.category || "both"),
       q: req.query.q ? String(req.query.q) : "",
       sort: String(req.query.sort || "upload_desc"),
     });

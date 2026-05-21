@@ -22,6 +22,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { visibleModels } from "@/lib/transcription-models";
 import FolderInput from "@/components/FolderInput";
+import { useCategory } from "@/hooks/use-category";
 
 interface Channel {
   id: string;
@@ -33,6 +34,8 @@ interface Channel {
   diarize?: boolean;
   /** Include YouTube Shorts when scanning this channel. Off by default. */
   include_shorts?: boolean;
+  /** Personal / work category. Drives the header viewing toggle. */
+  category?: "personal" | "work";
 }
 
 interface Job {
@@ -124,6 +127,7 @@ export default function PipelineStatus() {
   const [newChannelName, setNewChannelName] = useState("");
   const [newChannelUrl, setNewChannelUrl] = useState("");
   const [newChannelKind, setNewChannelKind] = useState<"youtube" | "folder">("youtube");
+  const [newChannelCategory, setNewChannelCategory] = useState<"personal" | "work">("personal");
   const [archiving, setArchiving] = useState<Record<string, boolean>>({});
   const [retransModel, setRetransModel] = useState("large-v3");
   const [retranscribing, setRetranscribing] = useState<Record<string, boolean>>({});
@@ -150,6 +154,14 @@ export default function PipelineStatus() {
   // instead of forcing the user to scroll to the global job list.
   const [manualTranscribeId, setManualTranscribeId] = useState<string | null>(null);
   const { toast } = useToast();
+  const { category: headerCategory, serverCategory } = useCategory();
+
+  // Seed the new-channel category from the header toggle so the
+  // common case ("I'm viewing work, add a work channel") needs zero
+  // clicks. Falls back to 'personal' when the toggle is 'both'.
+  useEffect(() => {
+    setNewChannelCategory(headerCategory === "work" ? "work" : "personal");
+  }, [headerCategory]);
 
   const fetchYtdlpHealth = async (force = false) => {
     setYtdlpHealthChecking(true);
@@ -301,7 +313,11 @@ export default function PipelineStatus() {
       url = `file://${p}`;
     }
     try {
-      await apiRequest("POST", "/api/pipeline/channels", { name: newChannelName, url });
+      await apiRequest("POST", "/api/pipeline/channels", {
+        name: newChannelName,
+        url,
+        category: newChannelCategory,
+      });
       setNewChannelName(""); setNewChannelUrl("");
       fetchConfig(); fetchState();
       toast({ title: "Channel added" });
@@ -312,6 +328,15 @@ export default function PipelineStatus() {
     await apiRequest("DELETE", `/api/pipeline/channels/${id}`);
     fetchConfig(); fetchState();
     toast({ title: "Removed" });
+  };
+
+  const updateChannelCategory = async (id: string, category: "personal" | "work") => {
+    try {
+      await apiRequest("PATCH", `/api/pipeline/channels/${id}`, { category });
+      fetchConfig();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Category change failed", description: e.message });
+    }
   };
 
   const toggleChannel = async (id: string, enabled: boolean) => {
@@ -563,6 +588,7 @@ export default function PipelineStatus() {
               progress: transcribeJob.progress,
               error: transcribeJob.error,
             } : null}
+            downloadCategory={headerCategory === "work" ? "work" : "personal"}
           />
         );
       })()}
@@ -623,7 +649,9 @@ export default function PipelineStatus() {
           </div>
         </CardHeader>
         <CardContent className="space-y-2">
-          {config?.channels.map(ch => {
+          {config?.channels
+            .filter(ch => !serverCategory || (ch.category ?? "personal") === serverCategory)
+            .map(ch => {
             const isLocal = ch.url.startsWith("file://");
             const displayUrl = isLocal
               ? decodeURIComponent(ch.url.replace(/^file:\/\//, ""))
@@ -691,6 +719,19 @@ export default function PipelineStatus() {
                     aria-label="Include YouTube Shorts when scanning this channel"
                   />
                   <span>Include Shorts (off by default — most are clips of full videos)</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="w-24 shrink-0">Category</span>
+                  <Select
+                    value={ch.category ?? "personal"}
+                    onValueChange={(v) => updateChannelCategory(ch.id, v as "personal" | "work")}
+                  >
+                    <SelectTrigger className="h-7 w-[120px] text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="personal">Personal</SelectItem>
+                      <SelectItem value="work">Work</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 {archiveMsg[ch.id] && <div className="text-xs text-muted-foreground">{archiveMsg[ch.id]}</div>}
               </div>
@@ -789,6 +830,16 @@ export default function PipelineStatus() {
                   className="flex-[2] font-mono text-xs"
                 />
               )}
+              <Select
+                value={newChannelCategory}
+                onValueChange={(v) => setNewChannelCategory(v as "personal" | "work")}
+              >
+                <SelectTrigger className="w-[110px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="personal">Personal</SelectItem>
+                  <SelectItem value="work">Work</SelectItem>
+                </SelectContent>
+              </Select>
               <Button size="sm" onClick={addChannel} disabled={!newChannelName || !newChannelUrl}>
                 <Plus className="h-4 w-4"/>Add
               </Button>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useCategory } from "@/hooks/use-category";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -209,6 +210,7 @@ export default function Library() {
   // a speaker in the open video).
   const [speakerBadges, setSpeakerBadges] = useState<Record<string, { speaker_id: string; name: string; display_color: string | null; airtime_seconds: number; local_speaker: string }[]>>({});
   const [platform, setPlatform] = useState<NodeJS.Platform | null>(null);
+  const { serverCategory } = useCategory();
   const { toast } = useToast();
 
   useEffect(() => {
@@ -268,6 +270,7 @@ export default function Library() {
         q: query.trim(),
         t: String(Date.now()),
       });
+      if (serverCategory) params.set("category", serverCategory);
       const [queueRes, configRes] = await Promise.all([
         apiRequest("GET", `/api/pipeline/queue?${params.toString()}`),
         apiRequest("GET", `/api/pipeline/config?t=${Date.now()}`),
@@ -300,7 +303,7 @@ export default function Library() {
 
   useEffect(() => {
     fetchData();
-  }, [page, pageSize, status, channelId, type, hasTranscript, starredOnly, sort, query]);
+  }, [page, pageSize, status, channelId, type, hasTranscript, starredOnly, sort, query, serverCategory]);
 
   // While any entry on this page is queued / extracting / transcribing,
   // re-poll the queue every 4s so the spinner buttons reflect the live

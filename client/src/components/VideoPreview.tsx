@@ -41,11 +41,15 @@ interface VideoPreviewProps {
    *  inline progress instead of forcing the user to scroll to the global
    *  jobs list. Pass null when no transcribe is in flight. */
   transcribeJob?: { status: string; progress: number; error?: string } | null;
+  /** Personal / work category for the resulting video_queue row. The
+   *  Pipeline page passes the header toggle in; orphan downloads
+   *  default to 'personal' server-side. */
+  downloadCategory?: "personal" | "work";
 }
 
-export default function VideoPreview({ 
-  videoData, 
-  downloadProgress, 
+export default function VideoPreview({
+  videoData,
+  downloadProgress,
   isDownloading,
   setIsDownloading,
   updateDownloadProgress,
@@ -53,6 +57,7 @@ export default function VideoPreview({
   showTranscribe = false,
   onTranscribe,
   transcribeJob,
+  downloadCategory,
 }: VideoPreviewProps) {
   const [selectedResolution, setSelectedResolution] = useState("");
   const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
@@ -368,8 +373,12 @@ export default function VideoPreview({
         videoId: videoData.id,
         formatId: selectedFormat.format_id,
         downloadLocation,
+        // Optional category override — VideoPreview is consumed from
+        // the Pipeline page (which passes it via prop) so the row
+        // lands in the right Library section without extra clicks.
+        category: downloadCategory,
       };
-      
+
       // Pipeline mode: pass extra params for channel folder + date prefix
       if (showTranscribe) {
         downloadBody.uploadDate = videoData.uploadDate;
@@ -399,9 +408,10 @@ export default function VideoPreview({
               duration: 5000,
             });
             
-            const retryBody: any = { 
-              videoId: videoData.id, 
+            const retryBody: any = {
+              videoId: videoData.id,
               formatId: selectedFormat.format_id,
+              category: downloadCategory,
             };
             if (showTranscribe) {
               retryBody.uploadDate = videoData.uploadDate;

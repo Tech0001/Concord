@@ -36,6 +36,10 @@ export interface Watcher {
   poll_interval_hours: number;
   last_polled_at: string | null;
   last_error: string | null;
+  /** Personal / work category — inherited by hits when they're
+   *  promoted into video_queue (either via auto_queue or via the
+   *  inbox "Queue" button). */
+  category: "personal" | "work";
   created_at: string;
   updated_at: string;
 }
@@ -51,6 +55,7 @@ export interface WatcherRow {
   poll_interval_hours: number;
   last_polled_at: string | null;
   last_error: string | null;
+  category: string;
   created_at: string;
   updated_at: string;
 }
@@ -216,6 +221,7 @@ function rowToWatcher(r: WatcherRow): Watcher {
     poll_interval_hours: r.poll_interval_hours,
     last_polled_at: r.last_polled_at,
     last_error: r.last_error,
+    category: r.category === "work" ? "work" : "personal",
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -230,10 +236,12 @@ function safeJsonArray(s: string): string[] {
   }
 }
 
-export function listWatchers(): Watcher[] {
+export function listWatchers(opts?: { category?: "personal" | "work" }): Watcher[] {
+  const where = opts?.category ? "WHERE category = ?" : "";
+  const params = opts?.category ? [opts.category] : [];
   const rows = getDb()
-    .prepare("SELECT * FROM youtube_watchers ORDER BY created_at DESC")
-    .all() as WatcherRow[];
+    .prepare(`SELECT * FROM youtube_watchers ${where} ORDER BY created_at DESC`)
+    .all(...params) as WatcherRow[];
   return rows.map(rowToWatcher);
 }
 
@@ -252,6 +260,11 @@ export interface WatcherInput {
   enabled?: boolean;
   auto_queue?: boolean;
   poll_interval_hours?: number;
+  category?: "personal" | "work";
+}
+
+function normCategory(value: unknown): "personal" | "work" {
+  return value === "work" ? "work" : "personal";
 }
 
 export function createWatcher(input: WatcherInput): Watcher {
@@ -262,8 +275,8 @@ export function createWatcher(input: WatcherInput): Watcher {
   const info = getDb().prepare(`
     INSERT INTO youtube_watchers
       (label, phrase_variants, allowed_channels, blocked_channels,
-       enabled, auto_queue, poll_interval_hours)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+       enabled, auto_queue, poll_interval_hours, category)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.label.trim(),
     JSON.stringify(variants),
@@ -272,6 +285,7 @@ export function createWatcher(input: WatcherInput): Watcher {
     input.enabled === false ? 0 : 1,
     input.auto_queue ? 1 : 0,
     Math.max(1, input.poll_interval_hours ?? 24),
+    normCategory(input.category),
   );
   return getWatcher(Number(info.lastInsertRowid))!;
 }
@@ -288,13 +302,14 @@ export function updateWatcher(id: number, input: Partial<WatcherInput>): Watcher
     enabled: input.enabled !== undefined ? input.enabled : existing.enabled,
     auto_queue: input.auto_queue !== undefined ? input.auto_queue : existing.auto_queue,
     poll_interval_hours: input.poll_interval_hours ?? existing.poll_interval_hours,
+    category: input.category !== undefined ? input.category : existing.category,
   };
 
   getDb().prepare(`
     UPDATE youtube_watchers
        SET label = ?, phrase_variants = ?, allowed_channels = ?,
            blocked_channels = ?, enabled = ?, auto_queue = ?,
-           poll_interval_hours = ?, updated_at = datetime('now')
+           poll_interval_hours = ?, category = ?, updated_at = datetime('now')
      WHERE id = ?
   `).run(
     next.label,
@@ -304,6 +319,7 @@ export function updateWatcher(id: number, input: Partial<WatcherInput>): Watcher
     next.enabled === false ? 0 : 1,
     next.auto_queue ? 1 : 0,
     Math.max(1, next.poll_interval_hours ?? 24),
+    normCategory(next.category),
     id,
   );
   return getWatcher(id);
@@ -316,11 +332,29 @@ export function deleteWatcher(id: number): boolean {
 
 // ---- Inbox ----
 
-export function listInbox(opts?: { status?: "new" | "queued" | "dismissed" }): InboxEntry[] {
+export function listInbox(opts?: {
+  status?: "new" | "queued" | "dismissed";
+  category?: "personal" | "work";
+}): InboxEntry[] {
   const status = opts?.status ?? "new";
+  // Inbox rows are owned by a watcher, so the category filter is a JOIN
+  // on youtube_watchers — keeps the inbox in sync with watcher filtering
+  // automatically when the user changes a watcher's category.
+  const where: string[] = ["i.status = ?"];
+  const params: any[] = [status];
+  if (opts?.category) {
+    where.push("w.category = ?");
+    params.push(opts.category);
+  }
   return getDb()
-    .prepare("SELECT * FROM youtube_inbox WHERE status = ? ORDER BY found_at DESC")
-    .all(status) as InboxEntry[];
+    .prepare(`
+      SELECT i.*
+      FROM youtube_inbox i
+      JOIN youtube_watchers w ON w.id = i.watcher_id
+      WHERE ${where.join(" AND ")}
+      ORDER BY i.found_at DESC
+    `)
+    .all(...params) as InboxEntry[];
 }
 
 export function setInboxStatus(watcherId: number, videoId: string, status: "new" | "queued" | "dismissed"): boolean {
@@ -398,6 +432,7 @@ export async function pollWatcher(watcher: Watcher): Promise<{ inserted: number;
           title: hit.title,
           url: `https://www.youtube.com/watch?v=${hit.videoId}`,
           uploadDate: hit.publishedAt?.slice(0, 10).replace(/-/g, "") ?? null,
+          category: watcher.category,
         });
         if (enqueued) queued += 1;
       }

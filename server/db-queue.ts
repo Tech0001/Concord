@@ -44,6 +44,10 @@ export interface QueueEntry {
   ai_summary_model: string | null;
   /** User-toggled star flag. 1 = important / crucial reference; 0 = default. */
   starred: number;
+  /** Personal / work category — denormalized from the parent channel
+   *  so filter queries don't need to JOIN. Updated in lockstep when
+   *  the channel's category changes (see updateChannelCategory). */
+  category: string;
   created_at: string;
   updated_at: string;
 }
@@ -57,6 +61,9 @@ export interface QueueListFilters {
   hasTranscript?: string;
   /** "yes" to limit to starred rows; anything else is no-op. */
   starred?: string;
+  /** "personal" | "work" to filter by category; anything else
+   *  (incl. "both" or missing) is no-op. */
+  category?: string;
   q?: string;
   sort?: string;
 }
@@ -146,14 +153,18 @@ export function enqueueVideo(v: {
   isLive?: boolean;
   isShorts?: boolean;
   uploadDate?: string | null;
+  /** Personal / work category. Falls back to the parent channel's
+   *  category, then to 'personal'. */
+  category?: string;
 }): boolean {
   const d = getDb();
   const existing = d.prepare("SELECT 1 FROM video_queue WHERE video_id = ? LIMIT 1").get(v.videoId);
   if (existing) return false;
 
+  const category = resolveCategoryForChannel(v.category, v.channelId);
   d.prepare(`
-    INSERT INTO video_queue (video_id, channel_id, title, url, duration, is_live, is_shorts, upload_date, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+    INSERT INTO video_queue (video_id, channel_id, title, url, duration, is_live, is_shorts, upload_date, status, category)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
   `).run(
     v.videoId,
     v.channelId,
@@ -163,27 +174,41 @@ export function enqueueVideo(v: {
     v.isLive ? 1 : 0,
     v.isShorts ? 1 : 0,
     v.uploadDate ?? null,
+    category,
   );
   return true;
 }
 
+/** Pick the category for a newly-enqueued video: explicit > parent
+ *  channel > 'personal'. Helps callers that don't know (or care)
+ *  about the channel's setting still end up with a consistent value. */
+function resolveCategoryForChannel(explicit: string | undefined, channelId: string): "personal" | "work" {
+  if (explicit === "personal" || explicit === "work") return explicit;
+  const row = getDb()
+    .prepare("SELECT category FROM channels WHERE id = ?")
+    .get(channelId) as { category?: string } | undefined;
+  return row?.category === "work" ? "work" : "personal";
+}
+
 /** Bulk enqueue many videos. Returns count of newly inserted. */
 export function enqueueVideos(
-  videos: { videoId: string; channelId: string; title: string; url: string; duration?: number | null; isLive?: boolean; isShorts?: boolean; uploadDate?: string | null }[]
+  videos: { videoId: string; channelId: string; title: string; url: string; duration?: number | null; isLive?: boolean; isShorts?: boolean; uploadDate?: string | null; category?: string }[]
 ): number {
   let count = 0;
   const exists = getDb().prepare("SELECT 1 FROM video_queue WHERE video_id = ? LIMIT 1");
   const insert = getDb().prepare(`
-    INSERT OR IGNORE INTO video_queue (video_id, channel_id, title, url, duration, is_live, is_shorts, upload_date, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+    INSERT OR IGNORE INTO video_queue (video_id, channel_id, title, url, duration, is_live, is_shorts, upload_date, status, category)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
   `);
 
   const tx = getDb().transaction(() => {
     for (const v of videos) {
       if (exists.get(v.videoId)) continue;
+      const category = resolveCategoryForChannel(v.category, v.channelId);
       const result = insert.run(
         v.videoId, v.channelId, v.title, v.url,
         v.duration ?? null, v.isLive ? 1 : 0, v.isShorts ? 1 : 0, v.uploadDate ?? null,
+        category,
       );
       if (result.changes > 0) count++;
     }
@@ -252,11 +277,17 @@ export function updateQueueStatus(
   getDb().prepare(`UPDATE video_queue SET ${sets.join(", ")} WHERE video_id = ? AND channel_id = ?`).run(...params);
 }
 
-/** Count by status for a channel (or all). */
-export function countByStatus(channelId?: string): Record<string, number> {
+/** Count by status for a channel (or all). Optionally restrict to a
+ *  single category so the Library status chips match the header
+ *  toggle. */
+export function countByStatus(channelId?: string, category?: string): Record<string, number> {
   let sql = "SELECT status, COUNT(*) as cnt FROM video_queue WHERE is_shorts = 0";
   const params: any[] = [];
   if (channelId) { sql += " AND channel_id = ?"; params.push(channelId); }
+  if (category === "personal" || category === "work") {
+    sql += " AND category = ?";
+    params.push(category);
+  }
   sql += " GROUP BY status";
 
   const rows = getDb().prepare(sql).all(...params) as { status: string; cnt: number }[];
@@ -312,6 +343,10 @@ export function getQueueList(filters: QueueListFilters = {}): QueueListResult {
   if (filters.starred === "yes") {
     where.push("q.starred = 1");
   }
+  if (filters.category === "personal" || filters.category === "work") {
+    where.push("q.category = ?");
+    params.push(filters.category);
+  }
   if (filters.q?.trim()) {
     const like = `%${filters.q.trim()}%`;
     where.push(`(
@@ -342,7 +377,7 @@ export function getQueueList(filters: QueueListFilters = {}): QueueListResult {
     LIMIT ? OFFSET ?
   `).all(...params, limit, offset) as QueueEntry[];
 
-  return { rows, total: totalRow?.count ?? 0, counts: countByStatus() };
+  return { rows, total: totalRow?.count ?? 0, counts: countByStatus(undefined, filters.category) };
 }
 
 function queueOrderSql(sort?: string): string {

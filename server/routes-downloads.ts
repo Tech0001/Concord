@@ -37,6 +37,10 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
     uploadDate?: string | null;
     channelId?: string | null;
     channelName?: string | null;
+    /** Personal / work — passed through to enqueueVideo when the
+     *  download finalizes. Defaults to the matched configured
+     *  channel's category (or 'personal' if no match). */
+    category?: "personal" | "work";
     isComplete: boolean;
   }>();
 
@@ -139,7 +143,7 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
   // the pipeline (transcribe / embed / summarize) can process it.
   app.post("/api/videos/download", async (req, res) => {
     try {
-      const { videoId, formatId, downloadLocation, uploadDate, channelId, channelName } = req.body;
+      const { videoId, formatId, downloadLocation, uploadDate, channelId, channelName, category } = req.body;
       if (!videoId || !formatId) {
         return res.status(400).json({ error: "Video ID and format ID are required" });
       }
@@ -170,6 +174,7 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
         uploadDate: uploadDate || videoInfo.uploadDate || null,
         channelId: channelId || videoInfo.channelId || null,
         channelName: channelName || videoInfo.channelName || null,
+        category: category === "work" ? "work" : category === "personal" ? "personal" : undefined,
         isComplete: false,
       });
 
@@ -254,6 +259,10 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
                 || (download.channelName ? String(download.channelName) : null)
                 || download.channelId
                 || "manual";
+              // Category priority: explicit on the request > matched
+              // configured channel's category > 'personal' fallback
+              // (resolveCategoryForChannel inside enqueueVideo handles the
+               // middle case when category is undefined).
               enqueueVideo({
                 videoId: download.videoId,
                 channelId: dbChannelId,
@@ -263,6 +272,7 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
                 isLive: false,
                 isShorts: false,
                 uploadDate: download.uploadDate || null,
+                category: download.category,
               });
               updateQueueStatus(download.videoId, dbChannelId, {
                 status: "complete",

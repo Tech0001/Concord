@@ -422,6 +422,17 @@ function runMigrations(database: Database.Database) {
   // dedicated filter chip.
   ensureColumn("video_queue", "starred", "INTEGER NOT NULL DEFAULT 0");
 
+  // Personal / work category. A viewing toggle in the header filters
+  // every list (Library, Watchers, Inbox, ...) by category, so the
+  // user can keep work-research and personal-archive views cleanly
+  // separated. Stored values are 'personal' | 'work'; the "both"
+  // toggle state means "no filter". Existing rows default to
+  // 'personal' (back-compat — the personal archive predates this
+  // feature).
+  ensureColumn("channels", "category", "TEXT NOT NULL DEFAULT 'personal'");
+  ensureColumn("video_queue", "category", "TEXT NOT NULL DEFAULT 'personal'");
+  ensureColumn("youtube_watchers", "category", "TEXT NOT NULL DEFAULT 'personal'");
+
   // Per-link handle side ("left" | "right" | "top" | "bottom"). NULL = the
   // Map page falls back to right→left, matching the legacy fixed-side
   // behavior. The user picks sides explicitly by dragging from one handle
