@@ -433,6 +433,47 @@ function runMigrations(database: Database.Database) {
   ensureColumn("video_queue", "category", "TEXT NOT NULL DEFAULT 'personal'");
   ensureColumn("youtube_watchers", "category", "TEXT NOT NULL DEFAULT 'personal'");
 
+  // ---- Markdown docs as a first-class content type ----
+  //
+  // documents rows mirror files under docs.rootFolder. id is derived
+  // from the relative path so it survives content edits (and so
+  // note_anchors can hold a stable doc_id). Renames look like a remove
+  // + insert; that's fine for v1.
+  //
+  // starred + category make docs filterable the same way videos are.
+  // content_hash + mtime_ms power incremental re-indexing — when a
+  // file's hash changes, the indexer re-chunks + re-embeds just that
+  // doc instead of the whole tree.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS documents (
+      id            TEXT PRIMARY KEY,
+      rel_path      TEXT NOT NULL UNIQUE,
+      title         TEXT NOT NULL,
+      starred       INTEGER NOT NULL DEFAULT 0,
+      category      TEXT NOT NULL DEFAULT 'personal',
+      content_hash  TEXT NOT NULL,
+      bytes         INTEGER NOT NULL,
+      mtime_ms      REAL NOT NULL,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_documents_starred ON documents(starred);
+    CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
+  `);
+
+  // note_anchors gains optional doc-source columns so a single anchor
+  // can point at either a video timestamp or a doc character range.
+  // The video_id/channel_id columns were NOT NULL in the original
+  // schema; we relax them below so a doc-only anchor is legal.
+  ensureColumn("note_anchors", "document_id", "TEXT REFERENCES documents(id) ON DELETE CASCADE");
+  ensureColumn("note_anchors", "doc_start_char", "INTEGER");
+  ensureColumn("note_anchors", "doc_end_char", "INTEGER");
+
+  // Recreate note_anchors with nullable video_id/channel_id if the
+  // original NOT NULL is still in place. Detect by reading
+  // pragma_table_info — if either column reports notnull=1, rebuild.
+  relaxNoteAnchorVideoNullability(database);
+
   // Per-link handle side ("left" | "right" | "top" | "bottom"). NULL = the
   // Map page falls back to right→left, matching the legacy fixed-side
   // behavior. The user picks sides explicitly by dragging from one handle
@@ -656,6 +697,53 @@ function relaxClipAnchorNotNull(database: Database.Database): void {
       `);
     })();
     console.log("[db] transcript_clips relaxed — standalone notes are now allowed.");
+  } finally {
+    database.pragma("foreign_keys = ON");
+  }
+}
+
+/** Mirror of relaxClipAnchorNotNull for note_anchors — original schema
+ *  marked video_id + channel_id as NOT NULL, but anchors now also point
+ *  at documents (mutually exclusive per row). Rebuild the table once
+ *  to relax both columns; idempotent thereafter. */
+function relaxNoteAnchorVideoNullability(database: Database.Database): void {
+  const cols = database.prepare(`PRAGMA table_info(note_anchors)`).all() as Array<{ name: string; notnull: number }>;
+  const videoIdCol = cols.find((c) => c.name === "video_id");
+  if (!videoIdCol || videoIdCol.notnull === 0) return;
+
+  console.log("[db] Relaxing note_anchors NOT NULL constraints (enables doc-anchored notes)…");
+  database.pragma("foreign_keys = OFF");
+  try {
+    database.transaction(() => {
+      database.exec(`
+        CREATE TABLE note_anchors_new (
+          clip_id        TEXT NOT NULL REFERENCES transcript_clips(id) ON DELETE CASCADE,
+          ordinal        INTEGER NOT NULL,
+          video_id       TEXT,
+          channel_id     TEXT,
+          start_seconds  REAL,
+          end_seconds    REAL,
+          excerpt        TEXT,
+          document_id    TEXT REFERENCES documents(id) ON DELETE CASCADE,
+          doc_start_char INTEGER,
+          doc_end_char   INTEGER,
+          created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (clip_id, ordinal)
+        );
+        INSERT INTO note_anchors_new
+          (clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds,
+           excerpt, document_id, doc_start_char, doc_end_char, created_at)
+        SELECT
+          clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds,
+          excerpt, document_id, doc_start_char, doc_end_char, created_at
+        FROM note_anchors;
+        DROP TABLE note_anchors;
+        ALTER TABLE note_anchors_new RENAME TO note_anchors;
+        CREATE INDEX IF NOT EXISTS idx_note_anchors_video ON note_anchors(video_id, channel_id);
+        CREATE INDEX IF NOT EXISTS idx_note_anchors_document ON note_anchors(document_id);
+      `);
+    })();
+    console.log("[db] note_anchors relaxed — doc-anchored notes are now allowed.");
   } finally {
     database.pragma("foreign_keys = ON");
   }

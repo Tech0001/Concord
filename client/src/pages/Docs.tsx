@@ -5,9 +5,11 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, RefreshCw, Search, Star } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import FolderInput from "@/components/FolderInput";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useCategory } from "@/hooks/use-category";
 
 interface TreeNode {
   name: string;
@@ -15,6 +17,19 @@ interface TreeNode {
   type: "file" | "dir";
   children?: TreeNode[];
   mtimeMs?: number;
+  /** Indexer-set fields — present on file nodes after the docs
+   *  table has been populated. */
+  documentId?: string;
+  starred?: number;
+  category?: string;
+}
+
+interface DocumentMeta {
+  id: string;
+  rel_path: string;
+  title: string;
+  starred: number;
+  category: string;
 }
 
 /**
@@ -25,11 +40,13 @@ interface TreeNode {
  */
 export default function Docs() {
   const { toast } = useToast();
+  const { serverCategory } = useCategory();
   const [rootFolder, setRootFolder] = useState("");
   const [draftFolder, setDraftFolder] = useState("");
   const [editing, setEditing] = useState(false);
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<DocumentMeta | null>(null);
   const [content, setContent] = useState<string>("");
   const [loadingTree, setLoadingTree] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
@@ -49,7 +66,12 @@ export default function Docs() {
   const loadTree = useCallback(async () => {
     setLoadingTree(true);
     try {
-      const r = await apiRequest("GET", "/api/docs/tree");
+      const params = new URLSearchParams();
+      if (serverCategory) params.set("category", serverCategory);
+      const url = params.toString()
+        ? `/api/docs/tree?${params.toString()}`
+        : "/api/docs/tree";
+      const r = await apiRequest("GET", url);
       const data = await r.json() as { tree?: TreeNode[]; rootFolder?: string; error?: string };
       if (data.error) throw new Error(data.error);
       setTree(data.tree ?? []);
@@ -59,7 +81,16 @@ export default function Docs() {
     } finally {
       setLoadingTree(false);
     }
-  }, [toast]);
+  }, [toast, serverCategory]);
+
+  const refresh = useCallback(async () => {
+    try {
+      await apiRequest("POST", "/api/docs/reindex", {});
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Reindex failed", description: err.message });
+    }
+    void loadTree();
+  }, [loadTree, toast]);
 
   useEffect(() => { void loadConfig(); }, [loadConfig]);
   useEffect(() => { if (rootFolder) void loadTree(); }, [rootFolder, loadTree]);
@@ -81,19 +112,58 @@ export default function Docs() {
     setSelectedPath(filePath);
     setLoadingFile(true);
     try {
-      const r = await apiRequest("GET", `/api/docs/file?path=${encodeURIComponent(filePath)}`);
-      if (!r.ok) {
-        const data = await r.json().catch(() => ({}));
-        throw new Error(data.error || `HTTP ${r.status}`);
+      // Fetch content + indexed doc metadata in parallel — the
+      // header needs the document_id + star/category to render
+      // the controls.
+      const [fileRes, metaRes] = await Promise.all([
+        apiRequest("GET", `/api/docs/file?path=${encodeURIComponent(filePath)}`),
+        apiRequest("GET", `/api/docs/by-path?path=${encodeURIComponent(filePath)}`),
+      ]);
+      if (!fileRes.ok) {
+        const data = await fileRes.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${fileRes.status}`);
       }
-      setContent(await r.text());
+      setContent(await fileRes.text());
+      if (metaRes.ok) {
+        const m = await metaRes.json() as { document?: DocumentMeta };
+        setSelectedDoc(m.document ?? null);
+      } else {
+        setSelectedDoc(null);
+      }
     } catch (err: any) {
       setContent("");
+      setSelectedDoc(null);
       toast({ variant: "destructive", title: "Failed to open file", description: err.message });
     } finally {
       setLoadingFile(false);
     }
   }, [toast]);
+
+  // Star + category mutators — optimistic update on the selected doc
+  // + the tree node, then refresh tree to pick up filter changes.
+  const toggleStar = async () => {
+    if (!selectedDoc) return;
+    const next = selectedDoc.starred ? 0 : 1;
+    setSelectedDoc({ ...selectedDoc, starred: next });
+    try {
+      await apiRequest("PATCH", `/api/docs/${selectedDoc.id}/starred`, { starred: !!next });
+      void loadTree();
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Star failed", description: err.message });
+      setSelectedDoc(selectedDoc); // revert
+    }
+  };
+
+  const setDocCategory = async (category: "personal" | "work") => {
+    if (!selectedDoc || selectedDoc.category === category) return;
+    setSelectedDoc({ ...selectedDoc, category });
+    try {
+      await apiRequest("PATCH", `/api/docs/${selectedDoc.id}/category`, { category });
+      void loadTree();
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Category change failed", description: err.message });
+    }
+  };
 
   // Flatten tree for the filter input — when filter is non-empty,
   // show a flat list of matching files instead of the nested tree.
@@ -149,7 +219,7 @@ export default function Docs() {
                   {rootFolder ? "Change folder" : "Set folder"}
                 </Button>
               )}
-              <Button size="sm" variant="ghost" onClick={() => void loadTree()} disabled={loadingTree || !rootFolder}>
+              <Button size="sm" variant="ghost" onClick={() => void refresh()} disabled={loadingTree || !rootFolder}>
                 <RefreshCw className={cn("h-3.5 w-3.5", loadingTree && "animate-spin")} />
                 Refresh
               </Button>
@@ -206,7 +276,35 @@ export default function Docs() {
                 </div>
               ) : (
                 <>
-                  <div className="mb-3 text-xs text-muted-foreground font-mono break-all">{selectedPath}</div>
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    {selectedDoc && (
+                      <>
+                        <button
+                          type="button"
+                          aria-label={selectedDoc.starred ? "Unstar" : "Star"}
+                          title={selectedDoc.starred ? "Starred" : "Star this doc"}
+                          onClick={toggleStar}
+                          className={cn(
+                            "p-1 rounded hover:bg-secondary transition-colors",
+                            selectedDoc.starred ? "text-amber-500" : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          <Star className={cn("h-4 w-4", selectedDoc.starred && "fill-current")} />
+                        </button>
+                        <Select
+                          value={selectedDoc.category}
+                          onValueChange={(v) => setDocCategory(v as "personal" | "work")}
+                        >
+                          <SelectTrigger className="h-7 w-[110px] text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="personal">Personal</SelectItem>
+                            <SelectItem value="work">Work</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </>
+                    )}
+                    <span className="text-xs text-muted-foreground font-mono break-all">{selectedPath}</span>
+                  </div>
                   <Markdown source={content} />
                 </>
               )}
@@ -308,7 +406,8 @@ function FileRow({
       >
         <span className="w-3 inline-block" />
         <FileText className="h-3 w-3 text-muted-foreground" />
-        <span className="truncate">{showFullPath ? node.path : node.name}</span>
+        <span className="truncate flex-1">{showFullPath ? node.path : node.name}</span>
+        {node.starred ? <Star className="h-3 w-3 text-amber-500 fill-current shrink-0" /> : null}
       </button>
     </li>
   );
