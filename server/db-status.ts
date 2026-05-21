@@ -1,6 +1,7 @@
 import {
   getDb,
   getChannels,
+  getConfigValues,
   getTranscriptSearchIndexStats,
   getEmbeddingStats,
 } from "./db";
@@ -59,6 +60,22 @@ export interface ArchiveStatus {
     noise: number;
     videosWithDiarization: number;
     unidentifiedClusters: number;
+  };
+  /** Markdown docs index — null when the docs folder isn't configured.
+   *  totalDocs + starredDocs come from the documents table; embedded*
+   *  fields count distinct documents that have at least one chunk in
+   *  vec_docs for the active model. */
+  docs: {
+    rootFolder: string | null;
+    totalDocs: number;
+    starredDocs: number;
+    docsByCategory: { category: string; count: number }[];
+    embedding: {
+      activeModel: string | null;
+      models: { model: string; docs: number; chunks: number }[];
+      activeModelCovered: number;
+      activeModelTotal: number;
+    };
   };
   channels: ChannelRollup[];
   recentFailures: {
@@ -221,6 +238,26 @@ export function getArchiveStatus(activeEmbedModel: string | null): ArchiveStatus
     ORDER BY updated_at DESC LIMIT 10
   `).all() as { video_id: string; channel_id: string; title: string; status: string; error: string | null; updated_at: string }[];
 
+  // ---- Docs index snapshot ----
+  // Cheap aggregates over documents + vec_docs. Per-model rollups
+  // mirror the videos-side embeddings shape so the UI can render
+  // both with the same component.
+  const docsRoot = getConfigValues()["docs.rootFolder"] || null;
+  const totalDocsRow = d.prepare("SELECT COUNT(*) AS c FROM documents").get() as { c: number };
+  const starredDocsRow = d.prepare("SELECT COUNT(*) AS c FROM documents WHERE starred = 1").get() as { c: number };
+  const docsByCategoryRows = d.prepare(
+    "SELECT category, COUNT(*) AS count FROM documents GROUP BY category ORDER BY count DESC"
+  ).all() as { category: string; count: number }[];
+  const docEmbedRows = d.prepare(`
+    SELECT model, COUNT(DISTINCT document_id) AS docs, COUNT(*) AS chunks
+    FROM vec_docs GROUP BY model
+  `).all() as { model: string; docs: number; chunks: number }[];
+  const activeDocEmbedRow = activeEmbedModel
+    ? d.prepare(
+        "SELECT COUNT(DISTINCT document_id) AS c FROM vec_docs WHERE model = ?"
+      ).get(activeEmbedModel) as { c: number } | undefined
+    : undefined;
+
   return {
     archive: {
       channelCount: channels.length,
@@ -252,6 +289,18 @@ export function getArchiveStatus(activeEmbedModel: string | null): ArchiveStatus
       noise: speakerCounts.noise,
       videosWithDiarization: diarizedCovered,
       unidentifiedClusters,
+    },
+    docs: {
+      rootFolder: docsRoot,
+      totalDocs: totalDocsRow.c,
+      starredDocs: starredDocsRow.c,
+      docsByCategory: docsByCategoryRows,
+      embedding: {
+        activeModel: activeEmbedModel,
+        models: docEmbedRows,
+        activeModelCovered: activeDocEmbedRow?.c ?? 0,
+        activeModelTotal: totalDocsRow.c,
+      },
     },
     channels: channelRollups,
     recentFailures: failureRows.map((r) => ({

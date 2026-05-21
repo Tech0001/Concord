@@ -88,6 +88,18 @@ interface StatusSnapshot {
     videosWithDiarization: number;
     unidentifiedClusters: number;
   };
+  docs: {
+    rootFolder: string | null;
+    totalDocs: number;
+    starredDocs: number;
+    docsByCategory: { category: string; count: number }[];
+    embedding: {
+      activeModel: string | null;
+      models: { model: string; docs: number; chunks: number }[];
+      activeModelCovered: number;
+      activeModelTotal: number;
+    };
+  };
   channels: ChannelRollup[];
   recentFailures: {
     videoId: string;
@@ -297,7 +309,7 @@ export default function Status() {
 
   if (!snap) return null;
 
-  const { pipeline, archive, coverage, speakers, channels, recentFailures } = snap;
+  const { pipeline, archive, coverage, speakers, docs, channels, recentFailures } = snap;
   const inflightLabel = archive.inflightVideos > 0 ? `${archive.inflightVideos} in flight · ` : "";
 
   return (
@@ -394,6 +406,56 @@ export default function Status() {
           cta={{ label: "Open Speakers", href: "/speakers" }}
         />
       </div>
+
+      {/* Docs index + embeddings */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+        <CoverageCard
+          title="Docs indexed"
+          icon={FileText}
+          covered={docs.totalDocs}
+          total={docs.totalDocs}
+          totalLabel={docs.rootFolder ? "files in folder" : "no folder configured"}
+          hint={
+            docs.rootFolder
+              ? `${fmtNumber(docs.starredDocs)} starred · ${docs.docsByCategory.map((c) => `${c.count} ${c.category}`).join(" · ") || "uncategorized"}`
+              : "Set a docs folder on the Docs page to start indexing."
+          }
+          cta={{ label: "Open Docs", href: "/docs" }}
+        />
+        <CoverageCard
+          title={`Docs embedded${docs.embedding.activeModel ? ` · ${docs.embedding.activeModel}` : ""}`}
+          icon={Sparkles}
+          covered={docs.embedding.activeModelCovered}
+          total={docs.embedding.activeModelTotal}
+          hint={
+            docs.embedding.activeModel
+              ? "Use the Embed-all button on the Docs page to backfill."
+              : "No embedding model configured — set one on the AI page."
+          }
+          cta={{ label: "Open Docs", href: "/docs" }}
+        />
+      </div>
+
+      {/* Doc embedding model breakdown (when more than one model is
+          present — same scenario as the videos-side one below). */}
+      {docs.embedding.models.length > 1 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <FileText className="h-4 w-4 text-muted-foreground" />
+              Doc embedding models ({docs.embedding.models.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 pt-0 text-xs">
+            {docs.embedding.models.map((m) => (
+              <div key={m.model} className="flex items-baseline justify-between rounded border bg-muted/30 px-2 py-1">
+                <code className="font-mono">{m.model}{m.model === docs.embedding.activeModel && <span className="ml-2 text-[10px] uppercase text-emerald-600">active</span>}</code>
+                <span className="text-muted-foreground">{fmtNumber(m.docs)} docs · {fmtNumber(m.chunks)} chunks</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Embeddings model breakdown (when more than one) */}
       {coverage.embeddings.models.length > 1 && (
