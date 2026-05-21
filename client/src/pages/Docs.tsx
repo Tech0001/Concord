@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, NotebookPen, RefreshCw, Search, Star } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, NotebookPen, RefreshCw, Search, Sparkles, Star } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import FolderInput from "@/components/FolderInput";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -91,6 +91,24 @@ export default function Docs() {
     }
     void loadTree();
   }, [loadTree, toast]);
+
+  const [embedding, setEmbedding] = useState(false);
+  const backfillEmbeddings = useCallback(async (overwrite: boolean) => {
+    if (embedding) return;
+    setEmbedding(true);
+    try {
+      const r = await apiRequest("POST", "/api/docs/embed-all", { overwrite });
+      const data = await r.json() as { total: number; embedded: number; skipped: number; failed: number };
+      toast({
+        title: "Embedding complete",
+        description: `${data.embedded} chunks across ${data.total} docs (${data.skipped} skipped, ${data.failed} failed)`,
+      });
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Embed failed", description: err.message });
+    } finally {
+      setEmbedding(false);
+    }
+  }, [embedding, toast]);
 
   useEffect(() => { void loadConfig(); }, [loadConfig]);
   useEffect(() => { if (rootFolder) void loadTree(); }, [rootFolder, loadTree]);
@@ -279,6 +297,18 @@ export default function Docs() {
               <Button size="sm" variant="ghost" onClick={() => void refresh()} disabled={loadingTree || !rootFolder}>
                 <RefreshCw className={cn("h-3.5 w-3.5", loadingTree && "animate-spin")} />
                 Refresh
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void backfillEmbeddings(false)}
+                disabled={embedding || !rootFolder}
+                title="Embed every doc that isn't already embedded with the current model. Re-embeds happen automatically on file change; this is for the one-time backfill of existing files."
+              >
+                {embedding
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Sparkles className="h-3.5 w-3.5" />}
+                Embed all
               </Button>
             </div>
           </div>

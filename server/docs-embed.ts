@@ -36,10 +36,22 @@ export interface DocChunk {
   endChar: number;
 }
 
+/** Files saved by the Excalidraw VS Code plugin embed a giant base64
+ *  scene blob between `==⚠ Switch to EXCALIDRAW VIEW` and the next
+ *  `%%`. The blob is binary noise to an embedder — strip it before
+ *  chunking so we don't waste tokens (and cosine space) on it. The
+ *  viewer already does the same for rendering. */
+function stripExcalidrawScene(source: string): string {
+  const sceneStart = source.indexOf("==⚠ Switch to EXCALIDRAW VIEW");
+  if (sceneStart === -1) return source;
+  return source.slice(0, sceneStart).trimEnd() + "\n";
+}
+
 /** Split source markdown into ordered, addressable chunks. Headings
  *  are kept WITH the body they head (so a chunk's first line is its
  *  heading when applicable). */
-export function chunkMarkdown(source: string): DocChunk[] {
+export function chunkMarkdown(rawSource: string): DocChunk[] {
+  const source = stripExcalidrawScene(rawSource);
   const headingPath: string[] = [];
   const lines = source.split("\n");
   // Pass 1: section boundaries (any H1/H2/H3 line starts a new section).
