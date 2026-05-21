@@ -27,6 +27,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { ChevronDown, LayoutGrid, Link2, Loader2, Map as MapIcon, RefreshCw, Search, Spline, StickyNote, Trash2, X, Zap } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
+import { useCategory } from "@/hooks/use-category";
 import { ArcDiagram } from "./map/ArcDiagram";
 import { ClipInspector } from "./map/ClipInspector";
 import { ClipNode } from "./map/ClipNode";
@@ -90,6 +91,7 @@ export default function MapPage() {
   const reconnectEdgeRef = useRef<Edge | null>(null);
   const reconnectSucceededRef = useRef(false);
   const { toast } = useToast();
+  const { serverCategory } = useCategory();
 
   const selectedEdges = useMemo(() => {
     if (!selectedClip) return [];
@@ -355,7 +357,7 @@ export default function MapPage() {
     setError("");
     try {
       const [graphRes, layoutRes] = await Promise.all([
-        apiRequest("GET", buildGraphUrl({ q: appliedQuery, channelId, tags: tagFilter, edgeTypes, limit })),
+        apiRequest("GET", buildGraphUrl({ q: appliedQuery, channelId, tags: tagFilter, edgeTypes, limit, category: serverCategory })),
         mode === "arc"
           ? Promise.resolve(null)
           : apiRequest("GET", `/api/clips/graph/layout?mapKey=${encodeURIComponent(mapKey)}&t=${Date.now()}`),
@@ -401,7 +403,7 @@ export default function MapPage() {
 
   useEffect(() => {
     loadGraph();
-  }, [channelId, edgeTypesKey, limit, mapKey, tagFilterKey]);
+  }, [channelId, edgeTypesKey, limit, mapKey, tagFilterKey, serverCategory]);
 
   useEffect(() => {
     if (mode === "video") {

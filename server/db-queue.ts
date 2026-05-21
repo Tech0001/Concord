@@ -85,6 +85,10 @@ export interface TranscriptSearchFilters {
    *  the local "S0"/"S1" labels to the global speaker via
    *  video_speaker_assignments. */
   speakerId?: string;
+  /** Personal / work scope — passed straight through to the
+   *  video_queue.category column. Anything else (missing, "both",
+   *  garbage) is no-op. */
+  category?: string;
   limit?: number;
 }
 
@@ -529,6 +533,10 @@ export function searchTranscriptSegments(query: string, filters: TranscriptSearc
   if (filters.dateTo) {
     where.push("q.upload_date <= ?");
     params.push(normalizeDateFilter(filters.dateTo));
+  }
+  if (filters.category === "personal" || filters.category === "work") {
+    where.push("q.category = ?");
+    params.push(filters.category);
   }
 
   // Speaker filter: only return segments whose (video_id, channel_id,

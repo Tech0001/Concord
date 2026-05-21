@@ -12,6 +12,7 @@ import { registerSystemRoutes } from "./routes-system";
 import { registerTranscriptionSetupRoutes } from "./routes-transcription-setup";
 import { registerVoiceNoteRoutes } from "./routes-voice-notes";
 import { registerYouTubeRoutes } from "./routes-youtube";
+import { registerDocsRoutes } from "./routes-docs";
 
 /**
  * Top-level HTTP wire-up. Every actual endpoint lives in a sibling
@@ -75,6 +76,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // YouTube Data API v3 plus saved-search watchers that poll on a
   // configurable cadence. Registered in routes-youtube.ts.
   registerYouTubeRoutes(app);
+
+  // ---- Markdown docs viewer ----
+  // /api/docs/{config, tree, file} — read-only browser for a user-
+  // configured root of .md files. No DB writes; tree is computed on
+  // each request (cheap for the dozens-to-hundreds scale).
+  registerDocsRoutes(app);
 
   // ---- Pipeline lifecycle + channel management ----
   // /api/pipeline/{start,stop,check-now,process,events,transcripts,

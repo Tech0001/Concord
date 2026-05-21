@@ -9,6 +9,7 @@ import { TagChip, TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useCategory } from "@/hooks/use-category";
 import {
   Calendar,
   ChevronDown,
@@ -150,6 +151,7 @@ export default function Clips() {
   const [linkPickerSearching, setLinkPickerSearching] = useState(false);
   const [linkPickerSaving, setLinkPickerSaving] = useState(false);
   const { toast } = useToast();
+  const { serverCategory } = useCategory();
 
   const linkPickerSource = useMemo(
     () => clips.find(c => c.id === linkPickerSourceId) || null,
@@ -199,6 +201,7 @@ export default function Clips() {
         t: String(Date.now()),
       });
       if (tagFilter.length) params.set("tags", tagFilter.join(","));
+      if (serverCategory) params.set("category", serverCategory);
 
       const [clipsRes, configRes] = await Promise.all([
         apiRequest("GET", `/api/clips?${params.toString()}`),
@@ -219,7 +222,7 @@ export default function Clips() {
 
   useEffect(() => {
     loadData();
-  }, [channelId, tagFilter]);
+  }, [channelId, tagFilter, serverCategory]);
 
   const deleteClip = async (clip: ClipEntry) => {
     try {

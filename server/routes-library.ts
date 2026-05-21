@@ -152,6 +152,7 @@ export function registerLibraryRoutes(app: Express, pipeline: Pipeline): void {
         dateTo: req.query.dateTo ? String(req.query.dateTo) : undefined,
         tags,
         speakerId: speakerIdParam,
+        category: req.query.category ? String(req.query.category) : undefined,
         limit: req.query.limit ? Number(req.query.limit) : 100,
       });
       res.json({ results, index: getTranscriptSearchIndexStats() });

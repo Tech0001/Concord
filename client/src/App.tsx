@@ -31,6 +31,7 @@ import Settings from "@/pages/Settings";
 import TranscriptionSetup from "@/pages/TranscriptionSetup";
 import Discover from "@/pages/Discover";
 import Watchers from "@/pages/Watchers";
+import Docs from "@/pages/Docs";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
@@ -38,6 +39,7 @@ import {
   Binoculars,
   Compass,
   Database,
+  FileText,
   Gauge,
   Map as MapIcon,
   Menu,
@@ -69,6 +71,7 @@ const NAV_GROUPS = [
       { href: "/watchers",    label: "Watchers",    icon: Binoculars },
       { href: "/search",      label: "Transcripts", icon: SearchIcon },
       { href: "/notes",       label: "Notes",       icon: NotebookText },
+      { href: "/docs",        label: "Docs",        icon: FileText },
     ],
   },
   {
@@ -362,6 +365,7 @@ function Router() {
       <Route path="/library" component={Library} />
       <Route path="/discover" component={Discover} />
       <Route path="/watchers" component={Watchers} />
+      <Route path="/docs" component={Docs} />
       <Route path="/search" component={Search} />
       <Route path="/notes" component={Clips} />
       <Route path="/clips" component={Clips} />

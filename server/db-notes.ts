@@ -436,6 +436,9 @@ export function listTranscriptClips(filters: {
   q?: string;
   channelId?: string;
   tags?: string[];
+  /** Personal / work scope — passed through to the parent video's
+   *  category column via the LEFT JOIN below. */
+  category?: string;
   limit?: number;
   offset?: number;
 } = {}): { rows: TranscriptClip[]; total: number } {
@@ -445,6 +448,13 @@ export function listTranscriptClips(filters: {
   if (filters.channelId && filters.channelId !== "all") {
     where.push("clip.channel_id = ?");
     params.push(filters.channelId);
+  }
+  if (filters.category === "personal" || filters.category === "work") {
+    // Standalone notes have no q row (NULL video_id); we want them in
+    // BOTH views since they aren't tied to a video category. The
+    // OR-IS-NULL keeps them visible regardless of the toggle.
+    where.push("(q.category = ? OR q.category IS NULL)");
+    params.push(filters.category);
   }
   if (filters.q?.trim()) {
     const like = `%${filters.q.trim()}%`;
@@ -854,6 +864,7 @@ export function getClipGraph(filters: {
   channelId?: string;
   tags?: string[];
   edgeTypes?: GraphEdgeType[];
+  category?: string;
   limit?: number;
 } = {}): ClipGraph {
   const limit = Math.min(Math.max(Math.floor(filters.limit ?? 150), 1), 500);
@@ -866,6 +877,7 @@ export function getClipGraph(filters: {
     q: filters.q,
     channelId: filters.channelId,
     tags: filters.tags,
+    category: filters.category,
     limit,
     offset: 0,
   });

@@ -8,6 +8,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { TagPicker } from "@/components/TagPicker";
 import { useToast } from "@/hooks/use-toast";
+import { useCategory } from "@/hooks/use-category";
 import { cn } from "@/lib/utils";
 import {
   ArrowUp,
@@ -150,6 +151,7 @@ function newConversationStub(): ConversationDetail {
 
 export default function AI() {
   const { toast } = useToast();
+  const { serverCategory } = useCategory();
 
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [active, setActive] = useState<ConversationDetail>(newConversationStub());
@@ -261,6 +263,7 @@ export default function AI() {
           question,
           conversationId: active.id || undefined,
           channelIds: channelFilter === "all" ? undefined : [channelFilter],
+          category: serverCategory || undefined,
         }),
       });
 

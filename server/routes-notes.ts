@@ -56,6 +56,7 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
         q: req.query.q ? String(req.query.q) : "",
         channelId: String(req.query.channelId || "all"),
         tags,
+        category: req.query.category ? String(req.query.category) : undefined,
         limit: Number.isFinite(requestedLimit) ? requestedLimit : 100,
         offset: Number.isFinite(requestedOffset) ? requestedOffset : 0,
       });
@@ -82,6 +83,7 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
         channelId: req.query.channelId ? String(req.query.channelId) : undefined,
         tags,
         edgeTypes: edgeTypes.length ? edgeTypes : undefined,
+        category: req.query.category ? String(req.query.category) : undefined,
         limit: Number.isFinite(requestedLimit) ? requestedLimit : undefined,
       }));
     } catch (error) {

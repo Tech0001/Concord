@@ -76,6 +76,9 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
       : undefined;
     const topK = req.body?.topK ? Number(req.body.topK) : undefined;
     const perVideoCap = req.body?.perVideoCap ? Number(req.body.perVideoCap) : undefined;
+    const category = req.body?.category && (req.body.category === "personal" || req.body.category === "work")
+      ? req.body.category
+      : undefined;
 
     // History for multi-turn — pass last 4 turns (2 exchanges) verbatim.
     let history: { role: "user" | "assistant"; content: string }[] = [];
@@ -130,6 +133,7 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
         channelIds,
         topK,
         perVideoCap,
+        category,
         chatModel: cfg.chatModel,
         embeddingModel: cfg.embeddingModel,
         signal: abortCtl.signal,

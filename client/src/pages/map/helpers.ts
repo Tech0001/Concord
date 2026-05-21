@@ -74,6 +74,7 @@ export function buildGraphUrl(params: {
   tags: string[];
   edgeTypes: string[];
   limit: number;
+  category?: "" | "personal" | "work";
 }): string {
   const search = new URLSearchParams({
     limit: String(params.limit),
@@ -83,6 +84,7 @@ export function buildGraphUrl(params: {
   });
   if (params.q.trim()) search.set("q", params.q.trim());
   if (params.tags.length) search.set("tags", params.tags.join(","));
+  if (params.category) search.set("category", params.category);
   return `/api/clips/graph?${search.toString()}`;
 }
 

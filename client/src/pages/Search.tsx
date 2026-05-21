@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { useToast } from "@/hooks/use-toast";
+import { useCategory } from "@/hooks/use-category";
 import { apiRequest } from "@/lib/queryClient";
 import { Calendar, ChevronDown, Clock, DatabaseZap, FileText, Filter, Loader2, Play, Radio, Search as SearchIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -106,6 +107,7 @@ export default function TranscriptSearch() {
   const [drawerSegmentIndex, setDrawerSegmentIndex] = useState<number | undefined>();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { toast } = useToast();
+  const { serverCategory } = useCategory();
 
   const resultCountByVideo = useMemo(() => {
     return new Set(results.map(result => `${result.channel_id}:${result.video_id}`)).size;
@@ -175,6 +177,7 @@ export default function TranscriptSearch() {
             dateTo: dateTo ? dateTo.replaceAll("-", "") : undefined,
             tags: tagFilter,
             speakerId: speakerFilter === "all" ? undefined : speakerFilter,
+            category: serverCategory || undefined,
           },
         });
         const data = await response.json() as { results: TranscriptSearchResult[] };
@@ -189,6 +192,7 @@ export default function TranscriptSearch() {
           dateTo: dateTo.replaceAll("-", ""),
           tags: tagFilter.join(","),
           speakerId: speakerFilter === "all" ? "" : speakerFilter,
+          category: serverCategory,
           limit: "200",
           t: String(Date.now()),
         }));

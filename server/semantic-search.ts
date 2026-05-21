@@ -72,12 +72,14 @@ interface VideoMetaRow {
   video_path: string | null;
   md_path: string | null;
   word_count: number;
+  category: string;
 }
 
 function loadVideoMeta(): Map<string, VideoMetaRow> {
   const rows = getDb().prepare(`
     SELECT q.video_id, q.channel_id, c.name AS channel_name, q.title, q.url,
-           q.upload_date, q.status, q.is_live, q.video_path, q.md_path, q.word_count
+           q.upload_date, q.status, q.is_live, q.video_path, q.md_path, q.word_count,
+           q.category
     FROM video_queue q
     LEFT JOIN channels c ON c.id = q.channel_id
   `).all() as VideoMetaRow[];
@@ -176,6 +178,7 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
     if (filters.isLive !== undefined && m.is_live !== (filters.isLive ? 1 : 0)) continue;
     if (dateFrom && (!m.upload_date || m.upload_date < dateFrom)) continue;
     if (dateTo && (!m.upload_date || m.upload_date > dateTo)) continue;
+    if ((filters.category === "personal" || filters.category === "work") && m.category !== filters.category) continue;
     if (tagPassFn && !tagPassFn(m.video_id, m.channel_id)) continue;
 
     // L2 distance d, unit-norm vectors: cos_sim = 1 − d²/2. Score is in

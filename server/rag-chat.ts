@@ -24,6 +24,10 @@ export interface AskArchiveArgs {
   history?: Pick<PersistedChatMessage, "role" | "content">[];
   /** When set, restrict retrieval to these channels. */
   channelIds?: string[];
+  /** Personal / work scope — narrows retrieval to videos in the
+   *  matching category. Passed through to both semantic + FTS
+   *  candidate searches. */
+  category?: string;
   /** How many segments to retrieve. Default 18, capped at 50. */
   topK?: number;
   /** Cap segments per video so one source doesn't dominate the context. */
@@ -180,10 +184,16 @@ function rankFuse(
     .map((e) => e.row);
 }
 
-function ftsCandidates(query: string, channelIds: string[] | undefined, limit: number): SemanticSearchResult[] {
+function ftsCandidates(
+  query: string,
+  channelIds: string[] | undefined,
+  limit: number,
+  category?: string,
+): SemanticSearchResult[] {
   const rows = searchTranscriptSegments(query, {
     limit,
     channelId: channelIds && channelIds.length === 1 ? channelIds[0] : undefined,
+    category,
   });
   const allowed = channelIds && channelIds.length > 1 ? new Set(channelIds) : null;
   return rows
@@ -216,9 +226,10 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
       model: args.embeddingModel || "",
       limit: topK * 2,
       minScore: 0.3,
-      filters: args.channelIds && args.channelIds.length === 1
-        ? { channelId: args.channelIds[0] }
-        : undefined,
+      filters: {
+        ...(args.channelIds && args.channelIds.length === 1 ? { channelId: args.channelIds[0] } : {}),
+        ...(args.category ? { category: args.category } : {}),
+      },
     });
     semanticCandidates = search.results;
   } catch (err) {
@@ -237,7 +248,7 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
   // is missing or the query has no parseable terms, fall back to semantic-only.
   let ftsRows: SemanticSearchResult[] = [];
   try {
-    ftsRows = ftsCandidates(retrievalQuery, args.channelIds, topK * 2);
+    ftsRows = ftsCandidates(retrievalQuery, args.channelIds, topK * 2, args.category);
   } catch {
     ftsRows = [];
   }
