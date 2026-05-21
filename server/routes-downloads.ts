@@ -47,12 +47,13 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
   const tempDir = path.join(process.cwd(), "temp");
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-  // 15-minute scheduled cleanup. Anything older than 30 minutes that
-  // isn't tracked as an active download gets unlinked. Skipping active
+  // Daily scheduled cleanup. Anything older than 30 minutes that isn't
+  // tracked as an active download gets unlinked. Skipping active
   // downloads matters because a long video can sit at 95% for several
-  // minutes while ffmpeg merges streams.
+  // minutes while ffmpeg merges streams. Daily cadence is plenty —
+  // successful downloads clean their own temp file on move; this loop
+  // only catches orphans from crashed/abandoned downloads.
   const cleanupTempFiles = () => {
-    console.log("Running scheduled temp directory cleanup...");
     try {
       const files = fs.readdirSync(tempDir);
       const activeFilePaths = new Set<string>();
@@ -62,10 +63,7 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
       let totalSize = 0;
       for (const file of files) {
         const filePath = path.join(tempDir, file);
-        if (activeFilePaths.has(filePath)) {
-          console.log(`Skipping active download: ${file}`);
-          continue;
-        }
+        if (activeFilePaths.has(filePath)) continue;
         try {
           const stats = fs.statSync(filePath);
           const fileAge = Date.now() - stats.mtimeMs;
@@ -73,24 +71,24 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
             totalSize += stats.size;
             fs.unlinkSync(filePath);
             deletedCount++;
-            console.log(`Deleted old temp file: ${file} (${Math.round(stats.size / 1024)} KB, ${Math.round(fileAge / 60000)} minutes old)`);
+            console.log(`[temp] Removed ${file} (${Math.round(stats.size / 1024)} KB, ${Math.round(fileAge / 60000)} min old)`);
           }
         } catch (error) {
-          console.error(`Error processing temp file ${file}:`, error);
+          console.error(`[temp] Error processing ${file}:`, error);
         }
       }
+      // Only log when there was actually something to clean — no point
+      // surfacing a "did nothing" line on the typical daily run.
       if (deletedCount > 0) {
-        console.log(`Cleanup complete: Removed ${deletedCount} files, freed ${Math.round(totalSize / (1024 * 1024))} MB of space`);
-      } else {
-        console.log("No files needed cleanup");
+        console.log(`[temp] Cleanup freed ${Math.round(totalSize / (1024 * 1024))} MB (${deletedCount} files)`);
       }
     } catch (error) {
-      console.error("Error during temp directory cleanup:", error);
+      console.error("[temp] Cleanup failed:", error);
     }
   };
 
   cleanupTempFiles(); // run once on boot
-  const cleanupInterval = setInterval(cleanupTempFiles, 15 * 60 * 1000);
+  const cleanupInterval = setInterval(cleanupTempFiles, 24 * 60 * 60 * 1000);
 
   // ---- Endpoints --------------------------------------------------------
 
