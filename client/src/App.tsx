@@ -46,6 +46,8 @@ import {
   Mic,
   Moon,
   NotebookText,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search as SearchIcon,
   Settings as SettingsIcon,
   Sparkles,
@@ -54,6 +56,7 @@ import {
 } from "lucide-react";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { CategoryProvider, useCategory, type Category } from "@/hooks/use-category";
+import { SidebarProvider, useSidebar } from "@/hooks/use-sidebar";
 
 const MapPage = lazy(() => import("@/pages/Map"));
 
@@ -131,7 +134,8 @@ function TopBar() {
   return (
     <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 [-webkit-app-region:drag]">
       <div className="flex h-12 items-center gap-3 px-3 md:gap-6 md:px-4">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 [-webkit-app-region:no-drag]">
+          <SidebarToggle />
           <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-foreground text-[11px] font-semibold text-background tracking-tight">
             C
           </span>
@@ -386,36 +390,67 @@ function TranscriptionSetupGate() {
   return null;
 }
 
-/** Left-side primary nav. Visible on md+; mobile still uses the
- *  hamburger sheet in the top bar. Groups (Content / Analysis / Ops)
- *  render as their own labeled sections so the eye can chunk a long
- *  list. Fixed-width — collapsible mode is a future polish. */
+/** Top-bar button that toggles the sidebar between full + rail
+ *  states. Hidden on mobile (the hamburger handles nav there). */
+function SidebarToggle() {
+  const { collapsed, toggle } = useSidebar();
+  return (
+    <Button
+      size="icon"
+      variant="ghost"
+      onClick={toggle}
+      aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+      title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+      className="hidden h-8 w-8 md:inline-flex"
+    >
+      {collapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
+    </Button>
+  );
+}
+
+/** Left-side primary nav. Two widths controlled by useSidebar():
+ *  expanded (200px, icon + label + group headers) vs collapsed
+ *  (48px, icons only with tooltips). Mobile still uses the
+ *  hamburger sheet in the top bar. */
 function Sidebar() {
   const [location] = useLocation();
+  const { collapsed } = useSidebar();
   return (
     <aside
-      className="hidden md:flex md:w-[200px] md:shrink-0 md:flex-col md:border-r md:bg-background/40
-                 md:sticky md:top-12 md:h-[calc(100vh-3rem)] md:overflow-y-auto"
+      className={cn(
+        "hidden md:flex md:shrink-0 md:flex-col md:border-r md:bg-background/40",
+        "md:sticky md:top-12 md:h-[calc(100vh-3rem)] md:overflow-y-auto",
+        "transition-[width] duration-200 ease-out",
+        collapsed ? "md:w-12" : "md:w-[200px]",
+      )}
     >
-      <nav className="flex flex-col gap-3 p-3 text-sm">
-        {NAV_GROUPS.map((group) => (
-          <div key={group.name} className="flex flex-col gap-0.5">
-            <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
-              {group.name}
-            </p>
+      <nav className={cn("flex flex-col text-sm", collapsed ? "items-center gap-1 py-2" : "gap-3 p-3")}>
+        {NAV_GROUPS.map((group, gIdx) => (
+          <div key={group.name} className={cn("flex flex-col", collapsed ? "gap-1" : "gap-0.5")}>
+            {/* Group label hidden in rail mode; a thin divider
+             *  separates groups instead. */}
+            {collapsed
+              ? gIdx > 0 && <span aria-hidden className="my-1 h-px w-6 self-center bg-border" />
+              : (
+                <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                  {group.name}
+                </p>
+              )}
             {group.items.map(({ href, label, icon: Icon }) => {
               const active = location === href;
               return (
                 <Link
                   key={href}
                   href={href}
+                  title={collapsed ? label : undefined}
                   className={cn(
-                    "inline-flex h-8 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
-                    active && "bg-secondary text-foreground"
+                    "inline-flex items-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+                    collapsed ? "h-8 w-8 justify-center" : "h-8 gap-2 px-2",
+                    active && "bg-secondary text-foreground",
                   )}
                 >
-                  <Icon className="h-3.5 w-3.5" />
-                  <span>{label}</span>
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  {!collapsed && <span>{label}</span>}
                 </Link>
               );
             })}
@@ -430,17 +465,19 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <CategoryProvider>
-        <div className="min-h-screen bg-background text-foreground">
-          <TopBar />
-          <TranscriptionSetupGate />
-          <div className="flex">
-            <Sidebar />
-            <main className="min-w-0 flex-1 pb-12">
-              <Router />
-            </main>
+        <SidebarProvider>
+          <div className="min-h-screen bg-background text-foreground">
+            <TopBar />
+            <TranscriptionSetupGate />
+            <div className="flex">
+              <Sidebar />
+              <main className="min-w-0 flex-1 pb-12">
+                <Router />
+              </main>
+            </div>
+            <Toaster />
           </div>
-          <Toaster />
-        </div>
+        </SidebarProvider>
       </CategoryProvider>
     </QueryClientProvider>
   );
