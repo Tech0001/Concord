@@ -7,6 +7,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, RefreshCw, Search } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
+import FolderInput from "@/components/FolderInput";
 
 interface TreeNode {
   name: string;
@@ -131,13 +132,15 @@ export default function Docs() {
               )}
               {editing ? (
                 <>
-                  <Input
-                    autoFocus
-                    value={draftFolder}
-                    onChange={(e) => setDraftFolder(e.target.value)}
-                    placeholder="/absolute/path/to/docs/folder"
-                    className="font-mono text-xs w-[420px]"
-                  />
+                  <div className="w-[420px]">
+                    <FolderInput
+                      value={draftFolder}
+                      onChange={setDraftFolder}
+                      placeholder="/absolute/path/to/docs/folder"
+                      prompt="Choose your markdown docs folder"
+                      className="font-mono text-xs"
+                    />
+                  </div>
                   <Button size="sm" onClick={saveFolder}>Save</Button>
                   <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setDraftFolder(rootFolder); }}>Cancel</Button>
                 </>

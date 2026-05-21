@@ -125,74 +125,172 @@ export function registerSystemRoutes(app: Express, pipeline: Pipeline, httpServe
     });
   });
 
-  // Native folder picker — macOS only for now (AppleScript). When we
-  // package as Electron we swap this for dialog.showOpenDialog. Lives
-  // server-side because the app runs locally on the user's machine, so
-  // the dialog appears on their desktop, not a remote one.
+  // Native folder picker. macOS uses AppleScript; Linux falls back to
+  // zenity (kdialog as backup for KDE). Lives server-side because the
+  // app runs locally on the user's machine, so the dialog appears on
+  // their desktop, not a remote one.
   app.post("/api/dialog/pick-folder", async (req, res) => {
-    if (process.platform !== "darwin") {
-      return res.status(501).json({
-        error: "Folder picker not supported on this platform yet",
-        platform: process.platform,
-      });
-    }
     const { prompt = "Choose folder", defaultPath } = req.body || {};
-    const escape = (s: string) => String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    let script = `POSIX path of (choose folder with prompt "${escape(prompt)}"`;
-    if (defaultPath && fs.existsSync(defaultPath)) {
-      script += ` default location POSIX file "${escape(defaultPath)}"`;
-    }
-    script += `)`;
     try {
-      const { stdout } = await execFileAsync("osascript", ["-e", script]);
-      res.json({ path: stdout.trim() });
+      const pick = await openNativeFolderPicker({ prompt, defaultPath });
+      res.json(pick);
     } catch (err: unknown) {
-      const e = err as { stderr?: string; message?: string };
-      const stderr = String(e?.stderr || "");
-      // osascript exits 1 with "User canceled. (-128)" when the user dismisses.
-      if (stderr.includes("User canceled") || stderr.includes("(-128)")) {
-        return res.json({ cancelled: true });
+      const e = err as { code?: string; message?: string };
+      if (e?.code === "UNSUPPORTED") {
+        return res.status(501).json({
+          error: e.message || "Folder picker not supported on this platform yet",
+          platform: process.platform,
+        });
       }
-      res.status(500).json({ error: stderr || e?.message || "osascript failed" });
+      res.status(500).json({ error: e?.message || "picker failed" });
     }
   });
 
   // Native file picker — siblings the folder picker above. Used by the
-  // FileInput component for things like the cookies.txt path (so the user
-  // doesn't have to copy-paste an absolute path from Finder).
+  // FileInput component for things like the cookies.txt path.
   app.post("/api/dialog/pick-file", async (req, res) => {
-    if (process.platform !== "darwin") {
-      return res.status(501).json({
-        error: "File picker not supported on this platform yet",
-        platform: process.platform,
-      });
-    }
     const { prompt = "Choose file", defaultPath } = req.body || {};
-    const escape = (s: string) => String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    let script = `POSIX path of (choose file with prompt "${escape(prompt)}"`;
-    // `choose file`'s `default location` accepts a folder, so when the
-    // caller hands us a file path we use its parent.
-    if (defaultPath) {
-      const dir = fs.existsSync(defaultPath) && !fs.statSync(defaultPath).isDirectory()
-        ? defaultPath.replace(/\/[^/]*$/, "") || defaultPath
-        : defaultPath;
+    try {
+      const pick = await openNativeFilePicker({ prompt, defaultPath });
+      res.json(pick);
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      if (e?.code === "UNSUPPORTED") {
+        return res.status(501).json({
+          error: e.message || "File picker not supported on this platform yet",
+          platform: process.platform,
+        });
+      }
+      res.status(500).json({ error: e?.message || "picker failed" });
+    }
+  });
+}
+
+// ---- Native picker helpers ------------------------------------------------
+
+interface PickerOpts {
+  prompt: string;
+  defaultPath?: string;
+}
+
+interface PickerResult {
+  path?: string;
+  cancelled?: boolean;
+}
+
+class UnsupportedPickerError extends Error {
+  code = "UNSUPPORTED" as const;
+}
+
+/** macOS escape for AppleScript string literals. */
+function aescape(s: string): string {
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/** Try `which <bin>` synchronously — true if the binary is on PATH.
+ *  Used to pick zenity vs kdialog on Linux without throwing if both
+ *  are missing. */
+function hasBinary(bin: string): boolean {
+  try {
+    return fs.existsSync(`/usr/bin/${bin}`) || fs.existsSync(`/usr/local/bin/${bin}`);
+  } catch {
+    return false;
+  }
+}
+
+async function openNativeFolderPicker(opts: PickerOpts): Promise<PickerResult> {
+  if (process.platform === "darwin") {
+    let script = `POSIX path of (choose folder with prompt "${aescape(opts.prompt)}"`;
+    if (opts.defaultPath && fs.existsSync(opts.defaultPath)) {
+      script += ` default location POSIX file "${aescape(opts.defaultPath)}"`;
+    }
+    script += `)`;
+    return runAppleScript(script);
+  }
+  if (process.platform === "linux") return runLinuxPicker(opts, "directory");
+  throw new UnsupportedPickerError(`No folder picker for platform: ${process.platform}`);
+}
+
+async function openNativeFilePicker(opts: PickerOpts): Promise<PickerResult> {
+  if (process.platform === "darwin") {
+    let script = `POSIX path of (choose file with prompt "${aescape(opts.prompt)}"`;
+    if (opts.defaultPath) {
+      const dir = fs.existsSync(opts.defaultPath) && !fs.statSync(opts.defaultPath).isDirectory()
+        ? opts.defaultPath.replace(/\/[^/]*$/, "") || opts.defaultPath
+        : opts.defaultPath;
       if (fs.existsSync(dir)) {
-        script += ` default location POSIX file "${escape(dir)}"`;
+        script += ` default location POSIX file "${aescape(dir)}"`;
       }
     }
     script += `)`;
-    try {
-      const { stdout } = await execFileAsync("osascript", ["-e", script]);
-      res.json({ path: stdout.trim() });
-    } catch (err: unknown) {
-      const e = err as { stderr?: string; message?: string };
-      const stderr = String(e?.stderr || "");
-      if (stderr.includes("User canceled") || stderr.includes("(-128)")) {
-        return res.json({ cancelled: true });
-      }
-      res.status(500).json({ error: stderr || e?.message || "osascript failed" });
+    return runAppleScript(script);
+  }
+  if (process.platform === "linux") return runLinuxPicker(opts, "file");
+  throw new UnsupportedPickerError(`No file picker for platform: ${process.platform}`);
+}
+
+async function runAppleScript(script: string): Promise<PickerResult> {
+  try {
+    const { stdout } = await execFileAsync("osascript", ["-e", script]);
+    return { path: stdout.trim() };
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    const stderr = String(e?.stderr || "");
+    // osascript exits 1 with "User canceled. (-128)" when the user dismisses.
+    if (stderr.includes("User canceled") || stderr.includes("(-128)")) {
+      return { cancelled: true };
     }
-  });
+    throw new Error(stderr || e?.message || "osascript failed");
+  }
+}
+
+/** Linux picker — zenity preferred, kdialog as fallback. Both ship
+ *  with most desktop installs and behave identically from the
+ *  caller's POV (path on stdout, exit 1 on cancel). */
+async function runLinuxPicker(
+  opts: PickerOpts,
+  kind: "file" | "directory",
+): Promise<PickerResult> {
+  if (hasBinary("zenity")) {
+    const args = ["--file-selection", "--title", opts.prompt];
+    if (kind === "directory") args.push("--directory");
+    if (opts.defaultPath) {
+      // zenity --filename expects a trailing slash for directories so
+      // it opens *inside* the path rather than selecting the parent.
+      const seed = kind === "directory" ? opts.defaultPath.replace(/\/?$/, "/") : opts.defaultPath;
+      args.push("--filename", seed);
+    }
+    try {
+      const { stdout } = await execFileAsync("zenity", args);
+      const picked = stdout.trim();
+      return picked ? { path: picked } : { cancelled: true };
+    } catch (err) {
+      // zenity exits 1 on cancel — distinguish it from a real failure
+      // by inspecting stderr (zenity stays silent on cancel).
+      const e = err as { code?: number; stderr?: string; message?: string };
+      const stderr = String(e?.stderr || "");
+      if (!stderr.trim()) return { cancelled: true };
+      throw new Error(stderr || e?.message || "zenity failed");
+    }
+  }
+  if (hasBinary("kdialog")) {
+    const flag = kind === "directory" ? "--getexistingdirectory" : "--getopenfilename";
+    const args = [flag, opts.defaultPath || "."];
+    args.push("--title", opts.prompt);
+    try {
+      const { stdout } = await execFileAsync("kdialog", args);
+      const picked = stdout.trim();
+      return picked ? { path: picked } : { cancelled: true };
+    } catch {
+      // kdialog returns non-zero on cancel without stderr — treat as
+      // cancel rather than error.
+      return { cancelled: true };
+    }
+  }
+  throw new UnsupportedPickerError(
+    "Install zenity (or kdialog) to enable the native folder picker on Linux. "
+    + "On Ubuntu/Debian: sudo apt install zenity",
+  );
 }
 
 // ---- yt-dlp self-update helpers --------------------------------------------
