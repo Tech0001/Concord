@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, RefreshCw, Search, Star } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, NotebookPen, RefreshCw, Search, Star } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import FolderInput from "@/components/FolderInput";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -95,6 +95,16 @@ export default function Docs() {
   useEffect(() => { void loadConfig(); }, [loadConfig]);
   useEffect(() => { if (rootFolder) void loadTree(); }, [rootFolder, loadTree]);
 
+  // Deep link support: /docs?path=foo/bar.md opens that file once the
+  // tree has loaded. Lets a Notes anchor link straight to its source.
+  useEffect(() => {
+    if (!rootFolder || tree.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const wanted = params.get("path");
+    if (wanted && wanted !== selectedPath) void openFile(wanted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rootFolder, tree.length]);
+
   const saveFolder = async () => {
     try {
       const r = await apiRequest("POST", "/api/docs/config", { rootFolder: draftFolder.trim() });
@@ -162,6 +172,53 @@ export default function Docs() {
       void loadTree();
     } catch (err: any) {
       toast({ variant: "destructive", title: "Category change failed", description: err.message });
+    }
+  };
+
+  /** Create a note anchored to the current text selection (if any),
+   *  or to the whole doc otherwise. Finds character offsets in the
+   *  source markdown by searching for the selected string — works
+   *  whenever the selection is uniquely present, which is the common
+   *  case for prose. Falls back to whole-doc when ambiguous so the
+   *  anchor is always valid. Generates a title from the excerpt; user
+   *  can edit on the Notes page. */
+  const addNoteForSelection = async () => {
+    if (!selectedDoc) return;
+    const sel = window.getSelection()?.toString().trim() ?? "";
+    let docStartChar: number | null = null;
+    let docEndChar: number | null = null;
+    let excerpt: string | null = null;
+    if (sel) {
+      const first = content.indexOf(sel);
+      const second = first >= 0 ? content.indexOf(sel, first + 1) : -1;
+      if (first >= 0 && second === -1) {
+        docStartChar = first;
+        docEndChar = first + sel.length;
+      }
+      excerpt = sel.length > 600 ? sel.slice(0, 600) + "…" : sel;
+    }
+    const title = excerpt
+      ? (excerpt.length > 60 ? excerpt.slice(0, 57) + "…" : excerpt)
+      : `Note on ${selectedDoc.title}`;
+    try {
+      const r = await apiRequest("POST", "/api/clips", {
+        title,
+        note: null,
+        anchors: [{
+          documentId: selectedDoc.id,
+          docStartChar,
+          docEndChar,
+          excerpt,
+        }],
+      });
+      const data = await r.json() as { clip?: { id: string }; error?: string };
+      if (data.error) throw new Error(data.error);
+      toast({
+        title: docStartChar != null ? "Note saved" : "Whole-doc note saved",
+        description: excerpt ? `"${excerpt.slice(0, 80)}${excerpt.length > 80 ? "…" : ""}"` : selectedDoc.title,
+      });
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Save note failed", description: err.message });
     }
   };
 
@@ -301,6 +358,16 @@ export default function Docs() {
                             <SelectItem value="work">Work</SelectItem>
                           </SelectContent>
                         </Select>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          onClick={addNoteForSelection}
+                          title="Highlight a passage first to anchor a note to it; otherwise the note anchors to the whole doc"
+                        >
+                          <NotebookPen className="h-3.5 w-3.5" />
+                          Add note
+                        </Button>
                       </>
                     )}
                     <span className="text-xs text-muted-foreground font-mono break-all">{selectedPath}</span>

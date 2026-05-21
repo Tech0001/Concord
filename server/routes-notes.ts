@@ -247,18 +247,26 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
 
       const normalizedAnchors = hasAnchorsField
         ? anchors.map((a: any) => ({
-            videoId: String(a.videoId),
-            channelId: String(a.channelId),
+            videoId:      a.videoId      != null ? String(a.videoId)      : null,
+            channelId:    a.channelId    != null ? String(a.channelId)    : null,
             startSeconds: a.startSeconds != null ? Number(a.startSeconds) : null,
             endSeconds:   a.endSeconds   != null ? Number(a.endSeconds)   : null,
             excerpt:      a.excerpt      != null ? String(a.excerpt)      : null,
+            documentId:   a.documentId   != null ? String(a.documentId)   : null,
+            docStartChar: a.docStartChar != null ? Number(a.docStartChar) : null,
+            docEndChar:   a.docEndChar   != null ? Number(a.docEndChar)   : null,
           }))
         : undefined;
 
-      // Resolve a title fallback from the first anchor's video (if there is one).
+      // Resolve a title fallback from the first anchor's video (if there is
+      // one). Skip for doc-anchored notes — those use the document's title
+      // already attached on read.
       let entryForFallback: ReturnType<typeof getQueueEntry> | undefined;
       if (multiAnchor) {
-        entryForFallback = getQueueEntry(normalizedAnchors![0].videoId, normalizedAnchors![0].channelId);
+        const first = normalizedAnchors![0];
+        if (first.videoId && first.channelId) {
+          entryForFallback = getQueueEntry(first.videoId, first.channelId);
+        }
       } else if (legacySingleAnchor) {
         entryForFallback = getQueueEntry(String(videoId), String(channelId));
       }
@@ -311,16 +319,21 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
   // ordinal so the client can address it later (e.g. for delete).
   app.post("/api/clips/:clipId/anchors", (req: Request<{ clipId: string }>, res: Response) => {
     try {
-      const { videoId, channelId, startSeconds, endSeconds, excerpt } = req.body || {};
-      if (!videoId || !channelId) {
-        return res.status(400).json({ error: "videoId and channelId are required" });
+      const { videoId, channelId, startSeconds, endSeconds, excerpt, documentId, docStartChar, docEndChar } = req.body || {};
+      // Either video pair OR document — addNoteAnchor enforces this too,
+      // but a 400 here is more user-friendly than a 500.
+      if (!documentId && (!videoId || !channelId)) {
+        return res.status(400).json({ error: "Provide documentId, or videoId + channelId" });
       }
       const ordinal = addNoteAnchor(req.params.clipId, {
-        videoId: String(videoId),
-        channelId: String(channelId),
+        videoId:      videoId      != null ? String(videoId)      : null,
+        channelId:    channelId    != null ? String(channelId)    : null,
         startSeconds: startSeconds != null ? Number(startSeconds) : null,
         endSeconds:   endSeconds   != null ? Number(endSeconds)   : null,
         excerpt:      excerpt      != null ? String(excerpt)      : null,
+        documentId:   documentId   != null ? String(documentId)   : null,
+        docStartChar: docStartChar != null ? Number(docStartChar) : null,
+        docEndChar:   docEndChar   != null ? Number(docEndChar)   : null,
       });
       res.json({ success: true, ordinal });
     } catch (error) {
