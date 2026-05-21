@@ -152,7 +152,12 @@ export default function MapPage() {
       const standaloneClips: GraphNodeData[] = [];
       for (const clip of graph.nodes) {
         const anchors = Array.isArray(clip.anchors) ? clip.anchors : [];
-        if (anchors.length === 0) {
+        // A clip is "video-bucketable" only if at least one anchor
+        // points at a video. Doc-only and standalone clips render as
+        // freestanding ClipNodes so they don't disappear when the
+        // user is viewing the Videos layout.
+        const videoAnchorCount = anchors.filter((a: any) => a.videoId && a.channelId).length;
+        if (anchors.length === 0 || videoAnchorCount === 0) {
           // Defensive: an older note that predates anchor backfill might have
           // no anchors[] but still carry the legacy single-anchor columns.
           if (clip.videoId && clip.channelId) {
@@ -165,7 +170,7 @@ export default function MapPage() {
           }
           continue;
         }
-        for (const anchor of anchors as Array<{ ordinal: number; videoId: string; channelId: string; startSeconds: number | null; endSeconds: number | null }>) {
+        for (const anchor of anchors as Array<{ ordinal: number; videoId: string | null; channelId: string | null; startSeconds: number | null; endSeconds: number | null }>) {
           if (!anchor.videoId || !anchor.channelId) continue;
           // Project a per-anchor view: same note, but startSeconds/endSeconds
           // overridden so the row inside the video container shows the right
@@ -418,6 +423,13 @@ export default function MapPage() {
   }
 
   function openClipVideo(clip: GraphNodeData) {
+    // Doc-anchored clips: jump straight to the Docs viewer for the
+    // anchored file. Video-anchored: open the VideoDrawer as before.
+    const docAnchor = clip.anchors?.find((a: any) => a.documentId && a.docRelPath);
+    if (docAnchor && !clip.videoId) {
+      window.location.href = `/docs?path=${encodeURIComponent(docAnchor.docRelPath!)}`;
+      return;
+    }
     setDrawerVideo(clipToDrawerEntry(clip));
     setDrawerSeconds(clip.startSeconds);
     setDrawerOpen(true);
