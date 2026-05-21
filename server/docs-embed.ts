@@ -263,12 +263,15 @@ export async function embedDocument(documentId: string, opts: EmbedDocOptions = 
         insert.run(
           float32ToBuffer(v),
           documentId,
-          c.index,
+          // BigInt forces INTEGER binding — better-sqlite3 binds plain
+          // JS numbers as REAL/FLOAT by default, which vec0 strictly
+          // rejects for INTEGER aux columns ("type mismatch" error).
+          BigInt(c.index),
           model,
           c.text,
           c.headingPath || null,
-          c.startChar,
-          c.endChar,
+          BigInt(c.startChar),
+          BigInt(c.endChar),
         );
         embedded += 1;
       }
