@@ -11,6 +11,7 @@ import {
   setDocumentStarred,
   type DocumentRow,
 } from "./docs-index";
+import { embedDocument } from "./docs-embed";
 
 /**
  * Markdown file viewer endpoints — list + read .md files under a user-
@@ -100,6 +101,46 @@ export function registerDocsRoutes(app: Express): void {
     if (!doc) return res.status(404).json({ error: "Document not found" });
     setDocumentCategory(req.params.id, cat);
     res.json({ ok: true });
+  });
+
+  // Embedding backfill — runs sequentially through every indexed doc.
+  // skipIfPresent defaults to true so re-running after the model is
+  // configured doesn't re-embed already-embedded files. Streams a
+  // progress summary back at the end.
+  app.post("/api/docs/embed-all", async (req, res) => {
+    const skipIfPresent = req.body?.overwrite ? false : true;
+    const all = listDocuments();
+    const results: { id: string; embedded: number; chunks: number; skipped: number; error?: string }[] = [];
+    let totalEmbedded = 0;
+    let totalSkipped = 0;
+    let failed = 0;
+    for (const d of all) {
+      try {
+        const r = await embedDocument(d.id, { skipIfPresent });
+        results.push({ id: r.documentId, embedded: r.embedded, chunks: r.chunks, skipped: r.skipped, error: r.error });
+        totalEmbedded += r.embedded;
+        totalSkipped += r.skipped;
+        if (r.error) failed += 1;
+      } catch (err) {
+        failed += 1;
+        results.push({ id: d.id, embedded: 0, chunks: 0, skipped: 0, error: err instanceof Error ? err.message : "embed failed" });
+      }
+    }
+    res.json({ total: all.length, embedded: totalEmbedded, skipped: totalSkipped, failed, results });
+  });
+
+  // Single-doc embed — useful when the user just edited one file and
+  // wants the chat to reflect it without doing a full backfill.
+  app.post("/api/docs/:id/embed", async (req: Request<{ id: string }>, res) => {
+    const doc = getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: "Document not found" });
+    const overwrite = req.body?.overwrite === true;
+    try {
+      const r = await embedDocument(req.params.id, { skipIfPresent: !overwrite });
+      res.json(r);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "embed failed" });
+    }
   });
 
   app.get("/api/docs/file", (req: Request, res: Response) => {

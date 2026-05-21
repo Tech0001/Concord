@@ -43,6 +43,9 @@ export interface AskArchiveArgs {
 export interface ContextSource {
   /** 1-based — matches the [N] markers the model is asked to emit. */
   sourceIndex: number;
+  /** Source discriminator. Defaults to "video" for back-compat with
+   *  persisted rows that predate doc sources. */
+  source?: "video" | "doc";
   videoId: string;
   channelId: string;
   segmentIndex: number;
@@ -64,6 +67,14 @@ export interface ContextSource {
   isLive: number | null;
   duration: number | null;
   wordCount: number | null;
+  /** Doc-source fields — populated when source === "doc". The video*
+   *  fields above are placeholders ("") in that case. */
+  documentId?: string;
+  docRelPath?: string;
+  docTitle?: string;
+  docHeadingPath?: string;
+  docStartChar?: number;
+  docEndChar?: number;
 }
 
 export type AskEvent =
@@ -84,7 +95,12 @@ function applyPerVideoCap(rows: SemanticSearchResult[], perVideoCap: number): Se
   const counts = new Map<string, number>();
   const out: SemanticSearchResult[] = [];
   for (const r of rows) {
-    const key = `${r.video_id}|${r.channel_id}`;
+    // Doc hits cap per document_id; video hits per (video, channel).
+    // Without the source split, every doc chunk would collide on the
+    // empty (videoId, channelId) sentinel and only one would survive.
+    const key = r.source === "doc"
+      ? `doc:${r.document_id ?? ""}`
+      : `video:${r.video_id}|${r.channel_id}`;
     const seen = counts.get(key) ?? 0;
     if (seen >= perVideoCap) continue;
     counts.set(key, seen + 1);
@@ -95,6 +111,10 @@ function applyPerVideoCap(rows: SemanticSearchResult[], perVideoCap: number): Se
 
 function formatSourceBlock(sources: ContextSource[]): string {
   return sources.map((s) => {
+    if (s.source === "doc") {
+      const heading = s.docHeadingPath ? ` · ${s.docHeadingPath}` : "";
+      return `[${s.sourceIndex}] DOC: ${s.docTitle || s.docRelPath}${heading}\n${s.excerpt}`;
+    }
     const speaker = s.speaker ? ` · Speaker: ${s.speaker}` : "";
     const ts = `${formatTimestamp(s.startSeconds)}–${formatTimestamp(s.endSeconds)}`;
     const date = s.uploadDate ? ` (${s.uploadDate})` : "";
@@ -261,6 +281,7 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
 
   const sources: ContextSource[] = capped.map((r, idx) => ({
     sourceIndex: idx + 1,
+    source: r.source ?? "video",
     videoId: r.video_id,
     channelId: r.channel_id,
     segmentIndex: r.segment_index,
@@ -278,6 +299,12 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
     isLive: r.is_live,
     duration: null,         // not in semantic-search result; reload fetches it
     wordCount: r.word_count,
+    documentId: r.document_id,
+    docRelPath: r.doc_rel_path,
+    docTitle: r.doc_title,
+    docHeadingPath: r.doc_heading_path,
+    docStartChar: r.doc_start_char,
+    docEndChar: r.doc_end_char,
   }));
 
   const topScore = sources[0]?.score ?? 0;

@@ -14,6 +14,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { getConfigValues, getDb } from "./db";
+import { embedDocument } from "./docs-embed";
 
 export interface DocumentRow {
   id: string;
@@ -81,7 +82,13 @@ export interface IndexResult {
 /** Full sync between disk and the documents table. Cheap for ≤ low
  *  thousands of files (single readdir + sha256 per file). Run on:
  *  startup, docs.rootFolder change, and the explicit Refresh button. */
-export function indexDocs(): IndexResult {
+export interface IndexOptions {
+  /** Re-embed changed/new docs after the sync. Default true; set false
+   *  for tests or environments without an LLM configured. */
+  embed?: boolean;
+}
+
+export function indexDocs(options: IndexOptions = {}): IndexResult {
   const t0 = Date.now();
   const root = getConfigValues()["docs.rootFolder"] || "";
   if (!root || !fs.existsSync(root)) {
@@ -95,6 +102,7 @@ export function indexDocs(): IndexResult {
   const existingByPath = new Map(existingRows.map((r) => [r.rel_path, r]));
 
   const seenPaths = new Set<string>();
+  const toEmbed: string[] = []; // ids of inserted + updated docs
   let inserted = 0, updated = 0, unchanged = 0;
 
   const insertStmt = db.prepare(`
@@ -128,9 +136,11 @@ export function indexDocs(): IndexResult {
       if (!existing) {
         insertStmt.run(id, rel, title, hash, bytes, stat.mtimeMs);
         inserted += 1;
+        toEmbed.push(id);
       } else if (existing.content_hash !== hash) {
         updateStmt.run(title, hash, bytes, stat.mtimeMs, existing.id);
         updated += 1;
+        toEmbed.push(existing.id);
       } else {
         unchanged += 1;
       }
@@ -151,6 +161,26 @@ export function indexDocs(): IndexResult {
       }
     }
   })();
+
+  // Re-embed changed/new docs in the background — don't block the
+  // sync response on the LLM round-trip. Each call is best-effort;
+  // an unconfigured embedding model just logs a warning and skips.
+  if (options.embed !== false && toEmbed.length > 0) {
+    void (async () => {
+      for (const id of toEmbed) {
+        try {
+          const r = await embedDocument(id);
+          if (r.error) {
+            console.warn(`[docs-embed] ${id} → ${r.error}`);
+          } else if (r.embedded > 0) {
+            console.log(`[docs-embed] ${id} → ${r.embedded} chunks (${r.ms}ms)`);
+          }
+        } catch (err) {
+          console.warn(`[docs-embed] ${id} failed:`, err instanceof Error ? err.message : err);
+        }
+      }
+    })();
+  }
 
   return {
     inserted, updated, removed, unchanged,

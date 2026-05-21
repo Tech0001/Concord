@@ -31,6 +31,10 @@ import {
 
 interface ChatSource {
   source_index: number;
+  /** "video" (default) or "doc". Streaming context uses lowercase; the
+   *  persisted shape uses snake_case but the discriminator is the
+   *  same. Doc sources have empty video_id/channel_id placeholders. */
+  source?: "video" | "doc";
   video_id: string;
   channel_id: string;
   segment_index: number | null;
@@ -57,6 +61,20 @@ interface ChatSource {
   mdPath?: string | null;
   isLive?: number | null;
   wordCount?: number | null;
+  // Doc-source fields — populated when source === "doc".
+  document_id?: string;
+  doc_rel_path?: string;
+  doc_title?: string;
+  doc_heading_path?: string;
+  doc_start_char?: number;
+  doc_end_char?: number;
+  // camelCase variants from the streaming event payload
+  documentId?: string;
+  docRelPath?: string;
+  docTitle?: string;
+  docHeadingPath?: string;
+  docStartChar?: number;
+  docEndChar?: number;
 }
 
 interface ChatMessage {
@@ -386,6 +404,16 @@ export default function AI() {
   }, []);
 
   const openSource = useCallback((src: ChatSource) => {
+    // Doc sources don't have a video to play — open the source markdown
+    // in the Docs viewer instead. The rel_path comes through as either
+    // snake_case (persisted) or camelCase (streaming context payload).
+    if (src.source === "doc") {
+      const docPath = src.doc_rel_path ?? src.docRelPath;
+      if (docPath) {
+        window.location.href = `/docs?path=${encodeURIComponent(docPath)}`;
+      }
+      return;
+    }
     if (!src.video_id || !src.channel_id) return;
     // Bridge between the streaming context shape (camelCase) and the
     // conversation-reload shape (snake_case). Either may be present.
@@ -845,37 +873,56 @@ function SourcesList({
 }) {
   return (
     <ul className="mt-1 space-y-1">
-      {sources.map((s) => (
-        <li key={s.source_index} className="group rounded border bg-muted/30 px-2 py-1.5">
-          <div className="flex items-baseline gap-1.5">
-            <button
-              onClick={() => onCitationClick(s)}
-              className="rounded bg-secondary px-1 py-0.5 font-mono text-[10px] text-foreground hover:bg-foreground hover:text-background"
-            >
-              [{s.source_index}]
-            </button>
-            <span className="min-w-0 flex-1 truncate font-medium text-foreground" title={s.video_title ?? ""}>
-              {s.video_title ?? "(unknown video)"}
-            </span>
-            <span className="text-[10px] font-mono text-muted-foreground">{fmtTimestamp(s.start_seconds)}</span>
-            <button
-              onClick={() => onSaveCitation(s)}
-              className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-              title="Save as note"
-            >
-              <BookmarkPlus className="h-3 w-3" />
-            </button>
-          </div>
-          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-            {s.channel_name && <span>{s.channel_name}</span>}
-            {s.speaker_name && <span>· {s.speaker_name}</span>}
-            {s.score != null && <span className="font-mono">· score {s.score.toFixed(2)}</span>}
-          </div>
-          {s.excerpt && (
-            <div className="mt-1 line-clamp-2 italic text-muted-foreground">"{s.excerpt}"</div>
-          )}
-        </li>
-      ))}
+      {sources.map((s) => {
+        const isDoc = s.source === "doc";
+        const docPath = s.doc_rel_path ?? s.docRelPath ?? null;
+        const docTitle = s.doc_title ?? s.docTitle ?? null;
+        const headingPath = s.doc_heading_path ?? s.docHeadingPath ?? null;
+        return (
+          <li key={s.source_index} className="group rounded border bg-muted/30 px-2 py-1.5">
+            <div className="flex items-baseline gap-1.5">
+              <button
+                onClick={() => onCitationClick(s)}
+                className="rounded bg-secondary px-1 py-0.5 font-mono text-[10px] text-foreground hover:bg-foreground hover:text-background"
+              >
+                [{s.source_index}]
+              </button>
+              {isDoc && (
+                <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400">
+                  doc
+                </span>
+              )}
+              <span className="min-w-0 flex-1 truncate font-medium text-foreground" title={isDoc ? (docPath ?? "") : (s.video_title ?? "")}>
+                {isDoc ? (docTitle || docPath || "(unknown doc)") : (s.video_title ?? "(unknown video)")}
+              </span>
+              {!isDoc && (
+                <span className="text-[10px] font-mono text-muted-foreground">{fmtTimestamp(s.start_seconds)}</span>
+              )}
+              <button
+                onClick={() => onSaveCitation(s)}
+                className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                title="Save as note"
+              >
+                <BookmarkPlus className="h-3 w-3" />
+              </button>
+            </div>
+            <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+              {isDoc ? (
+                headingPath ? <span>{headingPath}</span> : null
+              ) : (
+                <>
+                  {s.channel_name && <span>{s.channel_name}</span>}
+                  {s.speaker_name && <span>· {s.speaker_name}</span>}
+                </>
+              )}
+              {s.score != null && <span className="font-mono">· score {s.score.toFixed(2)}</span>}
+            </div>
+            {s.excerpt && (
+              <div className="mt-1 line-clamp-2 italic text-muted-foreground">"{s.excerpt}"</div>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }

@@ -41,6 +41,10 @@ export interface ChatMessage {
 
 export interface ChatMessageSource {
   source_index: number;
+  /** "video" (default) or "doc". Discriminator for the doc-source
+   *  fields below; old persisted rows read back as "video" via
+   *  COALESCE. */
+  source: string;
   video_id: string;
   channel_id: string;
   segment_index: number | null;
@@ -62,6 +66,14 @@ export interface ChatMessageSource {
   is_live: number | null;
   duration: number | null;
   word_count: number | null;
+  /** Doc-source fields — populated when source === "doc". */
+  document_id: string | null;
+  doc_chunk_index: number | null;
+  doc_start_char: number | null;
+  doc_end_char: number | null;
+  doc_heading_path: string | null;
+  doc_rel_path: string | null;
+  doc_title: string | null;
 }
 
 export interface ChatConversationDetail extends ChatConversationMeta {
@@ -150,7 +162,11 @@ export function getChatConversation(id: string): ChatConversationDetail | undefi
       q.title AS video_title, q.upload_date,
       q.video_path, q.md_path, q.status, q.is_live, q.duration, q.word_count,
       c.name  AS channel_name,
-      sp.name AS speaker_name
+      sp.name AS speaker_name,
+      COALESCE(s.source, 'video') AS source,
+      s.document_id, s.doc_chunk_index, s.doc_start_char, s.doc_end_char,
+      s.doc_heading_path,
+      d.rel_path AS doc_rel_path, d.title AS doc_title
     FROM chat_message_sources s
     LEFT JOIN video_queue q ON q.video_id = s.video_id AND q.channel_id = s.channel_id
     LEFT JOIN channels    c ON c.id       = s.channel_id
@@ -159,6 +175,7 @@ export function getChatConversation(id: string): ChatConversationDetail | undefi
           AND vsa.channel_id = s.channel_id
           AND vsa.local_speaker = s.speaker
     LEFT JOIN speakers sp ON sp.id = vsa.speaker_id
+    LEFT JOIN documents d  ON d.id        = s.document_id
     WHERE s.message_id IN (${placeholders})
     ORDER BY s.message_id, s.source_index ASC
   `).all(...ids) as Array<ChatMessageSource & { message_id: string }>;
@@ -204,6 +221,7 @@ export function appendChatMessage(args: {
   model?: string | null;
   sources?: Array<{
     sourceIndex: number;
+    source?: "video" | "doc";
     videoId: string;
     channelId: string;
     segmentIndex?: number | null;
@@ -212,6 +230,10 @@ export function appendChatMessage(args: {
     speaker?: string | null;
     excerpt?: string | null;
     score?: number | null;
+    documentId?: string | null;
+    docStartChar?: number | null;
+    docEndChar?: number | null;
+    docHeadingPath?: string | null;
   }>;
 }): void {
   const db = getDb();
@@ -225,14 +247,24 @@ export function appendChatMessage(args: {
       const insert = db.prepare(`
         INSERT INTO chat_message_sources
           (message_id, source_index, video_id, channel_id, segment_index,
-           start_seconds, end_seconds, speaker, excerpt, score)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           start_seconds, end_seconds, speaker, excerpt, score,
+           source, document_id, doc_chunk_index, doc_start_char, doc_end_char,
+           doc_heading_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const s of args.sources) {
         insert.run(
           args.id, s.sourceIndex, s.videoId, s.channelId,
           s.segmentIndex ?? null, s.startSeconds ?? null, s.endSeconds ?? null,
           s.speaker ?? null, s.excerpt ?? null, s.score ?? null,
+          s.source ?? "video",
+          s.documentId ?? null,
+          // doc_chunk_index reuses the segment_index slot conceptually,
+          // but keep a dedicated column so future schema changes don't
+          // need to coalesce.
+          s.source === "doc" ? (s.segmentIndex ?? null) : null,
+          s.docStartChar ?? null, s.docEndChar ?? null,
+          s.docHeadingPath ?? null,
         );
       }
     }
@@ -263,7 +295,11 @@ export function getChatMessage(id: string): ChatMessage | undefined {
       q.title AS video_title, q.upload_date,
       q.video_path, q.md_path, q.status, q.is_live, q.duration, q.word_count,
       c.name  AS channel_name,
-      sp.name AS speaker_name
+      sp.name AS speaker_name,
+      COALESCE(s.source, 'video') AS source,
+      s.document_id, s.doc_chunk_index, s.doc_start_char, s.doc_end_char,
+      s.doc_heading_path,
+      d.rel_path AS doc_rel_path, d.title AS doc_title
     FROM chat_message_sources s
     LEFT JOIN video_queue q ON q.video_id = s.video_id AND q.channel_id = s.channel_id
     LEFT JOIN channels    c ON c.id       = s.channel_id
@@ -272,6 +308,7 @@ export function getChatMessage(id: string): ChatMessage | undefined {
           AND vsa.channel_id = s.channel_id
           AND vsa.local_speaker = s.speaker
     LEFT JOIN speakers sp ON sp.id = vsa.speaker_id
+    LEFT JOIN documents d  ON d.id        = s.document_id
     WHERE s.message_id = ?
     ORDER BY s.source_index ASC
   `).all(id) as ChatMessageSource[];

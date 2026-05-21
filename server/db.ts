@@ -374,6 +374,23 @@ export function getDb(dbPath?: string): Database.Database {
       )
     `);
 
+    // Markdown doc chunks live in their own vec0 table so the schema
+    // can carry doc-shaped metadata (heading path, character range)
+    // without polluting vec_segments. AI retrieval queries both
+    // tables and merges by similarity.
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS vec_docs USING vec0(
+        embedding float[${EMBEDDING_DIM}],
+        +document_id TEXT,
+        +chunk_index INTEGER,
+        +model TEXT,
+        +text TEXT,
+        +heading_path TEXT,
+        +start_char INTEGER,
+        +end_char INTEGER
+      )
+    `);
+
     runMigrations(db);
     console.log(`[db] SQLite ready: ${resolvedPath} (sqlite-vec loaded, dim=${EMBEDDING_DIM})`);
   }
@@ -468,6 +485,16 @@ function runMigrations(database: Database.Database) {
   ensureColumn("note_anchors", "document_id", "TEXT REFERENCES documents(id) ON DELETE CASCADE");
   ensureColumn("note_anchors", "doc_start_char", "INTEGER");
   ensureColumn("note_anchors", "doc_end_char", "INTEGER");
+
+  // chat_message_sources gains a discriminator + the same doc-source
+  // fields used elsewhere. Old persisted sources read back as source =
+  // "video" (the default applied on the read side when NULL).
+  ensureColumn("chat_message_sources", "source", "TEXT");
+  ensureColumn("chat_message_sources", "document_id", "TEXT");
+  ensureColumn("chat_message_sources", "doc_chunk_index", "INTEGER");
+  ensureColumn("chat_message_sources", "doc_start_char", "INTEGER");
+  ensureColumn("chat_message_sources", "doc_end_char", "INTEGER");
+  ensureColumn("chat_message_sources", "doc_heading_path", "TEXT");
 
   // Recreate note_anchors with nullable video_id/channel_id if the
   // original NOT NULL is still in place. Detect by reading

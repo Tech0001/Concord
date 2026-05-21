@@ -41,6 +41,15 @@ interface TranscriptSearchResult {
   text: string;
   /** Cosine similarity for semantic results; absent for FTS results. */
   score?: number;
+  /** "video" (default) or "doc". Semantic search merges in doc hits
+   *  alongside transcript segments. */
+  source?: "video" | "doc";
+  document_id?: string;
+  doc_rel_path?: string;
+  doc_title?: string;
+  doc_heading_path?: string;
+  doc_start_char?: number;
+  doc_end_char?: number;
 }
 
 interface IndexStats {
@@ -226,6 +235,11 @@ export default function TranscriptSearch() {
   };
 
   const openDrawer = (result: TranscriptSearchResult) => {
+    // Doc results have no video to play — route to the Docs viewer.
+    if (result.source === "doc" && result.doc_rel_path) {
+      window.location.href = `/docs?path=${encodeURIComponent(result.doc_rel_path)}`;
+      return;
+    }
     setDrawerVideo({
       video_id: result.video_id,
       channel_id: result.channel_id,
@@ -441,16 +455,34 @@ export default function TranscriptSearch() {
         </CardHeader>
         <CardContent>
           <div className="divide-y rounded-md border">
-            {results.map(result => (
-              <div key={`${result.channel_id}:${result.video_id}:${result.segment_index}`} className="p-3 text-sm">
+            {results.map(result => {
+              const isDoc = result.source === "doc";
+              return (
+              <div key={isDoc ? `doc:${result.document_id}:${result.segment_index}` : `${result.channel_id}:${result.video_id}:${result.segment_index}`} className="p-3 text-sm">
                 <div className="flex flex-col gap-1 md:flex-row md:items-start md:justify-between">
                   <div className="min-w-0">
-                    <div className="font-medium truncate">{result.title}</div>
+                    <div className="font-medium truncate flex items-center gap-1.5">
+                      {isDoc && (
+                        <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400 shrink-0">
+                          doc
+                        </span>
+                      )}
+                      <span className="truncate">{result.title}</span>
+                    </div>
                     <div className="text-xs text-muted-foreground flex flex-wrap gap-x-2 gap-y-1 mt-1">
-                      <span>{result.channel_name || result.channel_id}</span>
-                      <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{formatUploadDate(result.upload_date)}</span>
-                      <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatTimestamp(result.start_seconds)} - {formatTimestamp(result.end_seconds)}</span>
-                      {!!result.is_live && <span className="flex items-center gap-1"><Radio className="h-3 w-3" />Live</span>}
+                      {isDoc ? (
+                        <>
+                          <span className="font-mono truncate" title={result.doc_rel_path ?? ""}>{result.doc_rel_path}</span>
+                          {result.doc_heading_path && <span>· {result.doc_heading_path}</span>}
+                        </>
+                      ) : (
+                        <>
+                          <span>{result.channel_name || result.channel_id}</span>
+                          <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{formatUploadDate(result.upload_date)}</span>
+                          <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatTimestamp(result.start_seconds)} - {formatTimestamp(result.end_seconds)}</span>
+                          {!!result.is_live && <span className="flex items-center gap-1"><Radio className="h-3 w-3" />Live</span>}
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="flex gap-1 flex-wrap md:justify-end">
@@ -484,17 +516,20 @@ export default function TranscriptSearch() {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={!result.video_path}
+                    disabled={isDoc ? !result.doc_rel_path : !result.video_path}
                     onClick={() => openDrawer(result)}
                     className="h-8 w-fit whitespace-nowrap"
-                    title={result.video_path ? `${result.video_path}\n${result.md_path ?? ""}` : "No saved video file for this record"}
+                    title={isDoc
+                      ? (result.doc_rel_path ?? "doc path missing")
+                      : (result.video_path ? `${result.video_path}\n${result.md_path ?? ""}` : "No saved video file for this record")}
                   >
                     <Play className="h-3 w-3" />
-                    Open at {formatTimestamp(result.start_seconds)}
+                    {isDoc ? "Open doc" : `Open at ${formatTimestamp(result.start_seconds)}`}
                   </Button>
                 </div>
               </div>
-            ))}
+              );
+            })}
             {searched && !loading && results.length === 0 && (
               <p className="text-xs text-muted-foreground p-3">No transcript segments matched this search.</p>
             )}
