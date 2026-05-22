@@ -379,7 +379,9 @@ export default function Clips() {
     // Doc anchors don't open in the VideoDrawer — route to the Docs
     // viewer for the source file instead.
     if (anchor.document_id && anchor.doc_rel_path) {
-      window.location.href = `/docs?path=${encodeURIComponent(anchor.doc_rel_path)}`;
+      const qs = new URLSearchParams({ path: anchor.doc_rel_path });
+      if (anchor.excerpt) qs.set("excerpt", anchor.excerpt);
+      window.location.href = `/docs?${qs.toString()}`;
       return;
     }
     if (!anchor.video_id || !anchor.channel_id) return;

@@ -132,9 +132,10 @@ export default function Docs() {
   useEffect(() => { void loadConfig(); }, [loadConfig]);
   useEffect(() => { if (roots.length > 0) void loadTree(); }, [roots.length, loadTree]);
 
-  // Deep link: /docs?path=foo/bar.md&rootId=... opens that file once
-  // the trees have loaded. rootId optional for back-compat — defaults
-  // to the first root.
+  // Deep link: /docs?path=foo/bar.md&rootId=...&excerpt=... opens
+  // that file once the trees have loaded. rootId optional for
+  // back-compat. `excerpt` is consumed by the post-render scroll
+  // effect below to jump to the cited passage.
   useEffect(() => {
     if (roots.length === 0 || rootTrees.length === 0) return;
     const params = new URLSearchParams(window.location.search);
@@ -145,6 +146,50 @@ export default function Docs() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roots.length, rootTrees.length]);
+
+  // After the file content renders, look for ?excerpt= in the URL
+  // and jump to that passage in the rendered DOM. We can't reliably
+  // map source char offsets to DOM positions because markdown
+  // syntax (** _ #) doesn't show up in the rendered text — so we
+  // search for the excerpt's first chunk instead. Adds a temporary
+  // highlight that fades after 4s. URL is cleaned afterward so a
+  // reload doesn't re-trigger the jump.
+  useEffect(() => {
+    if (!content || loadingFile) return;
+    const params = new URLSearchParams(window.location.search);
+    const excerpt = params.get("excerpt");
+    if (!excerpt) return;
+    // Match on the first ~60 chars (or the whole thing if short).
+    // Markdown rendering can split phrases across nested elements;
+    // a short anchor keeps the match resilient to that.
+    const needle = excerpt.slice(0, Math.min(60, excerpt.length)).trim();
+    if (!needle) return;
+    // Wait one frame so the markdown has actually mounted to the DOM.
+    const id = requestAnimationFrame(() => {
+      const root = document.querySelector(".markdown-body");
+      if (!root) return;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const text = node.nodeValue ?? "";
+        if (text.indexOf(needle) >= 0) {
+          const parent = node.parentElement;
+          if (parent) {
+            parent.scrollIntoView({ behavior: "smooth", block: "center" });
+            parent.classList.add("docs-cite-highlight");
+            setTimeout(() => parent.classList.remove("docs-cite-highlight"), 4000);
+          }
+          break;
+        }
+      }
+      // Drop excerpt from the URL so reloading doesn't keep
+      // re-scrolling — keeps path/rootId.
+      params.delete("excerpt");
+      const qs = params.toString();
+      window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [content, loadingFile]);
 
   const saveNewRoot = async () => {
     const path = draftRootPath.trim();

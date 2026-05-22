@@ -445,10 +445,14 @@ export default function AI() {
     // Doc sources don't have a video to play — open the source markdown
     // in the Docs viewer instead. The rel_path comes through as either
     // snake_case (persisted) or camelCase (streaming context payload).
+    // Pass the excerpt so the Docs page can scroll to + highlight the
+    // cited passage on load.
     if (src.source === "doc") {
       const docPath = src.doc_rel_path ?? src.docRelPath;
       if (docPath) {
-        window.location.href = `/docs?path=${encodeURIComponent(docPath)}`;
+        const qs = new URLSearchParams({ path: docPath });
+        if (src.excerpt) qs.set("excerpt", src.excerpt);
+        window.location.href = `/docs?${qs.toString()}`;
       }
       return;
     }

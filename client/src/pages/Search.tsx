@@ -237,7 +237,9 @@ export default function TranscriptSearch() {
   const openDrawer = (result: TranscriptSearchResult) => {
     // Doc results have no video to play — route to the Docs viewer.
     if (result.source === "doc" && result.doc_rel_path) {
-      window.location.href = `/docs?path=${encodeURIComponent(result.doc_rel_path)}`;
+      const qs = new URLSearchParams({ path: result.doc_rel_path });
+      if (result.text) qs.set("excerpt", result.text);
+      window.location.href = `/docs?${qs.toString()}`;
       return;
     }
     setDrawerVideo({
