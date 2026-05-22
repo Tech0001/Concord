@@ -79,6 +79,16 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
     const category = req.body?.category && (req.body.category === "personal" || req.body.category === "work")
       ? req.body.category
       : undefined;
+    // Source-kind scope: accept any subset of audio/video/doc. Missing
+    // or empty array = no filter (search everything). Named
+    // sourceKinds (not "sources") to avoid shadowing the
+    // ContextSource[] yielded by askArchive below.
+    const allowedSources = new Set(["video", "audio", "doc"]);
+    const sourceKinds: ("video" | "audio" | "doc")[] | undefined = Array.isArray(req.body?.sources)
+      ? (req.body.sources
+          .map(String)
+          .filter((s: string) => allowedSources.has(s)) as ("video" | "audio" | "doc")[])
+      : undefined;
 
     // History for multi-turn — pass last 4 turns (2 exchanges) verbatim.
     let history: { role: "user" | "assistant"; content: string }[] = [];
@@ -134,6 +144,7 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
         topK,
         perVideoCap,
         category,
+        sources: sourceKinds && sourceKinds.length > 0 ? sourceKinds : undefined,
         chatModel: cfg.chatModel,
         embeddingModel: cfg.embeddingModel,
         signal: abortCtl.signal,

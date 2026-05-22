@@ -2,6 +2,7 @@ import { embed, formatEmbeddingQuery } from "./llm";
 import {
   getDb,
   normalizeVector,
+  videoKind,
   type TranscriptSearchResult,
   type TranscriptSearchFilters,
 } from "./db";
@@ -165,18 +166,30 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
 
   const t1 = Date.now();
 
+  // Source-kind filter — when the caller passes filters.sources, we
+  // skip whole pools whose source isn't selected. Per-row audio-vs-
+  // video filtering happens further down using videoKind() on the
+  // resolved file path.
+  const sources = filters.sources && filters.sources.length > 0
+    ? new Set(filters.sources)
+    : null;
+  const wantsVideoPool = !sources || sources.has("video") || sources.has("audio");
+  const wantsDocPool = !sources || sources.has("doc");
+
   // STAGE 1: pure KNN against vec_segments. vec0's WHERE during MATCH is
   // strict — even straightforward shapes like `WITH top_k AS (...) SELECT
   // ... WHERE t.distance <= ?` trip its query planner ("illegal WHERE"
   // error). Keep this query exactly to vec0's blessed shape and apply
   // every other filter in JS.
-  const knnRows = getDb().prepare(`
-    SELECT video_id, channel_id, segment_index, model, text,
-           start_seconds, end_seconds, speaker, distance
-    FROM vec_segments
-    WHERE embedding MATCH ?
-      AND k = ?
-  `).all(float32ToBuffer(queryVec), k) as VecKnnRow[];
+  const knnRows = wantsVideoPool
+    ? getDb().prepare(`
+        SELECT video_id, channel_id, segment_index, model, text,
+               start_seconds, end_seconds, speaker, distance
+        FROM vec_segments
+        WHERE embedding MATCH ?
+          AND k = ?
+      `).all(float32ToBuffer(queryVec), k) as VecKnnRow[]
+    : [];
 
   // Parallel KNN against doc chunks. Same dim, same model gate. Both
   // pools are merged below by distance — vec0's distance is metric so
@@ -191,13 +204,15 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
     end_char: number;
     distance: number;
   }
-  const docKnnRows = getDb().prepare(`
-    SELECT document_id, chunk_index, model, text, heading_path,
-           start_char, end_char, distance
-    FROM vec_docs
-    WHERE embedding MATCH ?
-      AND k = ?
-  `).all(float32ToBuffer(queryVec), k) as VecDocKnnRow[];
+  const docKnnRows = wantsDocPool
+    ? getDb().prepare(`
+        SELECT document_id, chunk_index, model, text, heading_path,
+               start_char, end_char, distance
+        FROM vec_docs
+        WHERE embedding MATCH ?
+          AND k = ?
+      `).all(float32ToBuffer(queryVec), k) as VecDocKnnRow[]
+    : [];
 
   // Filter to the requested model + distance threshold, then sort.
   const candidates = knnRows
@@ -236,6 +251,14 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
     if (dateTo && (!m.upload_date || m.upload_date > dateTo)) continue;
     if ((filters.category === "personal" || filters.category === "work") && m.category !== filters.category) continue;
     if (tagPassFn && !tagPassFn(m.video_id, m.channel_id)) continue;
+    if (sources) {
+      // Drop video-pool hits whose audio/video kind isn't selected.
+      // "unknown" (path missing or unrecognized ext) passes through
+      // — better to surface than to silently drop.
+      const kind = videoKind(m.video_path);
+      if (kind === "video" && !sources.has("video")) continue;
+      if (kind === "audio" && !sources.has("audio")) continue;
+    }
 
     const score = 1 - (row.distance * row.distance) / 2;
     videoResults.push({

@@ -185,6 +185,39 @@ export default function AI() {
   const [channels, setChannels] = useState<ChannelOption[]>([]);
   const [channelFilter, setChannelFilter] = useState<string>("all");
 
+  // Source-kind scope for AI retrieval. Persisted in localStorage so
+  // the user's last preference sticks across reloads. All three on by
+  // default = search everything (same as omitting the filter).
+  type ChatSourceKind = "video" | "audio" | "doc";
+  const SOURCE_STORAGE_KEY = "concord-ai-sources-v1";
+  const [enabledSources, setEnabledSources] = useState<Set<ChatSourceKind>>(() => {
+    const all = new Set<ChatSourceKind>(["video", "audio", "doc"]);
+    if (typeof window === "undefined") return all;
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(SOURCE_STORAGE_KEY) ?? "null");
+      if (Array.isArray(stored) && stored.length > 0) {
+        const valid = stored.filter((s: string) => s === "video" || s === "audio" || s === "doc");
+        if (valid.length > 0) return new Set<ChatSourceKind>(valid as ChatSourceKind[]);
+      }
+    } catch { /* fall through */ }
+    return all;
+  });
+  useEffect(() => {
+    window.localStorage.setItem(SOURCE_STORAGE_KEY, JSON.stringify(Array.from(enabledSources)));
+  }, [enabledSources]);
+  const toggleSource = (kind: ChatSourceKind) => {
+    setEnabledSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) {
+        if (next.size === 1) return next; // never let user disable everything
+        next.delete(kind);
+      } else {
+        next.add(kind);
+      }
+      return next;
+    });
+  };
+
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState<number | undefined>(undefined);
 
@@ -282,6 +315,10 @@ export default function AI() {
           conversationId: active.id || undefined,
           channelIds: channelFilter === "all" ? undefined : [channelFilter],
           category: serverCategory || undefined,
+          // Only send when the user has narrowed; an array of all
+          // three is equivalent to "no filter" and would just bloat
+          // the request body.
+          sources: enabledSources.size === 3 ? undefined : Array.from(enabledSources),
         }),
       });
 
@@ -548,6 +585,31 @@ export default function AI() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            {/* Source-kind scope chips — toggle audio / video / docs.
+             *  Last one can't be deselected so the chat always has
+             *  something to retrieve from. */}
+            <div className="hidden items-center gap-1 rounded-md border bg-card p-0.5 text-xs sm:flex" role="group" aria-label="Source scope">
+              {(["audio", "video", "doc"] as const).map((kind) => {
+                const on = enabledSources.has(kind);
+                const label = kind === "doc" ? "Docs" : kind === "audio" ? "Audio" : "Video";
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={on}
+                    onClick={() => toggleSource(kind)}
+                    title={on ? `Searching ${label.toLowerCase()}` : `${label} excluded — click to include`}
+                    className={cn(
+                      "rounded px-2 py-0.5 transition-colors",
+                      on ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Filter className="h-3.5 w-3.5" />
               <Select value={channelFilter} onValueChange={setChannelFilter}>

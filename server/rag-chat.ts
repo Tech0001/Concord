@@ -1,6 +1,6 @@
 import { searchSemantic, type SemanticSearchResult } from "./semantic-search";
 import { chat, chatStream } from "./llm";
-import { searchTranscriptSegments, type ChatMessage as PersistedChatMessage } from "./db";
+import { searchTranscriptSegments, videoKind, type ChatMessage as PersistedChatMessage } from "./db";
 
 /**
  * RAG chat orchestrator. Pipeline per turn:
@@ -28,6 +28,10 @@ export interface AskArchiveArgs {
    *  matching category. Passed through to both semantic + FTS
    *  candidate searches. */
   category?: string;
+  /** Source-kind scope. Selects any combination of audio (file ext
+   *  .wav/.m4a/.mp3/...), video (.mp4/.mkv/...), and doc (markdown
+   *  chunks). Missing/empty means "all kinds". */
+  sources?: ("video" | "audio" | "doc")[];
   /** How many segments to retrieve. Default 18, capped at 50. */
   topK?: number;
   /** Cap segments per video so one source doesn't dominate the context. */
@@ -249,6 +253,7 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
       filters: {
         ...(args.channelIds && args.channelIds.length === 1 ? { channelId: args.channelIds[0] } : {}),
         ...(args.category ? { category: args.category } : {}),
+        ...(args.sources && args.sources.length > 0 ? { sources: args.sources } : {}),
       },
     });
     semanticCandidates = search.results;
@@ -266,11 +271,27 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
   // named entities and exact phrases that the embedding model can't
   // differentiate (e.g. proper nouns). FTS errors are silent — if the index
   // is missing or the query has no parseable terms, fall back to semantic-only.
+  // Skip FTS entirely when the source scope excludes both video kinds —
+  // FTS only knows about transcript segments, so there's nothing it can
+  // contribute when the user asked for docs-only.
+  const sourceSet = args.sources && args.sources.length > 0 ? new Set(args.sources) : null;
+  const wantsAnyTranscript = !sourceSet || sourceSet.has("video") || sourceSet.has("audio");
   let ftsRows: SemanticSearchResult[] = [];
-  try {
-    ftsRows = ftsCandidates(retrievalQuery, args.channelIds, topK * 2, args.category);
-  } catch {
-    ftsRows = [];
+  if (wantsAnyTranscript) {
+    try {
+      ftsRows = ftsCandidates(retrievalQuery, args.channelIds, topK * 2, args.category);
+      // Filter by kind when only one of video/audio is selected.
+      if (sourceSet && !(sourceSet.has("video") && sourceSet.has("audio"))) {
+        ftsRows = ftsRows.filter((r) => {
+          const k = videoKind(r.video_path);
+          if (k === "video") return sourceSet.has("video");
+          if (k === "audio") return sourceSet.has("audio");
+          return true; // unknown extension — keep
+        });
+      }
+    } catch {
+      ftsRows = [];
+    }
   }
 
   const fused = ftsRows.length > 0

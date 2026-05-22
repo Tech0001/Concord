@@ -89,7 +89,27 @@ export interface TranscriptSearchFilters {
    *  video_queue.category column. Anything else (missing, "both",
    *  garbage) is no-op. */
   category?: string;
+  /** Source-kind scope used by the AI chat. Each value narrows the
+   *  result pool: "video" = video files, "audio" = audio-only files
+   *  (.wav / .m4a / .mp3 / .flac / .ogg), "doc" = markdown chunks.
+   *  Missing/empty means "all kinds". */
+  sources?: ("video" | "audio" | "doc")[];
   limit?: number;
+}
+
+const AUDIO_EXTS = /\.(wav|m4a|mp3|flac|ogg|opus|aac)$/i;
+const VIDEO_EXTS = /\.(mp4|mkv|webm|mov|avi|m4v)$/i;
+
+/** Derive whether a video_queue row's file is audio-only or true
+ *  video, based on the saved file's extension. Returns "unknown"
+ *  when the path is missing or the extension doesn't match either
+ *  set — those rows pass both filters so we don't accidentally
+ *  exclude legit data. */
+export function videoKind(videoPath: string | null | undefined): "video" | "audio" | "unknown" {
+  if (!videoPath) return "unknown";
+  if (AUDIO_EXTS.test(videoPath)) return "audio";
+  if (VIDEO_EXTS.test(videoPath)) return "video";
+  return "unknown";
 }
 
 export interface TranscriptSearchResult {
