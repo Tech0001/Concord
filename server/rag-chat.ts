@@ -1,6 +1,6 @@
 import { searchSemantic, type SemanticSearchResult } from "./semantic-search";
 import { chat, chatStream } from "./llm";
-import { searchTranscriptSegments, videoKind, type ChatMessage as PersistedChatMessage } from "./db";
+import { getDb, searchTranscriptSegments, videoKind, type ChatMessage as PersistedChatMessage } from "./db";
 
 /**
  * RAG chat orchestrator. Pipeline per turn:
@@ -56,6 +56,11 @@ export interface ContextSource {
   startSeconds: number;
   endSeconds: number;
   speaker: string | null;
+  /** Global speaker name resolved via video_speaker_assignments →
+   *  speakers. Null when the local speaker hasn't been labeled yet.
+   *  Sent to the LLM prompt in preference to the local "S0" label so
+   *  the model can attribute quotes by name. */
+  speakerName: string | null;
   excerpt: string;
   score: number;
   videoTitle: string;
@@ -119,7 +124,13 @@ function formatSourceBlock(sources: ContextSource[]): string {
       const heading = s.docHeadingPath ? ` · ${s.docHeadingPath}` : "";
       return `[${s.sourceIndex}] DOC: ${s.docTitle || s.docRelPath}${heading}\n${s.excerpt}`;
     }
-    const speaker = s.speaker ? ` · Speaker: ${s.speaker}` : "";
+    // Prefer the global speaker name when the user has labeled it —
+    // the local "S0" / "S1" labels are meaningless to the model and
+    // produce attribution mistakes like "attributed to Speaker S0".
+    // Fall back to the local label when the speaker hasn't been
+    // identified yet.
+    const speakerLabel = s.speakerName ?? s.speaker;
+    const speaker = speakerLabel ? ` · Speaker: ${speakerLabel}` : "";
     const ts = `${formatTimestamp(s.startSeconds)}–${formatTimestamp(s.endSeconds)}`;
     const date = s.uploadDate ? ` (${s.uploadDate})` : "";
     const channel = s.channelName ? `${s.channelName} · ` : "";
@@ -300,6 +311,40 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
 
   const capped = applyPerVideoCap(fused, perVideoCap).slice(0, topK);
 
+  // Resolve local "S0"/"S1" speaker labels to global speaker names
+  // for everything in the final context. Without this the LLM only
+  // sees the opaque local label and can't attribute quotes by name.
+  // One batch query keyed on the unique (video, channel, speaker)
+  // triples — much cheaper than per-row JOINs.
+  const speakerKey = (videoId: string, channelId: string, local: string) =>
+    `${videoId}|${channelId}|${local}`;
+  const speakerNames = new Map<string, string>();
+  const triples = capped
+    .filter((r) => r.source !== "doc" && r.video_id && r.channel_id && r.speaker)
+    .map((r) => ({ video_id: r.video_id, channel_id: r.channel_id, local_speaker: r.speaker! }));
+  if (triples.length > 0) {
+    // Dedupe before the SELECT.
+    const seen = new Set<string>();
+    const uniqueTriples = triples.filter((t) => {
+      const k = speakerKey(t.video_id, t.channel_id, t.local_speaker);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    const placeholders = uniqueTriples.map(() => "(?, ?, ?)").join(",");
+    const params: any[] = [];
+    for (const t of uniqueTriples) params.push(t.video_id, t.channel_id, t.local_speaker);
+    const rows = getDb().prepare(`
+      SELECT vsa.video_id, vsa.channel_id, vsa.local_speaker, sp.name
+      FROM video_speaker_assignments vsa
+      JOIN speakers sp ON sp.id = vsa.speaker_id
+      WHERE (vsa.video_id, vsa.channel_id, vsa.local_speaker) IN (VALUES ${placeholders})
+    `).all(...params) as { video_id: string; channel_id: string; local_speaker: string; name: string }[];
+    for (const r of rows) {
+      speakerNames.set(speakerKey(r.video_id, r.channel_id, r.local_speaker), r.name);
+    }
+  }
+
   const sources: ContextSource[] = capped.map((r, idx) => ({
     sourceIndex: idx + 1,
     source: r.source ?? "video",
@@ -309,6 +354,9 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
     startSeconds: r.start_seconds,
     endSeconds: r.end_seconds,
     speaker: r.speaker,
+    speakerName: r.speaker
+      ? (speakerNames.get(speakerKey(r.video_id, r.channel_id, r.speaker)) ?? null)
+      : null,
     excerpt: r.text,
     score: r.score,
     videoTitle: r.title,

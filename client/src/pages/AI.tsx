@@ -61,6 +61,7 @@ interface ChatSource {
   mdPath?: string | null;
   isLive?: number | null;
   wordCount?: number | null;
+  speakerName?: string | null;
   // Doc-source fields — populated when source === "doc".
   document_id?: string;
   doc_rel_path?: string;
@@ -974,7 +975,9 @@ function SourcesList({
               ) : (
                 <>
                   {s.channel_name && <span>{s.channel_name}</span>}
-                  {s.speaker_name && <span>· {s.speaker_name}</span>}
+                  {(s.speaker_name ?? s.speakerName) && (
+                    <span>· {s.speaker_name ?? s.speakerName}</span>
+                  )}
                 </>
               )}
               {s.score != null && <span className="font-mono">· score {s.score.toFixed(2)}</span>}
@@ -1142,7 +1145,7 @@ function SaveAsNoteDialog({
             <div className="font-medium">{source.video_title}</div>
             <div className="text-muted-foreground">
               {source.channel_name} · {fmtTimestamp(source.start_seconds)}
-              {source.speaker_name && ` · ${source.speaker_name}`}
+              {(source.speaker_name ?? source.speakerName) && ` · ${source.speaker_name ?? source.speakerName}`}
             </div>
             {source.excerpt && <div className="mt-1 italic text-muted-foreground">"{source.excerpt}"</div>}
           </div>
