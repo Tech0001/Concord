@@ -6,7 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
+import { DocDrawer, type DocDrawerEntry } from "@/components/DocDrawer";
 import { useToast } from "@/hooks/use-toast";
+import { useCategory } from "@/hooks/use-category";
 import { apiRequest } from "@/lib/queryClient";
 import { Calendar, ChevronDown, Clock, DatabaseZap, FileText, Filter, Loader2, Play, Radio, Search as SearchIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -40,6 +42,16 @@ interface TranscriptSearchResult {
   text: string;
   /** Cosine similarity for semantic results; absent for FTS results. */
   score?: number;
+  /** "video" (default) or "doc". Semantic search merges in doc hits
+   *  alongside transcript segments. */
+  source?: "video" | "doc";
+  document_id?: string;
+  doc_root_id?: string;
+  doc_rel_path?: string;
+  doc_title?: string;
+  doc_heading_path?: string;
+  doc_start_char?: number;
+  doc_end_char?: number;
 }
 
 interface IndexStats {
@@ -88,6 +100,13 @@ export default function TranscriptSearch() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [results, setResults] = useState<TranscriptSearchResult[]>([]);
+
+  // Client-side sort over the result set. "Relevance" preserves the
+  // server's order (semantic = score desc, FTS = rank asc). The rest
+  // are stable sorts off the chosen field; nulls bubble to the end
+  // so they don't crowd the top in date-sort views.
+  type SortKey = "relevance" | "date-desc" | "date-asc" | "title-asc" | "title-desc" | "channel-asc";
+  const [sortKey, setSortKey] = useState<SortKey>("relevance");
   const [searched, setSearched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [reindexing, setReindexing] = useState(false);
@@ -102,14 +121,60 @@ export default function TranscriptSearch() {
   const [mode, setMode] = useState<"words" | "meaning">("words");
   const [embeddingStats, setEmbeddingStats] = useState<{ totalSegments: number; totalVideos: number } | null>(null);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
+  const [drawerDoc, setDrawerDoc] = useState<DocDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerSegmentIndex, setDrawerSegmentIndex] = useState<number | undefined>();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { toast } = useToast();
+  const { serverCategory } = useCategory();
 
   const resultCountByVideo = useMemo(() => {
     return new Set(results.map(result => `${result.channel_id}:${result.video_id}`)).size;
   }, [results]);
+
+  /** Sorted view over results. Server-side order is preserved when
+   *  the user picks "relevance" so semantic + FTS rankings still
+   *  flow through. For the other keys we copy-then-sort so we don't
+   *  mutate the result of the fetch. Comparators favour the
+   *  isDoc-aware fields (doc_title / doc_rel_path) when present so
+   *  doc results sort sensibly alongside video results. */
+  const sortedResults = useMemo(() => {
+    if (sortKey === "relevance") return results;
+    const list = [...results];
+    const titleOf = (r: TranscriptSearchResult) => (r.source === "doc" ? (r.doc_title ?? r.doc_rel_path ?? r.title) : r.title) || "";
+    const channelOf = (r: TranscriptSearchResult) => (r.source === "doc" ? "" : (r.channel_name ?? r.channel_id ?? ""));
+    // upload_date is YYYYMMDD for videos; for doc results it's null
+    // — keep nulls at the END regardless of asc/desc so they don't
+    // crowd the top in date views.
+    const dateOf = (r: TranscriptSearchResult) => r.upload_date ?? "";
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case "date-desc": {
+          const da = dateOf(a), db = dateOf(b);
+          if (!da && !db) return 0;
+          if (!da) return 1;
+          if (!db) return -1;
+          return db.localeCompare(da);
+        }
+        case "date-asc": {
+          const da = dateOf(a), db = dateOf(b);
+          if (!da && !db) return 0;
+          if (!da) return 1;
+          if (!db) return -1;
+          return da.localeCompare(db);
+        }
+        case "title-asc":
+          return titleOf(a).localeCompare(titleOf(b), undefined, { numeric: true, sensitivity: "base" });
+        case "title-desc":
+          return titleOf(b).localeCompare(titleOf(a), undefined, { numeric: true, sensitivity: "base" });
+        case "channel-asc":
+          return channelOf(a).localeCompare(channelOf(b), undefined, { sensitivity: "base" });
+        default:
+          return 0;
+      }
+    });
+    return list;
+  }, [results, sortKey]);
 
   const loadTagOptions = async () => {
     try {
@@ -175,6 +240,7 @@ export default function TranscriptSearch() {
             dateTo: dateTo ? dateTo.replaceAll("-", "") : undefined,
             tags: tagFilter,
             speakerId: speakerFilter === "all" ? undefined : speakerFilter,
+            category: serverCategory || undefined,
           },
         });
         const data = await response.json() as { results: TranscriptSearchResult[] };
@@ -189,6 +255,7 @@ export default function TranscriptSearch() {
           dateTo: dateTo.replaceAll("-", ""),
           tags: tagFilter.join(","),
           speakerId: speakerFilter === "all" ? "" : speakerFilter,
+          category: serverCategory,
           limit: "200",
           t: String(Date.now()),
         }));
@@ -222,6 +289,18 @@ export default function TranscriptSearch() {
   };
 
   const openDrawer = (result: TranscriptSearchResult) => {
+    // Doc results have no video to play — route to the Docs viewer.
+    if (result.source === "doc" && result.doc_rel_path) {
+      setDrawerDoc({
+        documentId: result.document_id,
+        rootId: result.doc_root_id,
+        relPath: result.doc_rel_path,
+        title: result.doc_title ?? result.title ?? result.doc_rel_path,
+        excerpt: result.text,
+        subtitle: result.doc_heading_path ?? null,
+      });
+      return;
+    }
     setDrawerVideo({
       video_id: result.video_id,
       channel_id: result.channel_id,
@@ -430,23 +509,59 @@ export default function TranscriptSearch() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-1.5">
-            <FileText className="h-4 w-4" />
-            Results
-          </CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-1.5">
+              <FileText className="h-4 w-4" />
+              Results
+            </CardTitle>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span>Sort</span>
+              <Select value={sortKey} onValueChange={(v) => setSortKey(v as typeof sortKey)}>
+                <SelectTrigger className="h-7 w-[160px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="relevance" className="text-xs">Relevance</SelectItem>
+                  <SelectItem value="date-desc" className="text-xs">Date · newest</SelectItem>
+                  <SelectItem value="date-asc" className="text-xs">Date · oldest</SelectItem>
+                  <SelectItem value="title-asc" className="text-xs">Title · A→Z</SelectItem>
+                  <SelectItem value="title-desc" className="text-xs">Title · Z→A</SelectItem>
+                  <SelectItem value="channel-asc" className="text-xs">Channel · A→Z</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="divide-y rounded-md border">
-            {results.map(result => (
-              <div key={`${result.channel_id}:${result.video_id}:${result.segment_index}`} className="p-3 text-sm">
+            {sortedResults.map(result => {
+              const isDoc = result.source === "doc";
+              return (
+              <div key={isDoc ? `doc:${result.document_id}:${result.segment_index}` : `${result.channel_id}:${result.video_id}:${result.segment_index}`} className="p-3 text-sm">
                 <div className="flex flex-col gap-1 md:flex-row md:items-start md:justify-between">
                   <div className="min-w-0">
-                    <div className="font-medium truncate">{result.title}</div>
+                    <div className="font-medium truncate flex items-center gap-1.5">
+                      {isDoc && (
+                        <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400 shrink-0">
+                          doc
+                        </span>
+                      )}
+                      <span className="truncate">{result.title}</span>
+                    </div>
                     <div className="text-xs text-muted-foreground flex flex-wrap gap-x-2 gap-y-1 mt-1">
-                      <span>{result.channel_name || result.channel_id}</span>
-                      <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{formatUploadDate(result.upload_date)}</span>
-                      <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatTimestamp(result.start_seconds)} - {formatTimestamp(result.end_seconds)}</span>
-                      {!!result.is_live && <span className="flex items-center gap-1"><Radio className="h-3 w-3" />Live</span>}
+                      {isDoc ? (
+                        <>
+                          <span className="font-mono truncate" title={result.doc_rel_path ?? ""}>{result.doc_rel_path}</span>
+                          {result.doc_heading_path && <span>· {result.doc_heading_path}</span>}
+                        </>
+                      ) : (
+                        <>
+                          <span>{result.channel_name || result.channel_id}</span>
+                          <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{formatUploadDate(result.upload_date)}</span>
+                          <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatTimestamp(result.start_seconds)} - {formatTimestamp(result.end_seconds)}</span>
+                          {!!result.is_live && <span className="flex items-center gap-1"><Radio className="h-3 w-3" />Live</span>}
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="flex gap-1 flex-wrap md:justify-end">
@@ -480,17 +595,20 @@ export default function TranscriptSearch() {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={!result.video_path}
+                    disabled={isDoc ? !result.doc_rel_path : !result.video_path}
                     onClick={() => openDrawer(result)}
                     className="h-8 w-fit whitespace-nowrap"
-                    title={result.video_path ? `${result.video_path}\n${result.md_path ?? ""}` : "No saved video file for this record"}
+                    title={isDoc
+                      ? (result.doc_rel_path ?? "doc path missing")
+                      : (result.video_path ? `${result.video_path}\n${result.md_path ?? ""}` : "No saved video file for this record")}
                   >
                     <Play className="h-3 w-3" />
-                    Open at {formatTimestamp(result.start_seconds)}
+                    {isDoc ? "Open doc" : `Open at ${formatTimestamp(result.start_seconds)}`}
                   </Button>
                 </div>
               </div>
-            ))}
+              );
+            })}
             {searched && !loading && results.length === 0 && (
               <p className="text-xs text-muted-foreground p-3">No transcript segments matched this search.</p>
             )}
@@ -506,6 +624,11 @@ export default function TranscriptSearch() {
         initialSeconds={drawerSeconds}
         initialSegmentIndex={drawerSegmentIndex}
         onOpenChange={setDrawerOpen}
+      />
+      <DocDrawer
+        open={!!drawerDoc}
+        doc={drawerDoc}
+        onOpenChange={(open) => { if (!open) setDrawerDoc(null); }}
       />
     </div>
   );

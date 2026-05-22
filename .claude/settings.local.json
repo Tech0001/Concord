@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc *)",
-      "Read(//Users/mackers/GitHub/FluidAudio/**)"
+      "Read(//Users/mackers/GitHub/FluidAudio/**)",
+      "Bash(pnpm check *)"
     ]
   }
 }

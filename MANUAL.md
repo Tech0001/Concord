@@ -60,7 +60,7 @@ Transcription Engine**.
 ### 2. LLM (for chat, summaries, semantic search)
 
 Many of Concord's smarter features rely on a local LLM. The expected
-setup is [oMLX](https://omlx.org) or any OpenAI-compatible local
+setup is [oMLX](https://omlx.ai) or any OpenAI-compatible local
 server on `localhost`.
 
 In **Settings**, set:

@@ -1,4 +1,5 @@
 import { Handle, Position } from "@xyflow/react";
+import { FileText } from "lucide-react";
 import { TagChip } from "@/components/TagPicker";
 import { cn } from "@/lib/utils";
 import { channelColor, formatTimestamp } from "./helpers";
@@ -17,6 +18,8 @@ export function ClipNode({ data, selected }: { data: GraphNodeData; selected?: b
   const anchors = Array.isArray(data.anchors) ? data.anchors : [];
   const multiAnchor = anchors.length > 1;
   const standalone = anchors.length === 0;
+  const docAnchors = anchors.filter((a: any) => a.documentId);
+  const hasDocAnchor = docAnchors.length > 0;
 
   return (
     <div
@@ -34,17 +37,32 @@ export function ClipNode({ data, selected }: { data: GraphNodeData; selected?: b
       <Handle id="right"  type="source" position={Position.Right}  className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
       <Handle id="top"    type="source" position={Position.Top}    className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
       <Handle id="bottom" type="source" position={Position.Bottom} className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
-      <div className="line-clamp-2 text-xs font-medium leading-4">{data.title}</div>
+      <div className="flex items-center gap-1">
+        {hasDocAnchor && (
+          <FileText
+            className="h-3 w-3 shrink-0 text-blue-500"
+            aria-label="Doc-anchored note"
+          />
+        )}
+        <div className="line-clamp-2 text-xs font-medium leading-4 flex-1">{data.title}</div>
+      </div>
       <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
         {standalone
           ? <span>standalone</span>
           : multiAnchor
             ? <span>{anchors.length} anchors · {data.degree} links</span>
-            : <>
-                <span>{data.channelName || data.channelId}</span>
-                <span>{formatTimestamp(data.startSeconds)}</span>
-                <span>{data.degree} links</span>
-              </>
+            : hasDocAnchor
+              ? <>
+                  <span className="truncate" title={docAnchors[0].docRelPath ?? ""}>
+                    {docAnchors[0].docTitle ?? docAnchors[0].docRelPath ?? "doc"}
+                  </span>
+                  <span>{data.degree} links</span>
+                </>
+              : <>
+                  <span>{data.channelName || data.channelId}</span>
+                  <span>{formatTimestamp(data.startSeconds)}</span>
+                  <span>{data.degree} links</span>
+                </>
         }
       </div>
       {data.note && (

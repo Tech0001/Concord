@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { channelFolderName } from "./naming";
-import { enqueueVideo, getDb, updateQueueStatus } from "./db";
+import { enqueueVideo, getDb, updateChannelCategory, updateQueueStatus } from "./db";
 import type { Pipeline } from "./pipeline";
 
 /**
@@ -137,7 +137,7 @@ export function registerPipelineRoutes(app: Express, pipeline: Pipeline): void {
 
   app.post("/api/pipeline/channels", (req, res) => {
     try {
-      const { name, url, diarize } = req.body;
+      const { name, url, diarize, category } = req.body;
       if (!name || !url) return res.status(400).json({ error: "Name and URL are required" });
 
       const config = pipeline.getConfig();
@@ -147,6 +147,7 @@ export function registerPipelineRoutes(app: Express, pipeline: Pipeline): void {
         url,
         enabled: true,
         diarize: diarize === false ? false : true,
+        category: category === "work" ? "work" as const : "personal" as const,
       };
 
       config.channels.push(newChannel);
@@ -176,6 +177,14 @@ export function registerPipelineRoutes(app: Express, pipeline: Pipeline): void {
     if (req.body.enabled !== undefined) channel.enabled = req.body.enabled;
     if (req.body.diarize !== undefined) channel.diarize = !!req.body.diarize;
     if (req.body.include_shorts !== undefined) channel.include_shorts = !!req.body.include_shorts;
+    if (req.body.category === "personal" || req.body.category === "work") {
+      // Cascade onto the channel's existing videos so the queue filter
+      // doesn't lag behind the channel-level change.
+      const next = req.body.category;
+      channel.category = next;
+      // updateChannelCategory writes to both tables in one txn.
+      try { updateChannelCategory(req.params.channelId, next); } catch { /* falls through to updateConfig */ }
+    }
     if (typeof req.body.name === "string" && req.body.name.trim()) {
       // The folder on disk uses the OLD name as its name. We don't move
       // the folder here because every video's video_path is absolute —

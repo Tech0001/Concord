@@ -24,6 +24,9 @@ export interface ChannelConfig {
    *  videos already in the channel — turn on for creators whose Shorts
    *  are genuine new content). */
   include_shorts?: boolean;
+  /** Personal / work category — drives the header viewing toggle and is
+   *  inherited by all videos this channel ingests. */
+  category?: "personal" | "work";
 }
 
 /**

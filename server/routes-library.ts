@@ -152,6 +152,7 @@ export function registerLibraryRoutes(app: Express, pipeline: Pipeline): void {
         dateTo: req.query.dateTo ? String(req.query.dateTo) : undefined,
         tags,
         speakerId: speakerIdParam,
+        category: req.query.category ? String(req.query.category) : undefined,
         limit: req.query.limit ? Number(req.query.limit) : 100,
       });
       res.json({ results, index: getTranscriptSearchIndexStats() });
@@ -631,6 +632,7 @@ function registerLibraryMutators(app: Express, pipeline: Pipeline): void {
       type: String(req.query.type || "all"),
       hasTranscript: String(req.query.hasTranscript || "all"),
       starred: String(req.query.starred || "all"),
+      category: String(req.query.category || "both"),
       q: req.query.q ? String(req.query.q) : "",
       sort: String(req.query.sort || "upload_desc"),
     });

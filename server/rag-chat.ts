@@ -1,6 +1,6 @@
 import { searchSemantic, type SemanticSearchResult } from "./semantic-search";
 import { chat, chatStream } from "./llm";
-import { searchTranscriptSegments, type ChatMessage as PersistedChatMessage } from "./db";
+import { getDb, searchTranscriptSegments, videoKind, type ChatMessage as PersistedChatMessage } from "./db";
 
 /**
  * RAG chat orchestrator. Pipeline per turn:
@@ -24,6 +24,14 @@ export interface AskArchiveArgs {
   history?: Pick<PersistedChatMessage, "role" | "content">[];
   /** When set, restrict retrieval to these channels. */
   channelIds?: string[];
+  /** Personal / work scope — narrows retrieval to videos in the
+   *  matching category. Passed through to both semantic + FTS
+   *  candidate searches. */
+  category?: string;
+  /** Source-kind scope. Selects any combination of audio (file ext
+   *  .wav/.m4a/.mp3/...), video (.mp4/.mkv/...), and doc (markdown
+   *  chunks). Missing/empty means "all kinds". */
+  sources?: ("video" | "audio" | "doc")[];
   /** How many segments to retrieve. Default 18, capped at 50. */
   topK?: number;
   /** Cap segments per video so one source doesn't dominate the context. */
@@ -39,12 +47,20 @@ export interface AskArchiveArgs {
 export interface ContextSource {
   /** 1-based — matches the [N] markers the model is asked to emit. */
   sourceIndex: number;
+  /** Source discriminator. Defaults to "video" for back-compat with
+   *  persisted rows that predate doc sources. */
+  source?: "video" | "doc";
   videoId: string;
   channelId: string;
   segmentIndex: number;
   startSeconds: number;
   endSeconds: number;
   speaker: string | null;
+  /** Global speaker name resolved via video_speaker_assignments →
+   *  speakers. Null when the local speaker hasn't been labeled yet.
+   *  Sent to the LLM prompt in preference to the local "S0" label so
+   *  the model can attribute quotes by name. */
+  speakerName: string | null;
   excerpt: string;
   score: number;
   videoTitle: string;
@@ -60,6 +76,19 @@ export interface ContextSource {
   isLive: number | null;
   duration: number | null;
   wordCount: number | null;
+  /** Doc-source fields — populated when source === "doc". The video*
+   *  fields above are placeholders ("") in that case. */
+  documentId?: string;
+  /** Which root the doc lives in. Needed by the client when more
+   *  than one root is configured — without it the file fetch falls
+   *  back to the first root and 404s for docs in other roots.
+   *  Empty string = legacy root. */
+  docRootId?: string;
+  docRelPath?: string;
+  docTitle?: string;
+  docHeadingPath?: string;
+  docStartChar?: number;
+  docEndChar?: number;
 }
 
 export type AskEvent =
@@ -76,11 +105,56 @@ function hardCap(n: number, max: number) {
 
 /** Diversity cap: keep at most `perVideoCap` segments per (video, channel)
  *  while preserving the original score-sorted order. */
+/** Pull every global speaker name once per ask. Tiny table (≤ low
+ *  hundreds of rows in practice); a cache would be premature.
+ *  Returns lowercased names so the substring match below is
+ *  case-insensitive without per-comparison toLowerCase. */
+function listGlobalSpeakerNames(): { name: string; lower: string }[] {
+  const rows = getDb()
+    .prepare("SELECT name FROM speakers WHERE name IS NOT NULL AND name <> ''")
+    .all() as { name: string }[];
+  return rows.map((r) => ({ name: r.name, lower: r.name.toLowerCase() }));
+}
+
+/** Word-boundary match for each known speaker name against the
+ *  user's question. Returns the ORIGINAL-case names that matched.
+ *  Word-boundary so "Brandon" doesn't accidentally match "brandons"
+ *  (or arbitrary substrings inside other words). */
+function matchSpeakerNamesInQuestion(
+  question: string,
+  speakers: { name: string; lower: string }[],
+): string[] {
+  if (speakers.length === 0) return [];
+  // Normalize punctuation to spaces (any non-alphanumeric, non-space
+  // char), collapse runs, pad — gives us reliable word-boundary
+  // checks via plain substring against " name ". The /u flag isn't
+  // needed here; ASCII coverage is fine for English speaker names.
+  const padded = ` ${question.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()} `;
+  const out: string[] = [];
+  for (const sp of speakers) {
+    if (padded.includes(` ${sp.lower} `)) out.push(sp.name);
+  }
+  return out;
+}
+
+/** Key for deduplicating results across the primary + speaker-
+ *  expansion passes. Doc hits use document_id + chunk; video hits
+ *  use video/channel/segment. */
+function speakerHitKey(r: SemanticSearchResult): string {
+  if (r.source === "doc") return `doc:${r.document_id ?? ""}:${r.segment_index}`;
+  return `vid:${r.video_id}:${r.channel_id}:${r.segment_index}`;
+}
+
 function applyPerVideoCap(rows: SemanticSearchResult[], perVideoCap: number): SemanticSearchResult[] {
   const counts = new Map<string, number>();
   const out: SemanticSearchResult[] = [];
   for (const r of rows) {
-    const key = `${r.video_id}|${r.channel_id}`;
+    // Doc hits cap per document_id; video hits per (video, channel).
+    // Without the source split, every doc chunk would collide on the
+    // empty (videoId, channelId) sentinel and only one would survive.
+    const key = r.source === "doc"
+      ? `doc:${r.document_id ?? ""}`
+      : `video:${r.video_id}|${r.channel_id}`;
     const seen = counts.get(key) ?? 0;
     if (seen >= perVideoCap) continue;
     counts.set(key, seen + 1);
@@ -91,7 +165,17 @@ function applyPerVideoCap(rows: SemanticSearchResult[], perVideoCap: number): Se
 
 function formatSourceBlock(sources: ContextSource[]): string {
   return sources.map((s) => {
-    const speaker = s.speaker ? ` · Speaker: ${s.speaker}` : "";
+    if (s.source === "doc") {
+      const heading = s.docHeadingPath ? ` · ${s.docHeadingPath}` : "";
+      return `[${s.sourceIndex}] DOC: ${s.docTitle || s.docRelPath}${heading}\n${s.excerpt}`;
+    }
+    // Prefer the global speaker name when the user has labeled it —
+    // the local "S0" / "S1" labels are meaningless to the model and
+    // produce attribution mistakes like "attributed to Speaker S0".
+    // Fall back to the local label when the speaker hasn't been
+    // identified yet.
+    const speakerLabel = s.speakerName ?? s.speaker;
+    const speaker = speakerLabel ? ` · Speaker: ${speakerLabel}` : "";
     const ts = `${formatTimestamp(s.startSeconds)}–${formatTimestamp(s.endSeconds)}`;
     const date = s.uploadDate ? ` (${s.uploadDate})` : "";
     const channel = s.channelName ? `${s.channelName} · ` : "";
@@ -180,10 +264,16 @@ function rankFuse(
     .map((e) => e.row);
 }
 
-function ftsCandidates(query: string, channelIds: string[] | undefined, limit: number): SemanticSearchResult[] {
+function ftsCandidates(
+  query: string,
+  channelIds: string[] | undefined,
+  limit: number,
+  category?: string,
+): SemanticSearchResult[] {
   const rows = searchTranscriptSegments(query, {
     limit,
     channelId: channelIds && channelIds.length === 1 ? channelIds[0] : undefined,
+    category,
   });
   const allowed = channelIds && channelIds.length > 1 ? new Set(channelIds) : null;
   return rows
@@ -211,16 +301,58 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
 
   let semanticCandidates: SemanticSearchResult[] = [];
   try {
-    const search = await searchSemantic({
+    const baseFilters = {
+      ...(args.channelIds && args.channelIds.length === 1 ? { channelId: args.channelIds[0] } : {}),
+      ...(args.category ? { category: args.category } : {}),
+      ...(args.sources && args.sources.length > 0 ? { sources: args.sources } : {}),
+    };
+
+    // Pass 1: the original (or rewritten-for-retrieval) query.
+    const primary = await searchSemantic({
       query: retrievalQuery,
       model: args.embeddingModel || "",
       limit: topK * 2,
       minScore: 0.3,
-      filters: args.channelIds && args.channelIds.length === 1
-        ? { channelId: args.channelIds[0] }
-        : undefined,
+      filters: baseFilters,
     });
-    semanticCandidates = search.results;
+    semanticCandidates = primary.results;
+
+    // Pass 2: speaker-aware expansion. Segments are now embedded
+    // with the speaker's global name prefixed ("Brandon Biggs: …");
+    // when the user's question mentions a known speaker by name we
+    // run an extra KNN with the same prefix applied to the QUERY
+    // side. That pushes the cosine math to favor the prefixed
+    // segments — i.e. the speaker's own first-person content. Merge
+    // by best score per (video, channel, segment) so duplicates from
+    // pass 1 don't crowd the limit.
+    const speakerNames = listGlobalSpeakerNames();
+    const matchedNames = matchSpeakerNamesInQuestion(args.question, speakerNames);
+    if (matchedNames.length > 0) {
+      const merged = new Map<string, SemanticSearchResult>();
+      for (const r of semanticCandidates) merged.set(speakerHitKey(r), r);
+      for (const name of matchedNames) {
+        try {
+          const extra = await searchSemantic({
+            query: `${name}: ${retrievalQuery}`,
+            model: args.embeddingModel || "",
+            limit: topK * 2,
+            minScore: 0.3,
+            filters: baseFilters,
+          });
+          for (const r of extra.results) {
+            const key = speakerHitKey(r);
+            const existing = merged.get(key);
+            if (!existing || r.score > existing.score) {
+              merged.set(key, r);
+            }
+          }
+        } catch (err) {
+          // Best-effort — a failed expansion shouldn't sink the whole ask.
+          console.warn(`[ask] speaker-expansion for "${name}" failed:`, err instanceof Error ? err.message : err);
+        }
+      }
+      semanticCandidates = Array.from(merged.values()).sort((a, b) => b.score - a.score);
+    }
   } catch (err) {
     yield { type: "error", error: err instanceof Error ? err.message : String(err) };
     return;
@@ -235,11 +367,27 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
   // named entities and exact phrases that the embedding model can't
   // differentiate (e.g. proper nouns). FTS errors are silent — if the index
   // is missing or the query has no parseable terms, fall back to semantic-only.
+  // Skip FTS entirely when the source scope excludes both video kinds —
+  // FTS only knows about transcript segments, so there's nothing it can
+  // contribute when the user asked for docs-only.
+  const sourceSet = args.sources && args.sources.length > 0 ? new Set(args.sources) : null;
+  const wantsAnyTranscript = !sourceSet || sourceSet.has("video") || sourceSet.has("audio");
   let ftsRows: SemanticSearchResult[] = [];
-  try {
-    ftsRows = ftsCandidates(retrievalQuery, args.channelIds, topK * 2);
-  } catch {
-    ftsRows = [];
+  if (wantsAnyTranscript) {
+    try {
+      ftsRows = ftsCandidates(retrievalQuery, args.channelIds, topK * 2, args.category);
+      // Filter by kind when only one of video/audio is selected.
+      if (sourceSet && !(sourceSet.has("video") && sourceSet.has("audio"))) {
+        ftsRows = ftsRows.filter((r) => {
+          const k = videoKind(r.video_path);
+          if (k === "video") return sourceSet.has("video");
+          if (k === "audio") return sourceSet.has("audio");
+          return true; // unknown extension — keep
+        });
+      }
+    } catch {
+      ftsRows = [];
+    }
   }
 
   const fused = ftsRows.length > 0
@@ -248,14 +396,52 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
 
   const capped = applyPerVideoCap(fused, perVideoCap).slice(0, topK);
 
+  // Resolve local "S0"/"S1" speaker labels to global speaker names
+  // for everything in the final context. Without this the LLM only
+  // sees the opaque local label and can't attribute quotes by name.
+  // One batch query keyed on the unique (video, channel, speaker)
+  // triples — much cheaper than per-row JOINs.
+  const speakerKey = (videoId: string, channelId: string, local: string) =>
+    `${videoId}|${channelId}|${local}`;
+  const speakerNames = new Map<string, string>();
+  const triples = capped
+    .filter((r) => r.source !== "doc" && r.video_id && r.channel_id && r.speaker)
+    .map((r) => ({ video_id: r.video_id, channel_id: r.channel_id, local_speaker: r.speaker! }));
+  if (triples.length > 0) {
+    // Dedupe before the SELECT.
+    const seen = new Set<string>();
+    const uniqueTriples = triples.filter((t) => {
+      const k = speakerKey(t.video_id, t.channel_id, t.local_speaker);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    const placeholders = uniqueTriples.map(() => "(?, ?, ?)").join(",");
+    const params: any[] = [];
+    for (const t of uniqueTriples) params.push(t.video_id, t.channel_id, t.local_speaker);
+    const rows = getDb().prepare(`
+      SELECT vsa.video_id, vsa.channel_id, vsa.local_speaker, sp.name
+      FROM video_speaker_assignments vsa
+      JOIN speakers sp ON sp.id = vsa.speaker_id
+      WHERE (vsa.video_id, vsa.channel_id, vsa.local_speaker) IN (VALUES ${placeholders})
+    `).all(...params) as { video_id: string; channel_id: string; local_speaker: string; name: string }[];
+    for (const r of rows) {
+      speakerNames.set(speakerKey(r.video_id, r.channel_id, r.local_speaker), r.name);
+    }
+  }
+
   const sources: ContextSource[] = capped.map((r, idx) => ({
     sourceIndex: idx + 1,
+    source: r.source ?? "video",
     videoId: r.video_id,
     channelId: r.channel_id,
     segmentIndex: r.segment_index,
     startSeconds: r.start_seconds,
     endSeconds: r.end_seconds,
     speaker: r.speaker,
+    speakerName: r.speaker
+      ? (speakerNames.get(speakerKey(r.video_id, r.channel_id, r.speaker)) ?? null)
+      : null,
     excerpt: r.text,
     score: r.score,
     videoTitle: r.title,
@@ -267,10 +453,28 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
     isLive: r.is_live,
     duration: null,         // not in semantic-search result; reload fetches it
     wordCount: r.word_count,
+    documentId: r.document_id,
+    docRootId: r.doc_root_id,
+    docRelPath: r.doc_rel_path,
+    docTitle: r.doc_title,
+    docHeadingPath: r.doc_heading_path,
+    docStartChar: r.doc_start_char,
+    docEndChar: r.doc_end_char,
   }));
 
   const topScore = sources[0]?.score ?? 0;
   const weakRetrieval = sources.length === 0 || topScore < RELEVANT_SCORE_FLOOR;
+
+  // Diagnostic — counts of each source kind in the emitted context.
+  // Helps spot when doc retrieval works server-side but doesn't
+  // arrive on the client correctly. Strip once the doc-citation
+  // flow is confirmed working end-to-end.
+  const counts = sources.reduce((acc, s) => {
+    const k = s.source ?? "video";
+    acc[k] = (acc[k] ?? 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+  console.log(`[ask] context: ${sources.length} sources (${JSON.stringify(counts)}, topScore=${topScore.toFixed(3)}, weakRetrieval=${weakRetrieval})`);
 
   yield { type: "context", sources, weakRetrieval };
 

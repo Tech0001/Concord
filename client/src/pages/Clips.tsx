@@ -7,13 +7,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { TagChip, TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
+import { DocDrawer, type DocDrawerEntry } from "@/components/DocDrawer";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useCategory } from "@/hooks/use-category";
 import {
   Calendar,
   ChevronDown,
   ChevronUp,
   Clock,
+  FileText,
   Link as LinkIcon,
   NotebookText,
   Pencil,
@@ -35,8 +38,8 @@ interface Channel {
 
 interface ClipAnchor {
   ordinal: number;
-  video_id: string;
-  channel_id: string;
+  video_id: string | null;
+  channel_id: string | null;
   channel_name: string | null;
   video_title: string | null;
   upload_date: string | null;
@@ -49,6 +52,15 @@ interface ClipAnchor {
   is_live: number | null;
   duration: number | null;
   word_count: number | null;
+  /** Doc-source fields — set when this anchor points at a markdown
+   *  file instead of a video. Mutually exclusive with the video
+   *  fields above. */
+  document_id: string | null;
+  doc_root_id: string | null;
+  doc_rel_path: string | null;
+  doc_title: string | null;
+  doc_start_char: number | null;
+  doc_end_char: number | null;
 }
 
 interface ClipEntry {
@@ -139,6 +151,7 @@ export default function Clips() {
   const [renameDescendants, setRenameDescendants] = useState(false);
   const [loading, setLoading] = useState(false);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
+  const [drawerDoc, setDrawerDoc] = useState<DocDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [linksByClipId, setLinksByClipId] = useState<Record<string, ClipLink[]>>({});
@@ -150,6 +163,7 @@ export default function Clips() {
   const [linkPickerSearching, setLinkPickerSearching] = useState(false);
   const [linkPickerSaving, setLinkPickerSaving] = useState(false);
   const { toast } = useToast();
+  const { serverCategory } = useCategory();
 
   const linkPickerSource = useMemo(
     () => clips.find(c => c.id === linkPickerSourceId) || null,
@@ -199,6 +213,7 @@ export default function Clips() {
         t: String(Date.now()),
       });
       if (tagFilter.length) params.set("tags", tagFilter.join(","));
+      if (serverCategory) params.set("category", serverCategory);
 
       const [clipsRes, configRes] = await Promise.all([
         apiRequest("GET", `/api/clips?${params.toString()}`),
@@ -219,7 +234,7 @@ export default function Clips() {
 
   useEffect(() => {
     loadData();
-  }, [channelId, tagFilter]);
+  }, [channelId, tagFilter, serverCategory]);
 
   const deleteClip = async (clip: ClipEntry) => {
     try {
@@ -364,6 +379,19 @@ export default function Clips() {
   };
 
   const openAnchor = (anchor: ClipAnchor) => {
+    // Doc anchors don't open in the VideoDrawer — route to the Docs
+    // viewer for the source file instead.
+    if (anchor.document_id && anchor.doc_rel_path) {
+      setDrawerDoc({
+        documentId: anchor.document_id,
+        rootId: anchor.doc_root_id ?? undefined,
+        relPath: anchor.doc_rel_path,
+        title: anchor.doc_title ?? anchor.doc_rel_path,
+        excerpt: anchor.excerpt,
+      });
+      return;
+    }
+    if (!anchor.video_id || !anchor.channel_id) return;
     setDrawerVideo({
       video_id: anchor.video_id,
       channel_id: anchor.channel_id,
@@ -719,6 +747,12 @@ export default function Clips() {
         onOpenChange={setDrawerOpen}
       />
 
+      <DocDrawer
+        open={!!drawerDoc}
+        doc={drawerDoc}
+        onOpenChange={(open) => { if (!open) setDrawerDoc(null); }}
+      />
+
       {addAnchorFor && (
         <AddAnchorDialog
           note={addAnchorFor}
@@ -935,50 +969,70 @@ function AnchorList({ anchors, onPlay, onRemove, onAdd }: AnchorListProps) {
           Standalone note — no anchors yet. Add one to link this thought to a video moment.
         </div>
       )}
-      {anchors.map((a) => (
-        <div key={a.ordinal} className="rounded-md border bg-muted/30 px-2.5 py-1.5">
-          <div className="flex items-baseline gap-2">
-            <span className="min-w-0 flex-1 truncate text-sm font-medium" title={a.video_title ?? ""}>
-              {a.video_title ?? "(unknown video)"}
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 px-2"
-              disabled={!a.video_path}
-              onClick={() => onPlay(a)}
-              title={a.video_path ? "Play at this moment" : "No saved video file"}
-            >
-              <Play className="h-3 w-3" />
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 px-2 text-muted-foreground hover:text-destructive"
-              onClick={() => onRemove(a)}
-              title="Remove this anchor"
-            >
-              <X className="h-3 w-3" />
-            </Button>
-          </div>
-          <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-            <span>{a.channel_name || a.channel_id}</span>
-            {a.upload_date && (
-              <span className="inline-flex items-center gap-1">
-                <Calendar className="h-3 w-3" />
-                {formatUploadDate(a.upload_date)}
+      {anchors.map((a) => {
+        const isDoc = !!a.document_id;
+        return (
+          <div key={a.ordinal} className="rounded-md border bg-muted/30 px-2.5 py-1.5">
+            <div className="flex items-baseline gap-2">
+              <span className="min-w-0 flex-1 truncate text-sm font-medium" title={(isDoc ? a.doc_title : a.video_title) ?? ""}>
+                {isDoc ? (a.doc_title ?? "(missing doc)") : (a.video_title ?? "(unknown video)")}
               </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2"
+                disabled={isDoc ? !a.doc_rel_path : !a.video_path}
+                onClick={() => onPlay(a)}
+                title={isDoc ? "Open in Docs viewer" : (a.video_path ? "Play at this moment" : "No saved video file")}
+              >
+                <Play className="h-3 w-3" />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-muted-foreground hover:text-destructive"
+                onClick={() => onRemove(a)}
+                title="Remove this anchor"
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+              {isDoc ? (
+                <>
+                  <span className="inline-flex items-center gap-1">
+                    <FileText className="h-3 w-3" />
+                    doc
+                  </span>
+                  <span className="font-mono truncate" title={a.doc_rel_path ?? ""}>{a.doc_rel_path}</span>
+                  <span>
+                    {a.doc_start_char != null && a.doc_end_char != null
+                      ? `chars ${a.doc_start_char}–${a.doc_end_char}`
+                      : "whole doc"}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span>{a.channel_name || a.channel_id}</span>
+                  {a.upload_date && (
+                    <span className="inline-flex items-center gap-1">
+                      <Calendar className="h-3 w-3" />
+                      {formatUploadDate(a.upload_date)}
+                    </span>
+                  )}
+                  <span className="inline-flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    {a.start_seconds == null ? "whole video" : `${formatTimestamp(a.start_seconds)} - ${formatTimestamp(a.end_seconds ?? a.start_seconds)}`}
+                  </span>
+                </>
+              )}
+            </div>
+            {a.excerpt && (
+              <p className="mt-1 text-[12px] italic leading-5 text-muted-foreground">"{a.excerpt}"</p>
             )}
-            <span className="inline-flex items-center gap-1">
-              <Clock className="h-3 w-3" />
-              {a.start_seconds == null ? "whole video" : `${formatTimestamp(a.start_seconds)} - ${formatTimestamp(a.end_seconds ?? a.start_seconds)}`}
-            </span>
           </div>
-          {a.excerpt && (
-            <p className="mt-1 text-[12px] italic leading-5 text-muted-foreground">"{a.excerpt}"</p>
-          )}
-        </div>
-      ))}
+        );
+      })}
       <Button
         size="sm"
         variant="ghost"

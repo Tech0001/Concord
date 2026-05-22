@@ -12,6 +12,8 @@ import { registerSystemRoutes } from "./routes-system";
 import { registerTranscriptionSetupRoutes } from "./routes-transcription-setup";
 import { registerVoiceNoteRoutes } from "./routes-voice-notes";
 import { registerYouTubeRoutes } from "./routes-youtube";
+import { registerDocsRoutes } from "./routes-docs";
+import { indexDocs } from "./docs-index";
 
 /**
  * Top-level HTTP wire-up. Every actual endpoint lives in a sibling
@@ -75,6 +77,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // YouTube Data API v3 plus saved-search watchers that poll on a
   // configurable cadence. Registered in routes-youtube.ts.
   registerYouTubeRoutes(app);
+
+  // ---- Markdown docs ----
+  // /api/docs/{config, tree, file, by-path, reindex, :id/{starred,
+  // category}} — browser + star/category controls, plus the indexer
+  // that keeps the documents table in sync with the filesystem.
+  registerDocsRoutes(app);
+  // Initial index runs once at startup so the first /api/docs/tree
+  // request returns rich rows (star/category) instead of bare
+  // filesystem nodes. Wrapped in try/catch — a missing root folder
+  // shouldn't crash the server boot.
+  try {
+    const res = indexDocs();
+    if (res.total > 0) {
+      console.log(`[docs] Indexed ${res.total} files (${res.inserted} new, ${res.updated} updated, ${res.removed} removed, ${res.ms}ms)`);
+    }
+  } catch (err) {
+    console.warn("[docs] Initial index failed:", err instanceof Error ? err.message : err);
+  }
 
   // ---- Pipeline lifecycle + channel management ----
   // /api/pipeline/{start,stop,check-now,process,events,transcripts,

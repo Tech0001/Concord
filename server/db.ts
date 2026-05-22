@@ -374,6 +374,23 @@ export function getDb(dbPath?: string): Database.Database {
       )
     `);
 
+    // Markdown doc chunks live in their own vec0 table so the schema
+    // can carry doc-shaped metadata (heading path, character range)
+    // without polluting vec_segments. AI retrieval queries both
+    // tables and merges by similarity.
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS vec_docs USING vec0(
+        embedding float[${EMBEDDING_DIM}],
+        +document_id TEXT,
+        +chunk_index INTEGER,
+        +model TEXT,
+        +text TEXT,
+        +heading_path TEXT,
+        +start_char INTEGER,
+        +end_char INTEGER
+      )
+    `);
+
     runMigrations(db);
     console.log(`[db] SQLite ready: ${resolvedPath} (sqlite-vec loaded, dim=${EMBEDDING_DIM})`);
   }
@@ -421,6 +438,83 @@ function runMigrations(database: Database.Database) {
   // independent of system status — surfaces in the Library with a
   // dedicated filter chip.
   ensureColumn("video_queue", "starred", "INTEGER NOT NULL DEFAULT 0");
+
+  // Personal / work category. A viewing toggle in the header filters
+  // every list (Library, Watchers, Inbox, ...) by category, so the
+  // user can keep work-research and personal-archive views cleanly
+  // separated. Stored values are 'personal' | 'work'; the "both"
+  // toggle state means "no filter". Existing rows default to
+  // 'personal' (back-compat — the personal archive predates this
+  // feature).
+  ensureColumn("channels", "category", "TEXT NOT NULL DEFAULT 'personal'");
+  ensureColumn("video_queue", "category", "TEXT NOT NULL DEFAULT 'personal'");
+  ensureColumn("youtube_watchers", "category", "TEXT NOT NULL DEFAULT 'personal'");
+
+  // ---- Markdown docs as a first-class content type ----
+  //
+  // documents rows mirror files under one of the configured docs
+  // roots (docs.rootFolders — see indexDocs()). id is derived from
+  // (root_id, rel_path) so it survives content edits (and so
+  // note_anchors can hold a stable doc_id). Renames look like a
+  // remove + insert; that's fine for v1.
+  //
+  // starred + category make docs filterable the same way videos are.
+  // content_hash + mtime_ms power incremental re-indexing — when a
+  // file's hash changes, the indexer re-chunks + re-embeds just that
+  // doc instead of the whole tree.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS documents (
+      id            TEXT PRIMARY KEY,
+      rel_path      TEXT NOT NULL UNIQUE,
+      title         TEXT NOT NULL,
+      starred       INTEGER NOT NULL DEFAULT 0,
+      category      TEXT NOT NULL DEFAULT 'personal',
+      content_hash  TEXT NOT NULL,
+      bytes         INTEGER NOT NULL,
+      mtime_ms      REAL NOT NULL,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_documents_starred ON documents(starred);
+    CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
+  `);
+
+  // Multi-root migration: documents started life with a UNIQUE
+  // constraint on rel_path (assumed one global root). Once we
+  // support multiple roots, two roots can legitimately share a
+  // rel_path (e.g. "README.md" in both), so we have to swap the
+  // single-column UNIQUE for a composite (root_id, rel_path).
+  //
+  // ensureColumn handles the new column; a one-shot recreate
+  // handles the UNIQUE swap. Detection: PRAGMA index_list returns
+  // the auto-named unique index `sqlite_autoindex_documents_*`
+  // for the rel_path UNIQUE — its presence means we haven't
+  // recreated yet.
+  ensureColumn("documents", "root_id", "TEXT");
+  relaxDocumentsRelPathUnique(database);
+
+  // note_anchors gains optional doc-source columns so a single anchor
+  // can point at either a video timestamp or a doc character range.
+  // The video_id/channel_id columns were NOT NULL in the original
+  // schema; we relax them below so a doc-only anchor is legal.
+  ensureColumn("note_anchors", "document_id", "TEXT REFERENCES documents(id) ON DELETE CASCADE");
+  ensureColumn("note_anchors", "doc_start_char", "INTEGER");
+  ensureColumn("note_anchors", "doc_end_char", "INTEGER");
+
+  // chat_message_sources gains a discriminator + the same doc-source
+  // fields used elsewhere. Old persisted sources read back as source =
+  // "video" (the default applied on the read side when NULL).
+  ensureColumn("chat_message_sources", "source", "TEXT");
+  ensureColumn("chat_message_sources", "document_id", "TEXT");
+  ensureColumn("chat_message_sources", "doc_chunk_index", "INTEGER");
+  ensureColumn("chat_message_sources", "doc_start_char", "INTEGER");
+  ensureColumn("chat_message_sources", "doc_end_char", "INTEGER");
+  ensureColumn("chat_message_sources", "doc_heading_path", "TEXT");
+
+  // Recreate note_anchors with nullable video_id/channel_id if the
+  // original NOT NULL is still in place. Detect by reading
+  // pragma_table_info — if either column reports notnull=1, rebuild.
+  relaxNoteAnchorVideoNullability(database);
 
   // Per-link handle side ("left" | "right" | "top" | "bottom"). NULL = the
   // Map page falls back to right→left, matching the legacy fixed-side
@@ -645,6 +739,124 @@ function relaxClipAnchorNotNull(database: Database.Database): void {
       `);
     })();
     console.log("[db] transcript_clips relaxed — standalone notes are now allowed.");
+  } finally {
+    database.pragma("foreign_keys = ON");
+  }
+}
+
+/** Swap documents' single-column rel_path UNIQUE for a composite
+ *  (root_id, rel_path) UNIQUE, so multiple roots can share the same
+ *  rel_path (e.g. each root has its own README.md). One-shot
+ *  recreate; idempotent thereafter — detection looks for the legacy
+ *  auto-index that backs the old UNIQUE constraint. */
+function relaxDocumentsRelPathUnique(database: Database.Database): void {
+  // sqlite_autoindex_<table>_<n> appears for column-level UNIQUE
+  // constraints declared in the CREATE TABLE. If we've already
+  // recreated the table, the new schema's composite UNIQUE shows
+  // up under a different auto-index name (or via our explicit
+  // index below).
+  const indexes = database
+    .prepare(`PRAGMA index_list(documents)`)
+    .all() as Array<{ name: string; unique: number; origin: string }>;
+  // The old column-level UNIQUE shows up with origin = 'u' (UNIQUE
+  // keyword in column definition). Our post-recreate schema uses a
+  // table-level UNIQUE which still shows origin 'u' but indexes a
+  // composite. Check by inspecting which columns the unique index
+  // covers — if any unique non-PK index is on rel_path ALONE, we
+  // need to rebuild.
+  let needsRebuild = false;
+  for (const idx of indexes) {
+    if (idx.unique !== 1 || idx.origin === "pk") continue;
+    const cols = database
+      .prepare(`PRAGMA index_info(${idx.name})`)
+      .all() as Array<{ name: string }>;
+    if (cols.length === 1 && cols[0].name === "rel_path") {
+      needsRebuild = true;
+      break;
+    }
+  }
+  if (!needsRebuild) return;
+
+  console.log("[db] Swapping documents UNIQUE(rel_path) → UNIQUE(root_id, rel_path) for multi-root support…");
+  database.pragma("foreign_keys = OFF");
+  try {
+    database.transaction(() => {
+      database.exec(`
+        CREATE TABLE documents_new (
+          id            TEXT PRIMARY KEY,
+          rel_path      TEXT NOT NULL,
+          title         TEXT NOT NULL,
+          starred       INTEGER NOT NULL DEFAULT 0,
+          category      TEXT NOT NULL DEFAULT 'personal',
+          content_hash  TEXT NOT NULL,
+          bytes         INTEGER NOT NULL,
+          mtime_ms      REAL NOT NULL,
+          root_id       TEXT,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (root_id, rel_path)
+        );
+        INSERT INTO documents_new
+          (id, rel_path, title, starred, category, content_hash, bytes,
+           mtime_ms, root_id, created_at, updated_at)
+        SELECT id, rel_path, title, starred, category, content_hash, bytes,
+               mtime_ms, root_id, created_at, updated_at
+        FROM documents;
+        DROP TABLE documents;
+        ALTER TABLE documents_new RENAME TO documents;
+        CREATE INDEX IF NOT EXISTS idx_documents_starred ON documents(starred);
+        CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
+        CREATE INDEX IF NOT EXISTS idx_documents_root ON documents(root_id);
+      `);
+    })();
+    console.log("[db] documents table rebuilt — multi-root rel_paths now allowed.");
+  } finally {
+    database.pragma("foreign_keys = ON");
+  }
+}
+
+/** Mirror of relaxClipAnchorNotNull for note_anchors — original schema
+ *  marked video_id + channel_id as NOT NULL, but anchors now also point
+ *  at documents (mutually exclusive per row). Rebuild the table once
+ *  to relax both columns; idempotent thereafter. */
+function relaxNoteAnchorVideoNullability(database: Database.Database): void {
+  const cols = database.prepare(`PRAGMA table_info(note_anchors)`).all() as Array<{ name: string; notnull: number }>;
+  const videoIdCol = cols.find((c) => c.name === "video_id");
+  if (!videoIdCol || videoIdCol.notnull === 0) return;
+
+  console.log("[db] Relaxing note_anchors NOT NULL constraints (enables doc-anchored notes)…");
+  database.pragma("foreign_keys = OFF");
+  try {
+    database.transaction(() => {
+      database.exec(`
+        CREATE TABLE note_anchors_new (
+          clip_id        TEXT NOT NULL REFERENCES transcript_clips(id) ON DELETE CASCADE,
+          ordinal        INTEGER NOT NULL,
+          video_id       TEXT,
+          channel_id     TEXT,
+          start_seconds  REAL,
+          end_seconds    REAL,
+          excerpt        TEXT,
+          document_id    TEXT REFERENCES documents(id) ON DELETE CASCADE,
+          doc_start_char INTEGER,
+          doc_end_char   INTEGER,
+          created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (clip_id, ordinal)
+        );
+        INSERT INTO note_anchors_new
+          (clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds,
+           excerpt, document_id, doc_start_char, doc_end_char, created_at)
+        SELECT
+          clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds,
+          excerpt, document_id, doc_start_char, doc_end_char, created_at
+        FROM note_anchors;
+        DROP TABLE note_anchors;
+        ALTER TABLE note_anchors_new RENAME TO note_anchors;
+        CREATE INDEX IF NOT EXISTS idx_note_anchors_video ON note_anchors(video_id, channel_id);
+        CREATE INDEX IF NOT EXISTS idx_note_anchors_document ON note_anchors(document_id);
+      `);
+    })();
+    console.log("[db] note_anchors relaxed — doc-anchored notes are now allowed.");
   } finally {
     database.pragma("foreign_keys = ON");
   }

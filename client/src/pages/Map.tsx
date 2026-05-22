@@ -23,10 +23,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
+import { DocDrawer, type DocDrawerEntry } from "@/components/DocDrawer";
 import { apiRequest } from "@/lib/queryClient";
 import { ChevronDown, LayoutGrid, Link2, Loader2, Map as MapIcon, RefreshCw, Search, Spline, StickyNote, Trash2, X, Zap } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
+import { useCategory } from "@/hooks/use-category";
 import { ArcDiagram } from "./map/ArcDiagram";
 import { ClipInspector } from "./map/ClipInspector";
 import { ClipNode } from "./map/ClipNode";
@@ -80,6 +82,7 @@ export default function MapPage() {
   const [selectedClip, setSelectedClip] = useState<GraphNodeData | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
+  const [drawerDoc, setDrawerDoc] = useState<DocDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [flowNodesState, setFlowNodesState] = useState<Node[]>([]);
@@ -90,6 +93,7 @@ export default function MapPage() {
   const reconnectEdgeRef = useRef<Edge | null>(null);
   const reconnectSucceededRef = useRef(false);
   const { toast } = useToast();
+  const { serverCategory } = useCategory();
 
   const selectedEdges = useMemo(() => {
     if (!selectedClip) return [];
@@ -150,7 +154,12 @@ export default function MapPage() {
       const standaloneClips: GraphNodeData[] = [];
       for (const clip of graph.nodes) {
         const anchors = Array.isArray(clip.anchors) ? clip.anchors : [];
-        if (anchors.length === 0) {
+        // A clip is "video-bucketable" only if at least one anchor
+        // points at a video. Doc-only and standalone clips render as
+        // freestanding ClipNodes so they don't disappear when the
+        // user is viewing the Videos layout.
+        const videoAnchorCount = anchors.filter((a: any) => a.videoId && a.channelId).length;
+        if (anchors.length === 0 || videoAnchorCount === 0) {
           // Defensive: an older note that predates anchor backfill might have
           // no anchors[] but still carry the legacy single-anchor columns.
           if (clip.videoId && clip.channelId) {
@@ -163,7 +172,7 @@ export default function MapPage() {
           }
           continue;
         }
-        for (const anchor of anchors as Array<{ ordinal: number; videoId: string; channelId: string; startSeconds: number | null; endSeconds: number | null }>) {
+        for (const anchor of anchors as Array<{ ordinal: number; videoId: string | null; channelId: string | null; startSeconds: number | null; endSeconds: number | null }>) {
           if (!anchor.videoId || !anchor.channelId) continue;
           // Project a per-anchor view: same note, but startSeconds/endSeconds
           // overridden so the row inside the video container shows the right
@@ -355,7 +364,7 @@ export default function MapPage() {
     setError("");
     try {
       const [graphRes, layoutRes] = await Promise.all([
-        apiRequest("GET", buildGraphUrl({ q: appliedQuery, channelId, tags: tagFilter, edgeTypes, limit })),
+        apiRequest("GET", buildGraphUrl({ q: appliedQuery, channelId, tags: tagFilter, edgeTypes, limit, category: serverCategory })),
         mode === "arc"
           ? Promise.resolve(null)
           : apiRequest("GET", `/api/clips/graph/layout?mapKey=${encodeURIComponent(mapKey)}&t=${Date.now()}`),
@@ -401,7 +410,7 @@ export default function MapPage() {
 
   useEffect(() => {
     loadGraph();
-  }, [channelId, edgeTypesKey, limit, mapKey, tagFilterKey]);
+  }, [channelId, edgeTypesKey, limit, mapKey, tagFilterKey, serverCategory]);
 
   useEffect(() => {
     if (mode === "video") {
@@ -416,6 +425,21 @@ export default function MapPage() {
   }
 
   function openClipVideo(clip: GraphNodeData) {
+    // Doc-anchored clips: pop the DocDrawer with the anchored file.
+    // Video-anchored: open the VideoDrawer as before. The clip's
+    // `quote` is the closest thing to an excerpt on the map data
+    // shape — passed through so the drawer can scroll to it.
+    const docAnchor = clip.anchors?.find((a: any) => a.documentId && a.docRelPath);
+    if (docAnchor && !clip.videoId) {
+      setDrawerDoc({
+        documentId: docAnchor.documentId ?? undefined,
+        rootId: docAnchor.docRootId ?? undefined,
+        relPath: docAnchor.docRelPath!,
+        title: docAnchor.docTitle ?? clip.title ?? docAnchor.docRelPath!,
+        excerpt: clip.quote || null,
+      });
+      return;
+    }
     setDrawerVideo(clipToDrawerEntry(clip));
     setDrawerSeconds(clip.startSeconds);
     setDrawerOpen(true);
@@ -952,6 +976,11 @@ export default function MapPage() {
         video={drawerVideo}
         initialSeconds={drawerSeconds}
         onOpenChange={setDrawerOpen}
+      />
+      <DocDrawer
+        open={!!drawerDoc}
+        doc={drawerDoc}
+        onOpenChange={(open) => { if (!open) setDrawerDoc(null); }}
       />
     </div>
   );

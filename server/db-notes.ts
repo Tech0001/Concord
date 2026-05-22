@@ -18,20 +18,17 @@ import { getDb } from "./db";
 
 export interface NoteAnchor {
   ordinal: number;
-  video_id: string;
-  channel_id: string;
-  /** Channel display name + video title resolved from video_queue (joined
-   *  on read). Null when the referenced video has been deleted from the
-   *  archive — the anchor still points at a stable (video_id, channel_id)
-   *  pair, the UI just can't pretty-print it. */
+  /** Video-source fields — NULL when the anchor points at a document. */
+  video_id: string | null;
+  channel_id: string | null;
   channel_name: string | null;
   video_title: string | null;
   upload_date: string | null;
-  /** NULL means "the whole video, no specific moment" (whole-video anchor). */
   start_seconds: number | null;
   end_seconds: number | null;
-  /** Snapshot of transcript text at the time the anchor was saved.
-   *  Stable even if the underlying transcript is regenerated. */
+  /** Snapshot of source text at the time the anchor was saved. For
+   *  video anchors that's the transcript segment; for doc anchors,
+   *  the selected passage. */
   excerpt: string | null;
   /** Playback metadata re-resolved on read so the UI can hand the anchor
    *  straight to VideoDrawer without an extra round-trip. Not stored on
@@ -42,6 +39,18 @@ export interface NoteAnchor {
   is_live: number | null;
   duration: number | null;
   word_count: number | null;
+  /** Doc-source fields — NULL when the anchor points at a video. */
+  document_id: string | null;
+  doc_start_char: number | null;
+  doc_end_char: number | null;
+  /** Resolved on read so the UI doesn't have to round-trip — doc path
+   *  + title from the documents table. NULL when the doc was deleted. */
+  doc_rel_path: string | null;
+  doc_title: string | null;
+  /** Which root the doc lives under. Needed by the DocDrawer so the
+   *  file fetch picks the right root in a multi-root setup. Empty
+   *  string for the legacy root; null when the doc no longer exists. */
+  doc_root_id: string | null;
 }
 
 export interface TranscriptClip {
@@ -143,10 +152,14 @@ function attachAnchorsToClips<T extends { id: string }>(clips: T[]): (T & { anch
            a.start_seconds, a.end_seconds, a.excerpt,
            q.title AS video_title, q.upload_date,
            q.video_path, q.md_path, q.status, q.is_live, q.duration, q.word_count,
-           c.name AS channel_name
+           c.name AS channel_name,
+           a.document_id, a.doc_start_char, a.doc_end_char,
+           d.rel_path AS doc_rel_path, d.title AS doc_title,
+           COALESCE(d.root_id, '') AS doc_root_id
     FROM note_anchors a
     LEFT JOIN video_queue q ON q.video_id = a.video_id AND q.channel_id = a.channel_id
     LEFT JOIN channels c    ON c.id       = a.channel_id
+    LEFT JOIN documents d   ON d.id       = a.document_id
     WHERE a.clip_id IN (${placeholders})
     ORDER BY a.clip_id, a.ordinal ASC
   `).all(...ids) as (NoteAnchor & { clip_id: string })[];
@@ -233,10 +246,19 @@ export function deleteClipTag(tag: string, includeDescendants = false): number {
 }
 
 export interface CreateNoteAnchorInput {
-  videoId: string;
-  channelId: string;
+  /** Video-source fields — mutually exclusive with documentId. Either
+   *  set both (video-anchored) or set documentId (doc-anchored). */
+  videoId?: string | null;
+  channelId?: string | null;
   startSeconds?: number | null;
   endSeconds?: number | null;
+  /** Doc-source fields — anchor points at a markdown doc. start/end
+   *  char offsets in the SOURCE markdown (NULL = whole-doc anchor). */
+  documentId?: string | null;
+  docStartChar?: number | null;
+  docEndChar?: number | null;
+  /** Snippet of the source content this anchor points at — quote for
+   *  videos, selected passage for docs. */
   excerpt?: string | null;
 }
 
@@ -299,18 +321,23 @@ export function createTranscriptClip(clip: {
     );
     if (anchors.length > 0) {
       const insertAnchor = db.prepare(`
-        INSERT INTO note_anchors (clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds, excerpt)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO note_anchors
+          (clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds,
+           excerpt, document_id, doc_start_char, doc_end_char)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       anchors.forEach((a, idx) => {
         insertAnchor.run(
           clip.id,
           idx + 1,
-          a.videoId,
-          a.channelId,
+          a.videoId ?? null,
+          a.channelId ?? null,
           a.startSeconds ?? null,
           a.endSeconds ?? null,
           a.excerpt ?? null,
+          a.documentId ?? null,
+          a.docStartChar ?? null,
+          a.docEndChar ?? null,
         );
       });
     }
@@ -346,26 +373,36 @@ export function updateTranscriptClip(
   return getTranscriptClip(id);
 }
 
-/** Append an anchor to an existing note. Returns the new anchor's ordinal. */
+/** Append an anchor to an existing note. Returns the new anchor's ordinal.
+ *  Supports both video-source and doc-source anchors — the caller picks
+ *  by setting videoId/channelId OR documentId. */
 export function addNoteAnchor(noteId: string, input: CreateNoteAnchorInput): number {
   const db = getDb();
   const exists = db.prepare("SELECT 1 FROM transcript_clips WHERE id = ?").get(noteId);
   if (!exists) throw new Error(`Note ${noteId} not found`);
+  if (!input.documentId && (!input.videoId || !input.channelId)) {
+    throw new Error("anchor requires either documentId or (videoId + channelId)");
+  }
   const maxRow = db.prepare(
     "SELECT COALESCE(MAX(ordinal), 0) AS max_ord FROM note_anchors WHERE clip_id = ?"
   ).get(noteId) as { max_ord: number };
   const nextOrdinal = maxRow.max_ord + 1;
   db.prepare(`
-    INSERT INTO note_anchors (clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds, excerpt)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO note_anchors
+      (clip_id, ordinal, video_id, channel_id, start_seconds, end_seconds,
+       excerpt, document_id, doc_start_char, doc_end_char)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     noteId,
     nextOrdinal,
-    input.videoId,
-    input.channelId,
+    input.videoId ?? null,
+    input.channelId ?? null,
     input.startSeconds ?? null,
     input.endSeconds ?? null,
     input.excerpt ?? null,
+    input.documentId ?? null,
+    input.docStartChar ?? null,
+    input.docEndChar ?? null,
   );
   db.prepare("UPDATE transcript_clips SET updated_at = datetime('now') WHERE id = ?").run(noteId);
   return nextOrdinal;
@@ -436,6 +473,9 @@ export function listTranscriptClips(filters: {
   q?: string;
   channelId?: string;
   tags?: string[];
+  /** Personal / work scope — passed through to the parent video's
+   *  category column via the LEFT JOIN below. */
+  category?: string;
   limit?: number;
   offset?: number;
 } = {}): { rows: TranscriptClip[]; total: number } {
@@ -445,6 +485,13 @@ export function listTranscriptClips(filters: {
   if (filters.channelId && filters.channelId !== "all") {
     where.push("clip.channel_id = ?");
     params.push(filters.channelId);
+  }
+  if (filters.category === "personal" || filters.category === "work") {
+    // Standalone notes have no q row (NULL video_id); we want them in
+    // BOTH views since they aren't tied to a video category. The
+    // OR-IS-NULL keeps them visible regardless of the toggle.
+    where.push("(q.category = ? OR q.category IS NULL)");
+    params.push(filters.category);
   }
   if (filters.q?.trim()) {
     const like = `%${filters.q.trim()}%`;
@@ -761,13 +808,21 @@ export type GraphEdgeType = "manual" | "shared_tag" | "same_video";
 
 export interface GraphNodeAnchor {
   ordinal: number;
-  videoId: string;
-  channelId: string;
+  /** Video-source fields — NULL when this anchor points at a document. */
+  videoId: string | null;
+  channelId: string | null;
   channelName: string | null;
   videoTitle: string | null;
   uploadDate: string | null;
   startSeconds: number | null;
   endSeconds: number | null;
+  /** Doc-source fields — NULL when this anchor points at a video. */
+  documentId: string | null;
+  docRootId: string | null;
+  docRelPath: string | null;
+  docTitle: string | null;
+  docStartChar: number | null;
+  docEndChar: number | null;
 }
 
 export interface GraphNode {
@@ -854,6 +909,7 @@ export function getClipGraph(filters: {
   channelId?: string;
   tags?: string[];
   edgeTypes?: GraphEdgeType[];
+  category?: string;
   limit?: number;
 } = {}): ClipGraph {
   const limit = Math.min(Math.max(Math.floor(filters.limit ?? 150), 1), 500);
@@ -866,6 +922,7 @@ export function getClipGraph(filters: {
     q: filters.q,
     channelId: filters.channelId,
     tags: filters.tags,
+    category: filters.category,
     limit,
     offset: 0,
   });
@@ -1104,6 +1161,12 @@ export function getClipGraph(filters: {
       uploadDate: a.upload_date,
       startSeconds: a.start_seconds,
       endSeconds: a.end_seconds,
+      documentId: a.document_id,
+      docRootId: a.doc_root_id,
+      docRelPath: a.doc_rel_path,
+      docTitle: a.doc_title,
+      docStartChar: a.doc_start_char,
+      docEndChar: a.doc_end_char,
     })),
   }));
 

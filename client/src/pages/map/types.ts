@@ -17,13 +17,21 @@ export interface TagOption {
 
 export interface GraphAnchorData {
   ordinal: number;
-  videoId: string;
-  channelId: string;
+  /** Video-source fields — null when this anchor points at a doc. */
+  videoId: string | null;
+  channelId: string | null;
   channelName: string | null;
   videoTitle: string | null;
   uploadDate: string | null;
   startSeconds: number | null;
   endSeconds: number | null;
+  /** Doc-source fields — null when this anchor points at a video. */
+  documentId: string | null;
+  docRootId: string | null;
+  docRelPath: string | null;
+  docTitle: string | null;
+  docStartChar: number | null;
+  docEndChar: number | null;
 }
 
 export interface GraphNodeData extends Record<string, unknown> {

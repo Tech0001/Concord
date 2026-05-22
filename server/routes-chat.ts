@@ -76,6 +76,19 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
       : undefined;
     const topK = req.body?.topK ? Number(req.body.topK) : undefined;
     const perVideoCap = req.body?.perVideoCap ? Number(req.body.perVideoCap) : undefined;
+    const category = req.body?.category && (req.body.category === "personal" || req.body.category === "work")
+      ? req.body.category
+      : undefined;
+    // Source-kind scope: accept any subset of audio/video/doc. Missing
+    // or empty array = no filter (search everything). Named
+    // sourceKinds (not "sources") to avoid shadowing the
+    // ContextSource[] yielded by askArchive below.
+    const allowedSources = new Set(["video", "audio", "doc"]);
+    const sourceKinds: ("video" | "audio" | "doc")[] | undefined = Array.isArray(req.body?.sources)
+      ? (req.body.sources
+          .map(String)
+          .filter((s: string) => allowedSources.has(s)) as ("video" | "audio" | "doc")[])
+      : undefined;
 
     // History for multi-turn — pass last 4 turns (2 exchanges) verbatim.
     let history: { role: "user" | "assistant"; content: string }[] = [];
@@ -130,6 +143,8 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
         channelIds,
         topK,
         perVideoCap,
+        category,
+        sources: sourceKinds && sourceKinds.length > 0 ? sourceKinds : undefined,
         chatModel: cfg.chatModel,
         embeddingModel: cfg.embeddingModel,
         signal: abortCtl.signal,
@@ -166,6 +181,11 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
           model: cfg.chatModel,
           sources: sources.map((s) => ({
             sourceIndex: s.sourceIndex,
+            // Doc-source discriminator + the doc fields used by the
+            // reload path on the client. Without these, reloaded doc
+            // citations come back with source="video" and empty
+            // video_id, and the citation click silently no-ops.
+            source: s.source,
             videoId: s.videoId,
             channelId: s.channelId,
             segmentIndex: s.segmentIndex,
@@ -174,6 +194,10 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
             speaker: s.speaker,
             excerpt: s.excerpt,
             score: s.score,
+            documentId: s.documentId ?? null,
+            docStartChar: s.docStartChar ?? null,
+            docEndChar: s.docEndChar ?? null,
+            docHeadingPath: s.docHeadingPath ?? null,
           })),
         });
         sse("persisted", { assistantMessageId });

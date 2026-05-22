@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
+import { useCategory } from "@/hooks/use-category";
 import { Compass, Download, ExternalLink, Loader2, Plus, Search as SearchIcon } from "lucide-react";
 
 type SearchOrder = "relevance" | "date" | "viewCount" | "rating" | "title";
@@ -46,6 +47,7 @@ function parsePhraseList(s: string): string[] {
  */
 export default function Discover() {
   const { toast } = useToast();
+  const { category: headerCategory } = useCategory();
   const [query, setQuery] = useState("");
   const [order, setOrder] = useState<SearchOrder>("relevance");
   const [includePhrases, setIncludePhrases] = useState("");
@@ -129,6 +131,7 @@ export default function Discover() {
     try {
       await apiRequest("POST", "/api/videos/download", {
         url: `https://www.youtube.com/watch?v=${hit.videoId}`,
+        category: headerCategory === "work" ? "work" : "personal",
       });
       toast({ title: "Download queued", description: hit.title });
     } catch (err: any) {
@@ -149,6 +152,7 @@ export default function Discover() {
         enabled: true,
         auto_queue: false,
         poll_interval_hours: 24,
+        category: headerCategory === "work" ? "work" : "personal",
       });
       toast({
         title: "Watcher saved",

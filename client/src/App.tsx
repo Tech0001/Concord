@@ -31,6 +31,7 @@ import Settings from "@/pages/Settings";
 import TranscriptionSetup from "@/pages/TranscriptionSetup";
 import Discover from "@/pages/Discover";
 import Watchers from "@/pages/Watchers";
+import Docs from "@/pages/Docs";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
@@ -38,12 +39,15 @@ import {
   Binoculars,
   Compass,
   Database,
+  FileText,
   Gauge,
   Map as MapIcon,
   Menu,
   Mic,
   Moon,
   NotebookText,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search as SearchIcon,
   Settings as SettingsIcon,
   Sparkles,
@@ -51,6 +55,8 @@ import {
   Users,
 } from "lucide-react";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
+import { CategoryProvider, useCategory, type Category } from "@/hooks/use-category";
+import { SidebarProvider, useSidebar } from "@/hooks/use-sidebar";
 
 const MapPage = lazy(() => import("@/pages/Map"));
 
@@ -68,6 +74,7 @@ const NAV_GROUPS = [
       { href: "/watchers",    label: "Watchers",    icon: Binoculars },
       { href: "/search",      label: "Transcripts", icon: SearchIcon },
       { href: "/notes",       label: "Notes",       icon: NotebookText },
+      { href: "/docs",        label: "Docs",        icon: FileText },
     ],
   },
   {
@@ -126,8 +133,9 @@ function TopBar() {
 
   return (
     <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 [-webkit-app-region:drag]">
-      <div className="mx-auto flex h-12 max-w-7xl items-center gap-3 px-3 md:gap-6 md:px-4">
-        <div className="flex items-center gap-2">
+      <div className="flex h-12 items-center gap-3 px-3 md:gap-6 md:px-4">
+        <div className="flex items-center gap-2 [-webkit-app-region:no-drag]">
+          <SidebarToggle />
           <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-foreground text-[11px] font-semibold text-background tracking-tight">
             C
           </span>
@@ -136,37 +144,15 @@ function TopBar() {
           </span>
         </div>
 
-        {/* Desktop nav — visible md and up. Phone gets the hamburger below.
-            no-drag so the nav links are clickable inside the draggable header.
-            Thin divider between groups so the visual chunking matches the
-            mental chunking (Content / Analysis / Ops). */}
-        <nav className="hidden flex-1 items-center gap-1 text-sm md:flex [-webkit-app-region:no-drag]">
-          {NAV_GROUPS.map((group, groupIdx) => (
-            <div key={group.name} className="flex items-center gap-1">
-              {groupIdx > 0 && <span aria-hidden className="mx-1 h-4 w-px bg-border" />}
-              {group.items.map(({ href, label, icon: Icon }) => {
-                const active = location === href;
-                return (
-                  <Link
-                    key={href}
-                    href={href}
-                    className={cn(
-                      "inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-muted-foreground transition-colors hover:text-foreground",
-                      active && "bg-secondary text-foreground"
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    <span>{label}</span>
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
-        </nav>
+        {/* Spacer — desktop nav lives in the left sidebar now (Sidebar
+            component below). Phone still uses the hamburger sheet to
+            the right. */}
+        <div className="hidden flex-1 md:block" />
 
         {/* Right-side controls — no-drag so settings/theme/hamburger
             buttons remain clickable inside the draggable header. */}
         <div className="ml-auto flex items-center gap-1 md:ml-0 [-webkit-app-region:no-drag]">
+          <CategoryToggle />
           <LlmStatusDot />
 
           {/* Voice-note recorder — sits next to the LLM status dot so it's
@@ -268,6 +254,43 @@ function TopBar() {
   );
 }
 
+/** Segmented toggle for Personal / Work / Both — the global category
+ *  filter that affects every list page. Lives in the top bar so it
+ *  reads as a viewing setting, not a per-page filter. */
+function CategoryToggle() {
+  const { category, setCategory } = useCategory();
+  const opts: { value: Category; label: string }[] = [
+    { value: "personal", label: "Personal" },
+    { value: "work",     label: "Work" },
+    { value: "both",     label: "Both" },
+  ];
+  return (
+    <div
+      className="hidden md:inline-flex items-center gap-0.5 rounded-md border bg-card p-0.5 text-xs"
+      role="radiogroup"
+      aria-label="Category filter"
+    >
+      {opts.map(o => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={category === o.value}
+          onClick={() => setCategory(o.value)}
+          className={cn(
+            "rounded px-2 py-0.5 transition-colors",
+            category === o.value
+              ? "bg-secondary text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function LlmStatusDot() {
   const [status, setStatus] = useState<{ reachable: boolean; latencyMs?: number; errorKind?: string } | null>(null);
 
@@ -323,6 +346,7 @@ function Router() {
       <Route path="/library" component={Library} />
       <Route path="/discover" component={Discover} />
       <Route path="/watchers" component={Watchers} />
+      <Route path="/docs" component={Docs} />
       <Route path="/search" component={Search} />
       <Route path="/notes" component={Clips} />
       <Route path="/clips" component={Clips} />
@@ -366,17 +390,95 @@ function TranscriptionSetupGate() {
   return null;
 }
 
+/** Top-bar button that toggles the sidebar between full + rail
+ *  states. Hidden on mobile (the hamburger handles nav there). */
+function SidebarToggle() {
+  const { collapsed, toggle } = useSidebar();
+  return (
+    <Button
+      size="icon"
+      variant="ghost"
+      onClick={toggle}
+      aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+      title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+      className="hidden h-8 w-8 md:inline-flex"
+    >
+      {collapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
+    </Button>
+  );
+}
+
+/** Left-side primary nav. Two widths controlled by useSidebar():
+ *  expanded (200px, icon + label + group headers) vs collapsed
+ *  (48px, icons only with tooltips). Mobile still uses the
+ *  hamburger sheet in the top bar. */
+function Sidebar() {
+  const [location] = useLocation();
+  const { collapsed } = useSidebar();
+  return (
+    <aside
+      className={cn(
+        "hidden md:flex md:shrink-0 md:flex-col md:border-r md:bg-background/40",
+        "md:sticky md:top-12 md:h-[calc(100vh-3rem)] md:overflow-y-auto",
+        "transition-[width] duration-200 ease-out",
+        collapsed ? "md:w-12" : "md:w-[200px]",
+      )}
+    >
+      <nav className={cn("flex flex-col text-sm", collapsed ? "items-center gap-1 py-2" : "gap-3 p-3")}>
+        {NAV_GROUPS.map((group, gIdx) => (
+          <div key={group.name} className={cn("flex flex-col", collapsed ? "gap-1" : "gap-0.5")}>
+            {/* Group label hidden in rail mode; a thin divider
+             *  separates groups instead. */}
+            {collapsed
+              ? gIdx > 0 && <span aria-hidden className="my-1 h-px w-6 self-center bg-border" />
+              : (
+                <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                  {group.name}
+                </p>
+              )}
+            {group.items.map(({ href, label, icon: Icon }) => {
+              const active = location === href;
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  title={collapsed ? label : undefined}
+                  className={cn(
+                    "inline-flex items-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+                    collapsed ? "h-8 w-8 justify-center" : "h-8 gap-2 px-2",
+                    active && "bg-secondary text-foreground",
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  {!collapsed && <span>{label}</span>}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+    </aside>
+  );
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen bg-background text-foreground">
-        <TopBar />
-        <TranscriptionSetupGate />
-        <main className="pb-12">
-          <Router />
-        </main>
-        <Toaster />
-      </div>
+      <CategoryProvider>
+        <SidebarProvider>
+          <div className="min-h-screen bg-background text-foreground">
+            <TopBar />
+            <TranscriptionSetupGate />
+            <div className="flex">
+              <Sidebar />
+              <main className="min-w-0 flex-1 pb-12">
+                <Router />
+              </main>
+            </div>
+            <Toaster />
+          </div>
+        </SidebarProvider>
+      </CategoryProvider>
     </QueryClientProvider>
   );
 }

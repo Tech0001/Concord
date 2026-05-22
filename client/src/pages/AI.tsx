@@ -6,8 +6,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
+import { DocDrawer, type DocDrawerEntry } from "@/components/DocDrawer";
+import { chatStream, useChatStream } from "@/hooks/use-chat-stream";
 import { TagPicker } from "@/components/TagPicker";
 import { useToast } from "@/hooks/use-toast";
+import { useCategory } from "@/hooks/use-category";
 import { cn } from "@/lib/utils";
 import {
   ArrowUp,
@@ -30,6 +33,10 @@ import {
 
 interface ChatSource {
   source_index: number;
+  /** "video" (default) or "doc". Streaming context uses lowercase; the
+   *  persisted shape uses snake_case but the discriminator is the
+   *  same. Doc sources have empty video_id/channel_id placeholders. */
+  source?: "video" | "doc";
   video_id: string;
   channel_id: string;
   segment_index: number | null;
@@ -56,6 +63,23 @@ interface ChatSource {
   mdPath?: string | null;
   isLive?: number | null;
   wordCount?: number | null;
+  speakerName?: string | null;
+  // Doc-source fields — populated when source === "doc".
+  document_id?: string;
+  doc_rel_path?: string;
+  doc_root_id?: string;
+  doc_title?: string;
+  doc_heading_path?: string;
+  doc_start_char?: number;
+  doc_end_char?: number;
+  // camelCase variants from the streaming event payload
+  documentId?: string;
+  docRootId?: string;
+  docRelPath?: string;
+  docTitle?: string;
+  docHeadingPath?: string;
+  docStartChar?: number;
+  docEndChar?: number;
 }
 
 interface ChatMessage {
@@ -88,14 +112,8 @@ interface ChannelOption {
   name: string;
 }
 
-type AskEvent =
-  | { type: "conversation"; conversationId: string; userMessageId: string }
-  | { type: "context"; sources: ChatSource[]; weakRetrieval: boolean }
-  | { type: "delta"; text: string }
-  | { type: "done" }
-  | { type: "persisted"; assistantMessageId: string }
-  | { type: "error"; error: string }
-  | { type: "end" };
+// AskEvent now lives in hooks/use-chat-stream.tsx alongside the
+// singleton that consumes the SSE stream.
 
 function fmtTimestamp(seconds: number | null): string {
   if (seconds == null) return "—";
@@ -150,23 +168,63 @@ function newConversationStub(): ConversationDetail {
 
 export default function AI() {
   const { toast } = useToast();
+  const { serverCategory } = useCategory();
 
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [active, setActive] = useState<ConversationDetail>(newConversationStub());
   const [loadingConv, setLoadingConv] = useState(false);
 
   const [composer, setComposer] = useState("");
-  const [streaming, setStreaming] = useState(false);
-  const [streamingText, setStreamingText] = useState("");
-  const [streamingSources, setStreamingSources] = useState<ChatSource[]>([]);
-  const [weakRetrieval, setWeakRetrieval] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
+  // Streaming state lives in a module-level singleton (see
+  // hooks/use-chat-stream.tsx) so navigating away from this page
+  // doesn't kill the in-flight fetch. The hook re-subscribes on
+  // re-mount and the snapshot reflects current state including any
+  // partial response that arrived while we were elsewhere.
+  const streamSnap = useChatStream();
+  const streaming = streamSnap.isStreaming;
+  const streamingText = streamSnap.streamingText;
+  const streamingSources = streamSnap.streamingSources;
+  const weakRetrieval = streamSnap.weakRetrieval;
 
   const [channels, setChannels] = useState<ChannelOption[]>([]);
   const [channelFilter, setChannelFilter] = useState<string>("all");
 
+  // Source-kind scope for AI retrieval. Persisted in localStorage so
+  // the user's last preference sticks across reloads. All three on by
+  // default = search everything (same as omitting the filter).
+  type ChatSourceKind = "video" | "audio" | "doc";
+  const SOURCE_STORAGE_KEY = "concord-ai-sources-v1";
+  const [enabledSources, setEnabledSources] = useState<Set<ChatSourceKind>>(() => {
+    const all = new Set<ChatSourceKind>(["video", "audio", "doc"]);
+    if (typeof window === "undefined") return all;
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(SOURCE_STORAGE_KEY) ?? "null");
+      if (Array.isArray(stored) && stored.length > 0) {
+        const valid = stored.filter((s: string) => s === "video" || s === "audio" || s === "doc");
+        if (valid.length > 0) return new Set<ChatSourceKind>(valid as ChatSourceKind[]);
+      }
+    } catch { /* fall through */ }
+    return all;
+  });
+  useEffect(() => {
+    window.localStorage.setItem(SOURCE_STORAGE_KEY, JSON.stringify(Array.from(enabledSources)));
+  }, [enabledSources]);
+  const toggleSource = (kind: ChatSourceKind) => {
+    setEnabledSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) {
+        if (next.size === 1) return next; // never let user disable everything
+        next.delete(kind);
+      } else {
+        next.add(kind);
+      }
+      return next;
+    });
+  };
+
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState<number | undefined>(undefined);
+  const [drawerDoc, setDrawerDoc] = useState<DocDrawerEntry | null>(null);
 
   const [saveDialog, setSaveDialog] = useState<{ source: ChatSource; messageId: string; surroundingText: string } | null>(null);
 
@@ -229,11 +287,10 @@ export default function AI() {
     const question = composer.trim();
     if (!question || streaming) return;
     setComposer("");
-    setStreaming(true);
-    setStreamingText("");
-    setStreamingSources([]);
-    setWeakRetrieval(false);
 
+    // Optimistic user bubble stays local — the singleton tracks the
+    // pending question, but we render the bubble inline here so it
+    // appears in the message list immediately.
     const optimisticUser: ChatMessage = {
       id: `optimistic-${Date.now()}`,
       conversation_id: active.id || "",
@@ -247,84 +304,59 @@ export default function AI() {
     setActive((prev) => ({ ...prev, messages: [...prev.messages, optimisticUser] }));
     scrollToBottom();
 
-    const ctl = new AbortController();
-    abortRef.current = ctl;
+    // Delegate to the singleton — it owns the AbortController, the
+    // fetch, and the SSE parsing. We don't await anything that lives
+    // for the duration of the stream; the snapshot subscription
+    // drives our re-renders. Awaiting ask() here is fine for the
+    // "after the stream is over" branch but the page can navigate
+    // away in the middle and the stream continues.
+    await chatStream.ask({
+      question,
+      conversationId: active.id || undefined,
+      channelIds: channelFilter === "all" ? undefined : [channelFilter],
+      category: serverCategory || undefined,
+      sources: enabledSources.size === 3 ? undefined : Array.from(enabledSources),
+    });
+  }, [composer, streaming, active.id, channelFilter, serverCategory, enabledSources, scrollToBottom]);
 
-    let serverConversationId = active.id || "";
-
-    try {
-      const res = await fetch("/api/llm/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: ctl.signal,
-        body: JSON.stringify({
-          question,
-          conversationId: active.id || undefined,
-          channelIds: channelFilter === "all" ? undefined : [channelFilter],
-        }),
-      });
-
-      if (!res.ok || !res.body) {
-        const text = await res.text().catch(() => `HTTP ${res.status}`);
-        throw new Error(text);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buf.indexOf("\n\n")) !== -1) {
-          const block = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const eventMatch = block.match(/^event: (.+)$/m);
-          const dataMatch = block.match(/^data: (.+)$/m);
-          if (!eventMatch || !dataMatch) continue;
-          const event = eventMatch[1];
-          const data = JSON.parse(dataMatch[1]);
-          const evt = { type: event, ...data } as AskEvent;
-
-          if (evt.type === "conversation") {
-            serverConversationId = evt.conversationId;
-            setActive((prev) => ({ ...prev, id: serverConversationId }));
-          } else if (evt.type === "context") {
-            setStreamingSources(evt.sources);
-            setWeakRetrieval(evt.weakRetrieval);
-            scrollToBottom();
-          } else if (evt.type === "delta") {
-            setStreamingText((s) => s + evt.text);
-            scrollToBottom();
-          } else if (evt.type === "error") {
-            toast({ title: "Chat error", description: evt.error, variant: "destructive" });
-          }
-        }
-      }
-
-      if (serverConversationId) {
-        await loadConversation(serverConversationId);
+  // When the singleton finishes (success / abort / error), reload the
+  // active conversation so persisted messages replace the optimistic
+  // user bubble + streaming preview. Also reloads the conversation
+  // list so titles update. This is what makes "navigate away while
+  // streaming, come back" work — on remount the snapshot's
+  // completionTick may already be ahead of our local tracker, in
+  // which case we reload immediately.
+  const lastTickRef = useRef(streamSnap.completionTick);
+  useEffect(() => {
+    if (streamSnap.completionTick === lastTickRef.current) return;
+    lastTickRef.current = streamSnap.completionTick;
+    const finishedId = streamSnap.lastCompletedConversationId;
+    if (finishedId) {
+      // If the user already moved to a different conversation, leave
+      // active alone — they'll see the result next time they open the
+      // one that just finished.
+      if (active.id === finishedId || active.id === "" || active.id == null) {
+        void loadConversation(finishedId);
       }
       loadConversations();
-    } catch (err) {
-      if ((err as any)?.name === "AbortError") {
-        toast({ title: "Cancelled", description: "Stopped the assistant mid-answer." });
-      } else {
-        toast({ title: "Ask failed", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
-      }
-    } finally {
-      setStreaming(false);
-      setStreamingText("");
-      setStreamingSources([]);
-      setWeakRetrieval(false);
-      abortRef.current = null;
     }
-  }, [composer, streaming, active.id, channelFilter, toast, loadConversation, loadConversations, scrollToBottom]);
+    if (streamSnap.error) {
+      toast({ title: "Ask failed", description: streamSnap.error, variant: "destructive" });
+      chatStream.clearError();
+    }
+  }, [streamSnap.completionTick, streamSnap.lastCompletedConversationId, streamSnap.error, active.id, loadConversation, loadConversations, toast]);
+
+  // When the conversation id is assigned mid-stream by the server,
+  // surface it on the local `active` record so navigation / titles /
+  // child queries can use it.
+  useEffect(() => {
+    if (streamSnap.conversationId && streamSnap.conversationId !== active.id && streamSnap.isStreaming) {
+      setActive((prev) => ({ ...prev, id: streamSnap.conversationId! }));
+    }
+  }, [streamSnap.conversationId, streamSnap.isStreaming, active.id]);
 
   const stop = useCallback(() => {
-    abortRef.current?.abort();
+    chatStream.abort();
   }, []);
 
   const newChat = useCallback(() => {
@@ -383,6 +415,48 @@ export default function AI() {
   }, []);
 
   const openSource = useCallback((src: ChatSource) => {
+    // Diagnostic — surfaces the full source shape at click time so
+    // we can see why a doc citation might not open the drawer. Keep
+    // until the doc-citation flow is confirmed working end-to-end
+    // (then strip).
+    console.log("[ai] openSource", {
+      source: src.source,
+      video_id: src.video_id,
+      doc_rel_path: src.doc_rel_path,
+      docRelPath: src.docRelPath,
+      document_id: src.document_id,
+      documentId: src.documentId,
+      doc_title: src.doc_title,
+      docTitle: src.docTitle,
+      full: src,
+    });
+    // Doc sources open in a side drawer so the chat stays visible —
+    // mirrors the VideoDrawer pattern for video citations. The drawer
+    // does its own scroll-to-excerpt + highlight after the markdown
+    // renders. "Open in Docs page" inside the drawer is the escape
+    // hatch for users who want the full file tree + filters.
+    // Also accept the "doc looks like a doc" heuristic for pre-fix
+    // persisted rows (source is NULL/"video" but video_id is empty
+    // and we have a doc path) so users don't have to re-ask just to
+    // click a citation.
+    const looksLikeDoc = src.source === "doc"
+      || (!src.video_id && (src.doc_rel_path || src.docRelPath));
+    if (looksLikeDoc) {
+      const docPath = src.doc_rel_path ?? src.docRelPath;
+      if (!docPath) {
+        console.warn("[ai] doc citation has no path — likely a pre-fix persisted row");
+        return;
+      }
+      setDrawerDoc({
+        documentId: src.document_id ?? src.documentId,
+        rootId: src.doc_root_id ?? src.docRootId,
+        relPath: docPath,
+        title: src.doc_title ?? src.docTitle ?? docPath,
+        excerpt: src.excerpt,
+        subtitle: src.doc_heading_path ?? src.docHeadingPath ?? null,
+      });
+      return;
+    }
     if (!src.video_id || !src.channel_id) return;
     // Bridge between the streaming context shape (camelCase) and the
     // conversation-reload shape (snake_case). Either may be present.
@@ -517,6 +591,31 @@ export default function AI() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            {/* Source-kind scope chips — toggle audio / video / docs.
+             *  Last one can't be deselected so the chat always has
+             *  something to retrieve from. */}
+            <div className="hidden items-center gap-1 rounded-md border bg-card p-0.5 text-xs sm:flex" role="group" aria-label="Source scope">
+              {(["audio", "video", "doc"] as const).map((kind) => {
+                const on = enabledSources.has(kind);
+                const label = kind === "doc" ? "Docs" : kind === "audio" ? "Audio" : "Video";
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={on}
+                    onClick={() => toggleSource(kind)}
+                    title={on ? `Searching ${label.toLowerCase()}` : `${label} excluded — click to include`}
+                    className={cn(
+                      "rounded px-2 py-0.5 transition-colors",
+                      on ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Filter className="h-3.5 w-3.5" />
               <Select value={channelFilter} onValueChange={setChannelFilter}>
@@ -579,6 +678,12 @@ export default function AI() {
         video={drawerVideo}
         initialSeconds={drawerSeconds}
         onOpenChange={(open) => { if (!open) setDrawerVideo(null); }}
+      />
+
+      <DocDrawer
+        open={!!drawerDoc}
+        doc={drawerDoc}
+        onOpenChange={(open) => { if (!open) setDrawerDoc(null); }}
       />
 
       {saveDialog && (
@@ -842,37 +947,58 @@ function SourcesList({
 }) {
   return (
     <ul className="mt-1 space-y-1">
-      {sources.map((s) => (
-        <li key={s.source_index} className="group rounded border bg-muted/30 px-2 py-1.5">
-          <div className="flex items-baseline gap-1.5">
-            <button
-              onClick={() => onCitationClick(s)}
-              className="rounded bg-secondary px-1 py-0.5 font-mono text-[10px] text-foreground hover:bg-foreground hover:text-background"
-            >
-              [{s.source_index}]
-            </button>
-            <span className="min-w-0 flex-1 truncate font-medium text-foreground" title={s.video_title ?? ""}>
-              {s.video_title ?? "(unknown video)"}
-            </span>
-            <span className="text-[10px] font-mono text-muted-foreground">{fmtTimestamp(s.start_seconds)}</span>
-            <button
-              onClick={() => onSaveCitation(s)}
-              className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-              title="Save as note"
-            >
-              <BookmarkPlus className="h-3 w-3" />
-            </button>
-          </div>
-          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-            {s.channel_name && <span>{s.channel_name}</span>}
-            {s.speaker_name && <span>· {s.speaker_name}</span>}
-            {s.score != null && <span className="font-mono">· score {s.score.toFixed(2)}</span>}
-          </div>
-          {s.excerpt && (
-            <div className="mt-1 line-clamp-2 italic text-muted-foreground">"{s.excerpt}"</div>
-          )}
-        </li>
-      ))}
+      {sources.map((s) => {
+        const isDoc = s.source === "doc";
+        const docPath = s.doc_rel_path ?? s.docRelPath ?? null;
+        const docTitle = s.doc_title ?? s.docTitle ?? null;
+        const headingPath = s.doc_heading_path ?? s.docHeadingPath ?? null;
+        return (
+          <li key={s.source_index} className="group rounded border bg-muted/30 px-2 py-1.5">
+            <div className="flex items-baseline gap-1.5">
+              <button
+                onClick={() => onCitationClick(s)}
+                className="rounded bg-secondary px-1 py-0.5 font-mono text-[10px] text-foreground hover:bg-foreground hover:text-background"
+              >
+                [{s.source_index}]
+              </button>
+              {isDoc && (
+                <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400">
+                  doc
+                </span>
+              )}
+              <span className="min-w-0 flex-1 truncate font-medium text-foreground" title={isDoc ? (docPath ?? "") : (s.video_title ?? "")}>
+                {isDoc ? (docTitle || docPath || "(unknown doc)") : (s.video_title ?? "(unknown video)")}
+              </span>
+              {!isDoc && (
+                <span className="text-[10px] font-mono text-muted-foreground">{fmtTimestamp(s.start_seconds)}</span>
+              )}
+              <button
+                onClick={() => onSaveCitation(s)}
+                className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                title="Save as note"
+              >
+                <BookmarkPlus className="h-3 w-3" />
+              </button>
+            </div>
+            <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+              {isDoc ? (
+                headingPath ? <span>{headingPath}</span> : null
+              ) : (
+                <>
+                  {s.channel_name && <span>{s.channel_name}</span>}
+                  {(s.speaker_name ?? s.speakerName) && (
+                    <span>· {s.speaker_name ?? s.speakerName}</span>
+                  )}
+                </>
+              )}
+              {s.score != null && <span className="font-mono">· score {s.score.toFixed(2)}</span>}
+            </div>
+            {s.excerpt && (
+              <div className="mt-1 line-clamp-2 italic text-muted-foreground">"{s.excerpt}"</div>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -1030,7 +1156,7 @@ function SaveAsNoteDialog({
             <div className="font-medium">{source.video_title}</div>
             <div className="text-muted-foreground">
               {source.channel_name} · {fmtTimestamp(source.start_seconds)}
-              {source.speaker_name && ` · ${source.speaker_name}`}
+              {(source.speaker_name ?? source.speakerName) && ` · ${source.speaker_name ?? source.speakerName}`}
             </div>
             {source.excerpt && <div className="mt-1 italic text-muted-foreground">"{source.excerpt}"</div>}
           </div>

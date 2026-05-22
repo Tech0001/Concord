@@ -228,3 +228,15 @@
 .electron header > div:first-child {
   padding-left: 5rem;
 }
+
+/* Briefly highlights the markdown element that contains a cited
+   passage when /docs is deep-linked from an AI source / Notes anchor
+   / Map node. Fades out after 4s (timer in Docs.tsx). Color picked
+   from theme tokens so it works in every theme. */
+.docs-cite-highlight {
+  background-color: color-mix(in oklch, var(--primary) 25%, transparent);
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background-color 1.5s ease-out;
+}
