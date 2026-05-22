@@ -413,14 +413,38 @@ export default function AI() {
   }, []);
 
   const openSource = useCallback((src: ChatSource) => {
+    // Diagnostic — surfaces the full source shape at click time so
+    // we can see why a doc citation might not open the drawer. Keep
+    // until the doc-citation flow is confirmed working end-to-end
+    // (then strip).
+    console.log("[ai] openSource", {
+      source: src.source,
+      video_id: src.video_id,
+      doc_rel_path: src.doc_rel_path,
+      docRelPath: src.docRelPath,
+      document_id: src.document_id,
+      documentId: src.documentId,
+      doc_title: src.doc_title,
+      docTitle: src.docTitle,
+      full: src,
+    });
     // Doc sources open in a side drawer so the chat stays visible —
     // mirrors the VideoDrawer pattern for video citations. The drawer
     // does its own scroll-to-excerpt + highlight after the markdown
     // renders. "Open in Docs page" inside the drawer is the escape
     // hatch for users who want the full file tree + filters.
-    if (src.source === "doc") {
+    // Also accept the "doc looks like a doc" heuristic for pre-fix
+    // persisted rows (source is NULL/"video" but video_id is empty
+    // and we have a doc path) so users don't have to re-ask just to
+    // click a citation.
+    const looksLikeDoc = src.source === "doc"
+      || (!src.video_id && (src.doc_rel_path || src.docRelPath));
+    if (looksLikeDoc) {
       const docPath = src.doc_rel_path ?? src.docRelPath;
-      if (!docPath) return;
+      if (!docPath) {
+        console.warn("[ai] doc citation has no path — likely a pre-fix persisted row");
+        return;
+      }
       setDrawerDoc({
         documentId: src.document_id ?? src.documentId,
         rootId: undefined, // server's first-root fallback works for v1

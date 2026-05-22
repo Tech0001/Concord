@@ -181,6 +181,11 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
           model: cfg.chatModel,
           sources: sources.map((s) => ({
             sourceIndex: s.sourceIndex,
+            // Doc-source discriminator + the doc fields used by the
+            // reload path on the client. Without these, reloaded doc
+            // citations come back with source="video" and empty
+            // video_id, and the citation click silently no-ops.
+            source: s.source,
             videoId: s.videoId,
             channelId: s.channelId,
             segmentIndex: s.segmentIndex,
@@ -189,6 +194,10 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
             speaker: s.speaker,
             excerpt: s.excerpt,
             score: s.score,
+            documentId: s.documentId ?? null,
+            docStartChar: s.docStartChar ?? null,
+            docEndChar: s.docEndChar ?? null,
+            docHeadingPath: s.docHeadingPath ?? null,
           })),
         });
         sse("persisted", { assistantMessageId });

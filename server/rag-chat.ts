@@ -459,6 +459,17 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
   const topScore = sources[0]?.score ?? 0;
   const weakRetrieval = sources.length === 0 || topScore < RELEVANT_SCORE_FLOOR;
 
+  // Diagnostic — counts of each source kind in the emitted context.
+  // Helps spot when doc retrieval works server-side but doesn't
+  // arrive on the client correctly. Strip once the doc-citation
+  // flow is confirmed working end-to-end.
+  const counts = sources.reduce((acc, s) => {
+    const k = s.source ?? "video";
+    acc[k] = (acc[k] ?? 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+  console.log(`[ask] context: ${sources.length} sources (${JSON.stringify(counts)}, topScore=${topScore.toFixed(3)}, weakRetrieval=${weakRetrieval})`);
+
   yield { type: "context", sources, weakRetrieval };
 
   if (sources.length === 0) {
