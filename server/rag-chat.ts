@@ -100,6 +100,46 @@ function hardCap(n: number, max: number) {
 
 /** Diversity cap: keep at most `perVideoCap` segments per (video, channel)
  *  while preserving the original score-sorted order. */
+/** Pull every global speaker name once per ask. Tiny table (≤ low
+ *  hundreds of rows in practice); a cache would be premature.
+ *  Returns lowercased names so the substring match below is
+ *  case-insensitive without per-comparison toLowerCase. */
+function listGlobalSpeakerNames(): { name: string; lower: string }[] {
+  const rows = getDb()
+    .prepare("SELECT name FROM speakers WHERE name IS NOT NULL AND name <> ''")
+    .all() as { name: string }[];
+  return rows.map((r) => ({ name: r.name, lower: r.name.toLowerCase() }));
+}
+
+/** Word-boundary match for each known speaker name against the
+ *  user's question. Returns the ORIGINAL-case names that matched.
+ *  Word-boundary so "Brandon" doesn't accidentally match "brandons"
+ *  (or arbitrary substrings inside other words). */
+function matchSpeakerNamesInQuestion(
+  question: string,
+  speakers: { name: string; lower: string }[],
+): string[] {
+  if (speakers.length === 0) return [];
+  // Normalize punctuation to spaces (any non-alphanumeric, non-space
+  // char), collapse runs, pad — gives us reliable word-boundary
+  // checks via plain substring against " name ". The /u flag isn't
+  // needed here; ASCII coverage is fine for English speaker names.
+  const padded = ` ${question.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()} `;
+  const out: string[] = [];
+  for (const sp of speakers) {
+    if (padded.includes(` ${sp.lower} `)) out.push(sp.name);
+  }
+  return out;
+}
+
+/** Key for deduplicating results across the primary + speaker-
+ *  expansion passes. Doc hits use document_id + chunk; video hits
+ *  use video/channel/segment. */
+function speakerHitKey(r: SemanticSearchResult): string {
+  if (r.source === "doc") return `doc:${r.document_id ?? ""}:${r.segment_index}`;
+  return `vid:${r.video_id}:${r.channel_id}:${r.segment_index}`;
+}
+
 function applyPerVideoCap(rows: SemanticSearchResult[], perVideoCap: number): SemanticSearchResult[] {
   const counts = new Map<string, number>();
   const out: SemanticSearchResult[] = [];
@@ -256,18 +296,58 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
 
   let semanticCandidates: SemanticSearchResult[] = [];
   try {
-    const search = await searchSemantic({
+    const baseFilters = {
+      ...(args.channelIds && args.channelIds.length === 1 ? { channelId: args.channelIds[0] } : {}),
+      ...(args.category ? { category: args.category } : {}),
+      ...(args.sources && args.sources.length > 0 ? { sources: args.sources } : {}),
+    };
+
+    // Pass 1: the original (or rewritten-for-retrieval) query.
+    const primary = await searchSemantic({
       query: retrievalQuery,
       model: args.embeddingModel || "",
       limit: topK * 2,
       minScore: 0.3,
-      filters: {
-        ...(args.channelIds && args.channelIds.length === 1 ? { channelId: args.channelIds[0] } : {}),
-        ...(args.category ? { category: args.category } : {}),
-        ...(args.sources && args.sources.length > 0 ? { sources: args.sources } : {}),
-      },
+      filters: baseFilters,
     });
-    semanticCandidates = search.results;
+    semanticCandidates = primary.results;
+
+    // Pass 2: speaker-aware expansion. Segments are now embedded
+    // with the speaker's global name prefixed ("Brandon Biggs: …");
+    // when the user's question mentions a known speaker by name we
+    // run an extra KNN with the same prefix applied to the QUERY
+    // side. That pushes the cosine math to favor the prefixed
+    // segments — i.e. the speaker's own first-person content. Merge
+    // by best score per (video, channel, segment) so duplicates from
+    // pass 1 don't crowd the limit.
+    const speakerNames = listGlobalSpeakerNames();
+    const matchedNames = matchSpeakerNamesInQuestion(args.question, speakerNames);
+    if (matchedNames.length > 0) {
+      const merged = new Map<string, SemanticSearchResult>();
+      for (const r of semanticCandidates) merged.set(speakerHitKey(r), r);
+      for (const name of matchedNames) {
+        try {
+          const extra = await searchSemantic({
+            query: `${name}: ${retrievalQuery}`,
+            model: args.embeddingModel || "",
+            limit: topK * 2,
+            minScore: 0.3,
+            filters: baseFilters,
+          });
+          for (const r of extra.results) {
+            const key = speakerHitKey(r);
+            const existing = merged.get(key);
+            if (!existing || r.score > existing.score) {
+              merged.set(key, r);
+            }
+          }
+        } catch (err) {
+          // Best-effort — a failed expansion shouldn't sink the whole ask.
+          console.warn(`[ask] speaker-expansion for "${name}" failed:`, err instanceof Error ? err.message : err);
+        }
+      }
+      semanticCandidates = Array.from(merged.values()).sort((a, b) => b.score - a.score);
+    }
   } catch (err) {
     yield { type: "error", error: err instanceof Error ? err.message : String(err) };
     return;

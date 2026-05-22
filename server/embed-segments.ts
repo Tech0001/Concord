@@ -1,4 +1,5 @@
 import {
+  getDb,
   getTranscriptSegmentsForVideo,
   replaceVideoEmbeddings,
   type EmbeddingInput,
@@ -9,6 +10,20 @@ import {
   LlmUnreachableError,
   LlmHttpError,
 } from "./llm";
+
+/** Resolve every (local speaker → global name) mapping for one video
+ *  in a single query. Returns a Map keyed by the LOCAL label
+ *  (e.g. "S0") so the per-segment loop below is O(1) per row. Local
+ *  speakers without a global assignment are absent from the map. */
+function loadSpeakerNamesForVideo(videoId: string, channelId: string): Map<string, string> {
+  const rows = getDb().prepare(`
+    SELECT vsa.local_speaker, sp.name
+    FROM video_speaker_assignments vsa
+    JOIN speakers sp ON sp.id = vsa.speaker_id
+    WHERE vsa.video_id = ? AND vsa.channel_id = ?
+  `).all(videoId, channelId) as { local_speaker: string; name: string }[];
+  return new Map(rows.map((r) => [r.local_speaker, r.name]));
+}
 
 export interface EmbedSegmentsResult {
   videoId: string;
@@ -75,10 +90,22 @@ export async function embedSegmentsForVideo(
 
   const rows: EmbeddingInput[] = [];
 
+  // Resolve local speaker labels → global names once. When a segment's
+  // speaker has been labeled, we prefix the EMBED INPUT with the name
+  // (e.g. "Brandon Biggs: I saw crypto being used at Starbucks") so
+  // questions that mention the speaker by name vector-match their
+  // first-person content. The stored segment.text is unchanged so the
+  // displayed quote stays as the speaker actually said it. Unlabeled
+  // speakers (null or unmapped local label) embed raw — no prefix.
+  const speakerNames = loadSpeakerNamesForVideo(videoId, channelId);
+
   try {
     for (let i = 0; i < segments.length; i += BATCH_SIZE) {
       const batch = segments.slice(i, i + BATCH_SIZE);
-      const texts = batch.map((s) => s.text);
+      const texts = batch.map((s) => {
+        const name = s.speaker ? speakerNames.get(s.speaker) : null;
+        return name ? `${name}: ${s.text}` : s.text;
+      });
       const vectors = await embed({ texts, model });
 
       if (vectors.length !== batch.length) {
