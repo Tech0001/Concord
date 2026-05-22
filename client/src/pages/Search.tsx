@@ -46,6 +46,7 @@ interface TranscriptSearchResult {
    *  alongside transcript segments. */
   source?: "video" | "doc";
   document_id?: string;
+  doc_root_id?: string;
   doc_rel_path?: string;
   doc_title?: string;
   doc_heading_path?: string;
@@ -292,6 +293,7 @@ export default function TranscriptSearch() {
     if (result.source === "doc" && result.doc_rel_path) {
       setDrawerDoc({
         documentId: result.document_id,
+        rootId: result.doc_root_id,
         relPath: result.doc_rel_path,
         title: result.doc_title ?? result.title ?? result.doc_rel_path,
         excerpt: result.text,

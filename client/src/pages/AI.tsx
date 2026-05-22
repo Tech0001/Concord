@@ -67,12 +67,14 @@ interface ChatSource {
   // Doc-source fields — populated when source === "doc".
   document_id?: string;
   doc_rel_path?: string;
+  doc_root_id?: string;
   doc_title?: string;
   doc_heading_path?: string;
   doc_start_char?: number;
   doc_end_char?: number;
   // camelCase variants from the streaming event payload
   documentId?: string;
+  docRootId?: string;
   docRelPath?: string;
   docTitle?: string;
   docHeadingPath?: string;
@@ -447,7 +449,7 @@ export default function AI() {
       }
       setDrawerDoc({
         documentId: src.document_id ?? src.documentId,
-        rootId: undefined, // server's first-root fallback works for v1
+        rootId: src.doc_root_id ?? src.docRootId,
         relPath: docPath,
         title: src.doc_title ?? src.docTitle ?? docPath,
         excerpt: src.excerpt,

@@ -56,6 +56,7 @@ interface ClipAnchor {
    *  file instead of a video. Mutually exclusive with the video
    *  fields above. */
   document_id: string | null;
+  doc_root_id: string | null;
   doc_rel_path: string | null;
   doc_title: string | null;
   doc_start_char: number | null;
@@ -383,6 +384,7 @@ export default function Clips() {
     if (anchor.document_id && anchor.doc_rel_path) {
       setDrawerDoc({
         documentId: anchor.document_id,
+        rootId: anchor.doc_root_id ?? undefined,
         relPath: anchor.doc_rel_path,
         title: anchor.doc_title ?? anchor.doc_rel_path,
         excerpt: anchor.excerpt,

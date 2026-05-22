@@ -47,6 +47,10 @@ export interface NoteAnchor {
    *  + title from the documents table. NULL when the doc was deleted. */
   doc_rel_path: string | null;
   doc_title: string | null;
+  /** Which root the doc lives under. Needed by the DocDrawer so the
+   *  file fetch picks the right root in a multi-root setup. Empty
+   *  string for the legacy root; null when the doc no longer exists. */
+  doc_root_id: string | null;
 }
 
 export interface TranscriptClip {
@@ -150,7 +154,8 @@ function attachAnchorsToClips<T extends { id: string }>(clips: T[]): (T & { anch
            q.video_path, q.md_path, q.status, q.is_live, q.duration, q.word_count,
            c.name AS channel_name,
            a.document_id, a.doc_start_char, a.doc_end_char,
-           d.rel_path AS doc_rel_path, d.title AS doc_title
+           d.rel_path AS doc_rel_path, d.title AS doc_title,
+           COALESCE(d.root_id, '') AS doc_root_id
     FROM note_anchors a
     LEFT JOIN video_queue q ON q.video_id = a.video_id AND q.channel_id = a.channel_id
     LEFT JOIN channels c    ON c.id       = a.channel_id
@@ -813,6 +818,7 @@ export interface GraphNodeAnchor {
   endSeconds: number | null;
   /** Doc-source fields — NULL when this anchor points at a video. */
   documentId: string | null;
+  docRootId: string | null;
   docRelPath: string | null;
   docTitle: string | null;
   docStartChar: number | null;
@@ -1156,6 +1162,7 @@ export function getClipGraph(filters: {
       startSeconds: a.start_seconds,
       endSeconds: a.end_seconds,
       documentId: a.document_id,
+      docRootId: a.doc_root_id,
       docRelPath: a.doc_rel_path,
       docTitle: a.doc_title,
       docStartChar: a.doc_start_char,

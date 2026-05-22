@@ -47,12 +47,14 @@ export interface ChatSource {
   wordCount?: number | null;
   speakerName?: string | null;
   document_id?: string;
+  doc_root_id?: string;
   doc_rel_path?: string;
   doc_title?: string;
   doc_heading_path?: string;
   doc_start_char?: number;
   doc_end_char?: number;
   documentId?: string;
+  docRootId?: string;
   docRelPath?: string;
   docTitle?: string;
   docHeadingPath?: string;

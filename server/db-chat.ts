@@ -74,6 +74,10 @@ export interface ChatMessageSource {
   doc_heading_path: string | null;
   doc_rel_path: string | null;
   doc_title: string | null;
+  /** Empty string for the legacy root; the configured root id
+   *  otherwise. Joined from documents.root_id on read — chat_
+   *  message_sources doesn't store it. */
+  doc_root_id: string | null;
 }
 
 export interface ChatConversationDetail extends ChatConversationMeta {
@@ -166,7 +170,8 @@ export function getChatConversation(id: string): ChatConversationDetail | undefi
       COALESCE(s.source, 'video') AS source,
       s.document_id, s.doc_chunk_index, s.doc_start_char, s.doc_end_char,
       s.doc_heading_path,
-      d.rel_path AS doc_rel_path, d.title AS doc_title
+      d.rel_path AS doc_rel_path, d.title AS doc_title,
+      COALESCE(d.root_id, '') AS doc_root_id
     FROM chat_message_sources s
     LEFT JOIN video_queue q ON q.video_id = s.video_id AND q.channel_id = s.channel_id
     LEFT JOIN channels    c ON c.id       = s.channel_id
@@ -299,7 +304,8 @@ export function getChatMessage(id: string): ChatMessage | undefined {
       COALESCE(s.source, 'video') AS source,
       s.document_id, s.doc_chunk_index, s.doc_start_char, s.doc_end_char,
       s.doc_heading_path,
-      d.rel_path AS doc_rel_path, d.title AS doc_title
+      d.rel_path AS doc_rel_path, d.title AS doc_title,
+      COALESCE(d.root_id, '') AS doc_root_id
     FROM chat_message_sources s
     LEFT JOIN video_queue q ON q.video_id = s.video_id AND q.channel_id = s.channel_id
     LEFT JOIN channels    c ON c.id       = s.channel_id

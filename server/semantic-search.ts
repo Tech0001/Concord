@@ -52,6 +52,11 @@ export interface SemanticSearchResult extends TranscriptSearchResult {
   doc_end_char?: number;
   doc_chunk_index?: number;
   doc_category?: string;
+  /** Which root the doc lives under. Routes that fetch the file
+   *  need this when more than one root is configured — without it
+   *  the server falls back to the first root and a doc that lives
+   *  in another root 404s. Empty string for the legacy root. */
+  doc_root_id?: string;
 }
 
 export interface SemanticSearchResponse {
@@ -106,11 +111,14 @@ interface DocMetaRow {
   rel_path: string;
   title: string;
   category: string;
+  root_id: string;
 }
 
 function loadDocMeta(): Map<string, DocMetaRow> {
+  // COALESCE handles legacy rows from before the root_id column —
+  // those belong to the empty-id "legacy" root.
   const rows = getDb()
-    .prepare("SELECT id, rel_path, title, category FROM documents")
+    .prepare("SELECT id, rel_path, title, category, COALESCE(root_id, '') AS root_id FROM documents")
     .all() as DocMetaRow[];
   return new Map(rows.map((r) => [r.id, r]));
 }
@@ -315,6 +323,7 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
       rank: row.distance,
       score,
       document_id: row.document_id,
+      doc_root_id: d.root_id,
       doc_rel_path: d.rel_path,
       doc_title: d.title,
       doc_heading_path: row.heading_path ?? "",

@@ -79,6 +79,11 @@ export interface ContextSource {
   /** Doc-source fields — populated when source === "doc". The video*
    *  fields above are placeholders ("") in that case. */
   documentId?: string;
+  /** Which root the doc lives in. Needed by the client when more
+   *  than one root is configured — without it the file fetch falls
+   *  back to the first root and 404s for docs in other roots.
+   *  Empty string = legacy root. */
+  docRootId?: string;
   docRelPath?: string;
   docTitle?: string;
   docHeadingPath?: string;
@@ -449,6 +454,7 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
     duration: null,         // not in semantic-search result; reload fetches it
     wordCount: r.word_count,
     documentId: r.document_id,
+    docRootId: r.doc_root_id,
     docRelPath: r.doc_rel_path,
     docTitle: r.doc_title,
     docHeadingPath: r.doc_heading_path,

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
@@ -132,9 +133,14 @@ export function DocDrawer({
                     <FileText className="h-4 w-4 shrink-0 text-blue-500" />
                     <span className="line-clamp-2">{doc.title}</span>
                   </SheetTitle>
-                  <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={doc.relPath}>
-                    {doc.subtitle ? `${doc.subtitle} · ` : ""}{doc.relPath}
-                  </p>
+                  {/* Visually displayed as the sub-line; also satisfies
+                      Radix's a11y check (Dialog wants a Description
+                      paired with the Title or aria-describedby). */}
+                  <SheetDescription asChild>
+                    <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={doc.relPath}>
+                      {doc.subtitle ? `${doc.subtitle} · ` : ""}{doc.relPath}
+                    </p>
+                  </SheetDescription>
                 </div>
                 <Link
                   href={`/docs?${buildOpenInDocsQs(doc)}`}

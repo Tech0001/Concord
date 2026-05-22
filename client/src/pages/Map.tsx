@@ -433,6 +433,7 @@ export default function MapPage() {
     if (docAnchor && !clip.videoId) {
       setDrawerDoc({
         documentId: docAnchor.documentId ?? undefined,
+        rootId: docAnchor.docRootId ?? undefined,
         relPath: docAnchor.docRelPath!,
         title: docAnchor.docTitle ?? clip.title ?? docAnchor.docRelPath!,
         excerpt: clip.quote || null,

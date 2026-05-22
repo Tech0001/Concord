@@ -27,6 +27,7 @@ export interface GraphAnchorData {
   endSeconds: number | null;
   /** Doc-source fields — null when this anchor points at a video. */
   documentId: string | null;
+  docRootId: string | null;
   docRelPath: string | null;
   docTitle: string | null;
   docStartChar: number | null;
