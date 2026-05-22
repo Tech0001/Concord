@@ -5,6 +5,7 @@ import {
   getTranscriptSearchIndexStats,
   getEmbeddingStats,
 } from "./db";
+import { listRoots } from "./docs-index";
 
 // ---------------------------------------------------------------
 // Archive status snapshot — powers the Status page.
@@ -242,7 +243,13 @@ export function getArchiveStatus(activeEmbedModel: string | null): ArchiveStatus
   // Cheap aggregates over documents + vec_docs. Per-model rollups
   // mirror the videos-side embeddings shape so the UI can render
   // both with the same component.
-  const docsRoot = getConfigValues()["docs.rootFolder"] || null;
+  // Compatibility: surface a representative rootFolder for the
+  // status payload (Status page still shows one path inline). When
+  // the user has configured multiple roots, take the first; the
+  // full list is also returned below as docs.roots so the UI can
+  // upgrade to show them all later.
+  const docsRoots = listRoots();
+  const docsRoot = docsRoots[0]?.path ?? (getConfigValues()["docs.rootFolder"] || null);
   const totalDocsRow = d.prepare("SELECT COUNT(*) AS c FROM documents").get() as { c: number };
   const starredDocsRow = d.prepare("SELECT COUNT(*) AS c FROM documents WHERE starred = 1").get() as { c: number };
   const docsByCategoryRows = d.prepare(

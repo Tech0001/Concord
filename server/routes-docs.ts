@@ -1,51 +1,111 @@
 import type { Express, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
-import { getConfigValues, setConfigValues } from "./db";
 import {
+  addRoot,
+  findRootById,
   getDocument,
   getDocumentByRelPath,
   indexDocs,
   listDocuments,
+  listRoots,
+  removeRoot,
+  renameRoot,
   setDocumentCategory,
   setDocumentStarred,
+  setRoots,
+  type DocsRoot,
   type DocumentRow,
 } from "./docs-index";
 import { embedDocument } from "./docs-embed";
 
 /**
- * Markdown file viewer endpoints — list + read .md files under a user-
- * configured root folder. Read-only; no DB writes, no embedding. The
- * fuller "docs as a content source" plan (embedding, AI-chat
- * integration) layers on top of this once the basic browse loop is in.
+ * Markdown file viewer + roots-management endpoints. Multi-root:
+ * /api/docs/config returns the array of configured roots;
+ * /api/docs/tree returns one tree per root; /api/docs/file +
+ * /api/docs/by-path require a root id to disambiguate when a rel_path
+ * exists in more than one root.
  *
- * Path safety: every file/tree request resolves the requested path
- * against the configured root and rejects anything outside it — keeps a
- * malicious or buggy client from reading the rest of the filesystem.
+ * Path safety: every file read resolves against the root's path and
+ * rejects anything outside it.
  */
 export function registerDocsRoutes(app: Express): void {
   app.get("/api/docs/config", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ rootFolder: getConfigValues()["docs.rootFolder"] || "" });
+    const roots = listRoots();
+    res.json({
+      roots,
+      // Back-compat alias for older clients that read rootFolder.
+      rootFolder: roots[0]?.path || "",
+    });
   });
 
+  // Add a new root. Auto-detects whether to use the legacy empty id
+  // (first root) or a new opaque id (subsequent). Re-indexes
+  // immediately so the tree request right after this returns
+  // populated data.
+  app.post("/api/docs/roots", (req, res) => {
+    const inputPath = typeof req.body?.path === "string" ? req.body.path : "";
+    const label = typeof req.body?.label === "string" ? req.body.label : undefined;
+    if (!inputPath.trim()) {
+      return res.status(400).json({ error: "path is required" });
+    }
+    try {
+      const root = addRoot({ path: inputPath, label });
+      const index = indexDocs();
+      res.json({ root, index });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Failed to add root" });
+    }
+  });
+
+  app.delete("/api/docs/roots/:id", (req: Request<{ id: string }>, res) => {
+    const ok = removeRoot(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Root not found" });
+    res.json({ ok: true });
+  });
+
+  app.patch("/api/docs/roots/:id", (req: Request<{ id: string }>, res) => {
+    const label = typeof req.body?.label === "string" ? req.body.label : "";
+    if (!label.trim()) return res.status(400).json({ error: "label is required" });
+    const root = renameRoot(req.params.id, label);
+    if (!root) return res.status(404).json({ error: "Root not found" });
+    res.json({ root });
+  });
+
+  // Back-compat: old single-folder config endpoint. POST replaces
+  // root[0] OR adds the first root if none exist. New code should
+  // use POST /api/docs/roots instead.
   app.post("/api/docs/config", (req, res) => {
     const rootFolder = typeof req.body?.rootFolder === "string"
       ? req.body.rootFolder.trim()
       : "";
-    if (rootFolder && !fs.existsSync(rootFolder)) {
+    if (!rootFolder) {
+      // Clear all roots.
+      for (const r of listRoots()) removeRoot(r.id);
+      res.json({ ok: true, rootFolder: "" });
+      return;
+    }
+    if (!fs.existsSync(rootFolder)) {
       return res.status(400).json({ error: `Folder does not exist: ${rootFolder}` });
     }
-    setConfigValues({ "docs.rootFolder": rootFolder });
-    // Re-index immediately when the folder changes so the UI's first
-    // tree request returns rich (star/category-aware) nodes instead of
-    // a bare filesystem listing.
-    const index = rootFolder ? indexDocs() : null;
-    res.json({ ok: true, rootFolder, index });
+    try {
+      const existing = listRoots();
+      if (existing.length === 0) {
+        addRoot({ path: rootFolder });
+      } else {
+        // Replace the first root's path, preserving its id so existing
+        // doc ids don't churn.
+        const updated: DocsRoot[] = [{ ...existing[0], path: rootFolder, label: path.basename(rootFolder) || rootFolder }, ...existing.slice(1)];
+        setRoots(updated);
+      }
+      const index = indexDocs();
+      res.json({ ok: true, rootFolder, index });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Failed to set root" });
+    }
   });
 
-  // Manual refresh (Docs page "Refresh" button) and the post-edit
-  // re-sync entry point. Cheap — sha256 + stat per file.
   app.post("/api/docs/reindex", (_req, res) => {
     try {
       res.json({ index: indexDocs() });
@@ -54,33 +114,50 @@ export function registerDocsRoutes(app: Express): void {
     }
   });
 
+  // Tree: one entry per configured root, each with its own nested
+  // folder structure. Filters (category / starred) apply per root
+  // and a root with zero matches is still returned (empty children
+  // list) so the user can see it exists in the sidebar.
   app.get("/api/docs/tree", (req, res) => {
-    const root = getConfigValues()["docs.rootFolder"];
-    if (!root) return res.json({ tree: [], rootFolder: "" });
-    if (!fs.existsSync(root)) return res.status(400).json({ error: `Root folder missing: ${root}` });
+    const roots = listRoots();
     const catParam = String(req.query.category || "both");
     const starredOnly = String(req.query.starred || "all") === "yes";
     try {
-      // Index lookup keyed by rel_path so each file node can carry
-      // its current id/star/category without an extra round-trip.
-      const docsByPath = new Map(listDocuments().map((d) => [d.rel_path, d]));
-      let tree = buildTree(root, "", docsByPath);
-      if (catParam === "personal" || catParam === "work") {
-        tree = filterTreeByCategory(tree, catParam);
-      }
-      if (starredOnly) tree = filterTreeByStarred(tree);
-      res.json({ rootFolder: root, tree });
+      const allDocs = listDocuments();
+      const trees = roots.map((root) => {
+        if (!fs.existsSync(root.path)) {
+          return { root, tree: [] as DocsTreeNode[], error: "folder missing" };
+        }
+        const rootDocs = allDocs.filter((d) => (d.root_id ?? "") === root.id);
+        const docsByPath = new Map(rootDocs.map((d) => [d.rel_path, d]));
+        let tree = buildTree(root.path, "", docsByPath);
+        if (catParam === "personal" || catParam === "work") {
+          tree = filterTreeByCategory(tree, catParam);
+        }
+        if (starredOnly) tree = filterTreeByStarred(tree);
+        return { root, tree };
+      });
+      res.json({
+        roots,
+        trees,
+        // Back-compat scalar fields for clients that haven't switched
+        // to the trees[] shape yet.
+        rootFolder: roots[0]?.path || "",
+        tree: trees[0]?.tree || [],
+      });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : "Failed to scan docs folder" });
     }
   });
 
-  // Single doc metadata — used by the viewer header to show + edit
-  // star / category without round-tripping the entire tree.
+  // Single doc metadata — used by the viewer header. Accepts either
+  // (rootId, path) for the multi-root form or just path for legacy
+  // single-root clients.
   app.get("/api/docs/by-path", (req, res) => {
     const rel = String(req.query.path || "");
     if (!rel) return res.status(400).json({ error: "path is required" });
-    const doc = getDocumentByRelPath(rel);
+    const rootId = typeof req.query.rootId === "string" ? req.query.rootId : undefined;
+    const doc = getDocumentByRelPath(rel, rootId);
     if (!doc) return res.status(404).json({ error: "Document not in index — try Refresh" });
     res.json({ document: doc });
   });
@@ -103,10 +180,6 @@ export function registerDocsRoutes(app: Express): void {
     res.json({ ok: true });
   });
 
-  // Embedding backfill — runs sequentially through every indexed doc.
-  // skipIfPresent defaults to true so re-running after the model is
-  // configured doesn't re-embed already-embedded files. Streams a
-  // progress summary back at the end.
   app.post("/api/docs/embed-all", async (req, res) => {
     const skipIfPresent = req.body?.overwrite ? false : true;
     const all = listDocuments();
@@ -129,8 +202,6 @@ export function registerDocsRoutes(app: Express): void {
     res.json({ total: all.length, embedded: totalEmbedded, skipped: totalSkipped, failed, results });
   });
 
-  // Single-doc embed — useful when the user just edited one file and
-  // wants the chat to reflect it without doing a full backfill.
   app.post("/api/docs/:id/embed", async (req: Request<{ id: string }>, res) => {
     const doc = getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: "Document not found" });
@@ -143,16 +214,22 @@ export function registerDocsRoutes(app: Express): void {
     }
   });
 
+  // File read — needs a root to disambiguate when a rel_path exists
+  // in more than one root. Falls back to the first root for legacy
+  // single-root callers that omit rootId.
   app.get("/api/docs/file", (req: Request, res: Response) => {
-    const root = getConfigValues()["docs.rootFolder"];
-    if (!root) return res.status(400).json({ error: "Docs folder not configured" });
     const rel = String(req.query.path ?? "");
     if (!rel) return res.status(400).json({ error: "path is required" });
+    const rootId = typeof req.query.rootId === "string" ? req.query.rootId : undefined;
+    const roots = listRoots();
+    if (roots.length === 0) return res.status(400).json({ error: "Docs folder not configured" });
+    const root = rootId !== undefined ? findRootById(rootId) : roots[0];
+    if (!root) return res.status(404).json({ error: "Unknown root" });
 
-    const resolved = path.resolve(root, rel);
-    // Escape protection — `..` segments mustn't let the user pull
-    // arbitrary files. Compare resolved paths after canonicalization.
-    const rootResolved = path.resolve(root);
+    const resolved = path.resolve(root.path, rel);
+    const rootResolved = path.resolve(root.path);
+    // Path-escape protection — `..` segments mustn't let the user
+    // pull arbitrary files. Compare resolved paths after canonical.
     if (resolved !== rootResolved && !resolved.startsWith(rootResolved + path.sep)) {
       return res.status(403).json({ error: "Path escapes the docs folder" });
     }
@@ -160,9 +237,6 @@ export function registerDocsRoutes(app: Express): void {
 
     const stat = fs.statSync(resolved);
     if (!stat.isFile()) return res.status(400).json({ error: "Not a file" });
-    // Soft cap on file size — keep the UI snappy and prevent the
-    // browser from choking on a 50 MB doc the user accidentally
-    // dropped into the folder.
     if (stat.size > 5 * 1024 * 1024) {
       return res.status(413).json({ error: "File too large (>5 MB) to render in the viewer" });
     }
@@ -184,9 +258,6 @@ export interface DocsTreeNode {
   type: "file" | "dir";
   children?: DocsTreeNode[];
   mtimeMs?: number;
-  /** Document index id — present for files that have been ingested
-   *  into the documents table. Lets the UI star/categorize/anchor
-   *  notes without an extra round-trip. */
   documentId?: string;
   starred?: number;
   category?: string;
@@ -239,9 +310,6 @@ function buildTree(
   return result;
 }
 
-/** Prune a tree to only the files in the given category, plus their
- *  ancestor folders. A folder with zero matching descendants is
- *  dropped so the user doesn't see empty sections. */
 function filterTreeByCategory(nodes: DocsTreeNode[], category: string): DocsTreeNode[] {
   const out: DocsTreeNode[] = [];
   for (const n of nodes) {

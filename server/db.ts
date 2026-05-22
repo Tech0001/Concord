@@ -452,10 +452,11 @@ function runMigrations(database: Database.Database) {
 
   // ---- Markdown docs as a first-class content type ----
   //
-  // documents rows mirror files under docs.rootFolder. id is derived
-  // from the relative path so it survives content edits (and so
-  // note_anchors can hold a stable doc_id). Renames look like a remove
-  // + insert; that's fine for v1.
+  // documents rows mirror files under one of the configured docs
+  // roots (docs.rootFolders — see indexDocs()). id is derived from
+  // (root_id, rel_path) so it survives content edits (and so
+  // note_anchors can hold a stable doc_id). Renames look like a
+  // remove + insert; that's fine for v1.
   //
   // starred + category make docs filterable the same way videos are.
   // content_hash + mtime_ms power incremental re-indexing — when a
@@ -477,6 +478,20 @@ function runMigrations(database: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_documents_starred ON documents(starred);
     CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
   `);
+
+  // Multi-root migration: documents started life with a UNIQUE
+  // constraint on rel_path (assumed one global root). Once we
+  // support multiple roots, two roots can legitimately share a
+  // rel_path (e.g. "README.md" in both), so we have to swap the
+  // single-column UNIQUE for a composite (root_id, rel_path).
+  //
+  // ensureColumn handles the new column; a one-shot recreate
+  // handles the UNIQUE swap. Detection: PRAGMA index_list returns
+  // the auto-named unique index `sqlite_autoindex_documents_*`
+  // for the rel_path UNIQUE — its presence means we haven't
+  // recreated yet.
+  ensureColumn("documents", "root_id", "TEXT");
+  relaxDocumentsRelPathUnique(database);
 
   // note_anchors gains optional doc-source columns so a single anchor
   // can point at either a video timestamp or a doc character range.
@@ -724,6 +739,77 @@ function relaxClipAnchorNotNull(database: Database.Database): void {
       `);
     })();
     console.log("[db] transcript_clips relaxed — standalone notes are now allowed.");
+  } finally {
+    database.pragma("foreign_keys = ON");
+  }
+}
+
+/** Swap documents' single-column rel_path UNIQUE for a composite
+ *  (root_id, rel_path) UNIQUE, so multiple roots can share the same
+ *  rel_path (e.g. each root has its own README.md). One-shot
+ *  recreate; idempotent thereafter — detection looks for the legacy
+ *  auto-index that backs the old UNIQUE constraint. */
+function relaxDocumentsRelPathUnique(database: Database.Database): void {
+  // sqlite_autoindex_<table>_<n> appears for column-level UNIQUE
+  // constraints declared in the CREATE TABLE. If we've already
+  // recreated the table, the new schema's composite UNIQUE shows
+  // up under a different auto-index name (or via our explicit
+  // index below).
+  const indexes = database
+    .prepare(`PRAGMA index_list(documents)`)
+    .all() as Array<{ name: string; unique: number; origin: string }>;
+  // The old column-level UNIQUE shows up with origin = 'u' (UNIQUE
+  // keyword in column definition). Our post-recreate schema uses a
+  // table-level UNIQUE which still shows origin 'u' but indexes a
+  // composite. Check by inspecting which columns the unique index
+  // covers — if any unique non-PK index is on rel_path ALONE, we
+  // need to rebuild.
+  let needsRebuild = false;
+  for (const idx of indexes) {
+    if (idx.unique !== 1 || idx.origin === "pk") continue;
+    const cols = database
+      .prepare(`PRAGMA index_info(${idx.name})`)
+      .all() as Array<{ name: string }>;
+    if (cols.length === 1 && cols[0].name === "rel_path") {
+      needsRebuild = true;
+      break;
+    }
+  }
+  if (!needsRebuild) return;
+
+  console.log("[db] Swapping documents UNIQUE(rel_path) → UNIQUE(root_id, rel_path) for multi-root support…");
+  database.pragma("foreign_keys = OFF");
+  try {
+    database.transaction(() => {
+      database.exec(`
+        CREATE TABLE documents_new (
+          id            TEXT PRIMARY KEY,
+          rel_path      TEXT NOT NULL,
+          title         TEXT NOT NULL,
+          starred       INTEGER NOT NULL DEFAULT 0,
+          category      TEXT NOT NULL DEFAULT 'personal',
+          content_hash  TEXT NOT NULL,
+          bytes         INTEGER NOT NULL,
+          mtime_ms      REAL NOT NULL,
+          root_id       TEXT,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (root_id, rel_path)
+        );
+        INSERT INTO documents_new
+          (id, rel_path, title, starred, category, content_hash, bytes,
+           mtime_ms, root_id, created_at, updated_at)
+        SELECT id, rel_path, title, starred, category, content_hash, bytes,
+               mtime_ms, root_id, created_at, updated_at
+        FROM documents;
+        DROP TABLE documents;
+        ALTER TABLE documents_new RENAME TO documents;
+        CREATE INDEX IF NOT EXISTS idx_documents_starred ON documents(starred);
+        CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
+        CREATE INDEX IF NOT EXISTS idx_documents_root ON documents(root_id);
+      `);
+    })();
+    console.log("[db] documents table rebuilt — multi-root rel_paths now allowed.");
   } finally {
     database.pragma("foreign_keys = ON");
   }

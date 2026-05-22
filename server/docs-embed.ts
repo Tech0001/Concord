@@ -24,6 +24,7 @@ import path from "path";
 import { embed } from "./llm";
 import { getDb, getConfigValues } from "./db";
 import { normalizeVector } from "./db-embeddings";
+import { listRoots } from "./docs-index";
 
 const SOFT_CHUNK_CHARS = 1800;   // ~450 tokens for typical English prose
 const HARD_CHUNK_CHARS = 4000;   // bail-out cap before brute split
@@ -201,13 +202,20 @@ export interface EmbedDocResult {
 export async function embedDocument(documentId: string, opts: EmbedDocOptions = {}): Promise<EmbedDocResult> {
   const t0 = Date.now();
   const db = getDb();
-  const doc = db.prepare("SELECT id, rel_path FROM documents WHERE id = ?").get(documentId) as { id: string; rel_path: string } | undefined;
+  // Pull root_id so we can resolve the file under the correct root —
+  // a doc id alone isn't enough now that multiple roots can share a
+  // rel_path. COALESCE handles legacy rows from before the column
+  // existed; those map to the empty-id root.
+  const doc = db
+    .prepare("SELECT id, rel_path, COALESCE(root_id, '') AS root_id FROM documents WHERE id = ?")
+    .get(documentId) as { id: string; rel_path: string; root_id: string } | undefined;
   if (!doc) return { documentId, chunks: 0, embedded: 0, skipped: 0, ms: 0, error: "Document not found" };
 
-  const root = getConfigValues()["docs.rootFolder"];
-  if (!root) return { documentId, chunks: 0, embedded: 0, skipped: 0, ms: 0, error: "Docs root not configured" };
+  const roots = listRoots();
+  const docRoot = roots.find((r) => r.id === doc.root_id) ?? roots[0];
+  if (!docRoot) return { documentId, chunks: 0, embedded: 0, skipped: 0, ms: 0, error: "Docs root not configured" };
 
-  const absPath = path.join(root, doc.rel_path);
+  const absPath = path.join(docRoot.path, doc.rel_path);
   if (!fs.existsSync(absPath)) {
     return { documentId, chunks: 0, embedded: 0, skipped: 0, ms: 0, error: "File missing on disk" };
   }

@@ -13,7 +13,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { getConfigValues, getDb } from "./db";
+import { getConfigValues, getDb, setConfigValues } from "./db";
 import { embedDocument } from "./docs-embed";
 
 export interface DocumentRow {
@@ -25,14 +25,118 @@ export interface DocumentRow {
   content_hash: string;
   bytes: number;
   mtime_ms: number;
+  root_id: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export function docIdFromRelPath(relPath: string): string {
+/** A single configured docs root. Roots are stored as a JSON array in
+ *  app_config under "docs.rootFolders". Each has a stable id (random
+ *  base64url) so the path can change without breaking note_anchors /
+ *  vec_docs (which reference documents.id, which references root_id).
+ *  Label is the display name in the Docs sidebar; defaults to the
+ *  basename of the path. */
+export interface DocsRoot {
+  id: string;
+  path: string;
+  label: string;
+}
+
+export function docIdFromRelPath(relPath: string, rootId = ""): string {
   // Short, stable, URL-safe. Avoid characters that need URL encoding
-  // so the id can appear in route params without ceremony.
-  return "doc:" + crypto.createHash("sha256").update(relPath).digest("base64url").slice(0, 24);
+  // so the id can appear in route params without ceremony. The
+  // empty-rootId variant matches the pre-multi-root scheme so
+  // existing docs keep their ids (and so notes / embeddings / map
+  // links don't orphan after the migration).
+  const key = rootId ? `${rootId}:${relPath}` : relPath;
+  return "doc:" + crypto.createHash("sha256").update(key).digest("base64url").slice(0, 24);
+}
+
+// ---- Roots config -------------------------------------------------
+
+const LEGACY_ROOT_ID = ""; // empty = backwards-compatible doc id format
+
+/** Read the configured roots, auto-migrating from the legacy
+ *  single-folder setting on first call. Returns at most one entry
+ *  when the user hasn't added a second root yet. */
+export function listRoots(): DocsRoot[] {
+  const cfg = getConfigValues();
+  const raw = cfg["docs.rootFolders"];
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((r): r is DocsRoot => !!r && typeof r.id === "string" && typeof r.path === "string")
+          .map((r) => ({ id: r.id, path: r.path, label: r.label || path.basename(r.path) || r.path }));
+      }
+    } catch { /* fall through to legacy migration */ }
+  }
+  // Legacy migration: wrap the single-folder setting into the array
+  // form using the empty rootId so existing doc ids stay valid.
+  const legacy = cfg["docs.rootFolder"];
+  if (legacy && legacy.trim()) {
+    const root: DocsRoot = {
+      id: LEGACY_ROOT_ID,
+      path: legacy.trim(),
+      label: path.basename(legacy.trim()) || legacy.trim(),
+    };
+    setConfigValues({ "docs.rootFolders": JSON.stringify([root]) });
+    return [root];
+  }
+  return [];
+}
+
+export function setRoots(roots: DocsRoot[]): void {
+  setConfigValues({ "docs.rootFolders": JSON.stringify(roots) });
+}
+
+export function addRoot(input: { path: string; label?: string }): DocsRoot {
+  const trimmed = input.path.trim();
+  if (!trimmed) throw new Error("path is required");
+  if (!fs.existsSync(trimmed)) throw new Error(`Folder does not exist: ${trimmed}`);
+  const roots = listRoots();
+  // Deduplicate by normalized absolute path — a second root pointing
+  // at the same folder is always a mistake.
+  const norm = path.resolve(trimmed);
+  if (roots.some((r) => path.resolve(r.path) === norm)) {
+    throw new Error("Folder already configured as a root");
+  }
+  // First root gets the legacy empty id so existing data round-trips
+  // cleanly when a user upgrades. Subsequent roots get a random id.
+  const id = roots.length === 0 ? LEGACY_ROOT_ID : crypto.randomBytes(6).toString("base64url");
+  const root: DocsRoot = {
+    id,
+    path: trimmed,
+    label: input.label?.trim() || path.basename(trimmed) || trimmed,
+  };
+  setRoots([...roots, root]);
+  return root;
+}
+
+export function removeRoot(id: string): boolean {
+  const roots = listRoots();
+  const next = roots.filter((r) => r.id !== id);
+  if (next.length === roots.length) return false;
+  setRoots(next);
+  // Drop documents that belonged to this root; CASCADE wipes their
+  // anchors. vec_docs rows hang around as orphans — cheaper to leave
+  // than to query them out; the next embed-all backfill is the
+  // natural cleanup point if it matters. (Future polish: explicit
+  // sweep here.)
+  getDb()
+    .prepare("DELETE FROM documents WHERE COALESCE(root_id, '') = ?")
+    .run(id);
+  return true;
+}
+
+export function renameRoot(id: string, label: string): DocsRoot | null {
+  const roots = listRoots();
+  const idx = roots.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  roots[idx] = { ...roots[idx], label: label.trim() || roots[idx].label };
+  setRoots(roots);
+  return roots[idx];
 }
 
 /** First H1 in the file, falling back to the filename (without
@@ -90,24 +194,29 @@ export interface IndexOptions {
 
 export function indexDocs(options: IndexOptions = {}): IndexResult {
   const t0 = Date.now();
-  const root = getConfigValues()["docs.rootFolder"] || "";
-  if (!root || !fs.existsSync(root)) {
+  const roots = listRoots().filter((r) => fs.existsSync(r.path));
+  if (roots.length === 0) {
     return { inserted: 0, updated: 0, removed: 0, unchanged: 0, total: 0, ms: 0 };
   }
 
   const db = getDb();
+  // Load existing docs for every configured root — keyed by
+  // (rootId, relPath). COALESCE handles old rows that pre-date the
+  // root_id column (they get treated as belonging to the legacy
+  // empty-id root, same as before).
   const existingRows = db
-    .prepare("SELECT id, rel_path, content_hash FROM documents")
-    .all() as Pick<DocumentRow, "id" | "rel_path" | "content_hash">[];
-  const existingByPath = new Map(existingRows.map((r) => [r.rel_path, r]));
+    .prepare("SELECT id, rel_path, content_hash, COALESCE(root_id, '') AS root_id FROM documents")
+    .all() as Pick<DocumentRow, "id" | "rel_path" | "content_hash" | "root_id">[];
+  const keyFor = (rootId: string, rel: string) => `${rootId} ${rel}`;
+  const existingByKey = new Map(existingRows.map((r) => [keyFor(r.root_id ?? "", r.rel_path), r]));
 
-  const seenPaths = new Set<string>();
-  const toEmbed: string[] = []; // ids of inserted + updated docs
+  const seenKeys = new Set<string>();
+  const toEmbed: string[] = [];
   let inserted = 0, updated = 0, unchanged = 0;
 
   const insertStmt = db.prepare(`
-    INSERT INTO documents (id, rel_path, title, content_hash, bytes, mtime_ms)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO documents (id, rel_path, title, content_hash, bytes, mtime_ms, root_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const updateStmt = db.prepare(`
     UPDATE documents
@@ -117,45 +226,49 @@ export function indexDocs(options: IndexOptions = {}): IndexResult {
   `);
 
   db.transaction(() => {
-    for (const { rel, abs } of walkMd(root)) {
-      seenPaths.add(rel);
-      let stat: fs.Stats;
-      let hash: string, bytes: number, title: string;
-      try {
-        stat = fs.statSync(abs);
-        ({ hash, bytes } = sha256File(abs));
-        title = extractTitle(fs.readFileSync(abs, "utf-8"), rel);
-      } catch (err) {
-        console.warn(`[docs-index] Skipping ${rel}: ${err instanceof Error ? err.message : err}`);
-        continue;
-      }
+    for (const root of roots) {
+      for (const { rel, abs } of walkMd(root.path)) {
+        const key = keyFor(root.id, rel);
+        seenKeys.add(key);
+        let stat: fs.Stats;
+        let hash: string, bytes: number, title: string;
+        try {
+          stat = fs.statSync(abs);
+          ({ hash, bytes } = sha256File(abs));
+          title = extractTitle(fs.readFileSync(abs, "utf-8"), rel);
+        } catch (err) {
+          console.warn(`[docs-index] Skipping ${root.label}/${rel}: ${err instanceof Error ? err.message : err}`);
+          continue;
+        }
 
-      const id = docIdFromRelPath(rel);
-      const existing = existingByPath.get(rel);
+        const id = docIdFromRelPath(rel, root.id);
+        const existing = existingByKey.get(key);
 
-      if (!existing) {
-        insertStmt.run(id, rel, title, hash, bytes, stat.mtimeMs);
-        inserted += 1;
-        toEmbed.push(id);
-      } else if (existing.content_hash !== hash) {
-        updateStmt.run(title, hash, bytes, stat.mtimeMs, existing.id);
-        updated += 1;
-        toEmbed.push(existing.id);
-      } else {
-        unchanged += 1;
+        if (!existing) {
+          insertStmt.run(id, rel, title, hash, bytes, stat.mtimeMs, root.id);
+          inserted += 1;
+          toEmbed.push(id);
+        } else if (existing.content_hash !== hash) {
+          updateStmt.run(title, hash, bytes, stat.mtimeMs, existing.id);
+          updated += 1;
+          toEmbed.push(existing.id);
+        } else {
+          unchanged += 1;
+        }
       }
     }
   })();
 
-  // Remove rows for files that disappeared. Cascades to note_anchors
-  // for any doc-anchored notes — that's intended; if the file is
-  // gone, the anchor has nothing to point at. (Notes themselves
-  // survive in transcript_clips even when all their anchors are gone.)
+  // Remove rows for files that disappeared from any of their roots.
+  // Cascades to note_anchors for any doc-anchored notes — intended.
+  // Notes themselves survive in transcript_clips even when all their
+  // anchors are gone.
   let removed = 0;
   const deleteStmt = db.prepare("DELETE FROM documents WHERE id = ?");
   db.transaction(() => {
     for (const row of existingRows) {
-      if (!seenPaths.has(row.rel_path)) {
+      const key = keyFor(row.root_id ?? "", row.rel_path);
+      if (!seenKeys.has(key)) {
         deleteStmt.run(row.id);
         removed += 1;
       }
@@ -184,7 +297,7 @@ export function indexDocs(options: IndexOptions = {}): IndexResult {
 
   return {
     inserted, updated, removed, unchanged,
-    total: seenPaths.size,
+    total: seenKeys.size,
     ms: Date.now() - t0,
   };
 }
@@ -210,10 +323,24 @@ export function getDocument(id: string): DocumentRow | undefined {
   return getDb().prepare("SELECT * FROM documents WHERE id = ?").get(id) as DocumentRow | undefined;
 }
 
-export function getDocumentByRelPath(relPath: string): DocumentRow | undefined {
+export function getDocumentByRelPath(relPath: string, rootId?: string): DocumentRow | undefined {
+  if (rootId !== undefined) {
+    return getDb()
+      .prepare("SELECT * FROM documents WHERE rel_path = ? AND COALESCE(root_id, '') = ?")
+      .get(relPath, rootId) as DocumentRow | undefined;
+  }
+  // Back-compat: return the first match across roots. Once a user
+  // adds a second root the same rel_path could exist in both —
+  // callers that care should pass rootId explicitly.
   return getDb()
-    .prepare("SELECT * FROM documents WHERE rel_path = ?")
+    .prepare("SELECT * FROM documents WHERE rel_path = ? LIMIT 1")
     .get(relPath) as DocumentRow | undefined;
+}
+
+/** Resolve a doc id from (rootId, relPath) — the routes use this to
+ *  build deep-link URLs. */
+export function findRootById(rootId: string): DocsRoot | undefined {
+  return listRoots().find((r) => r.id === rootId);
 }
 
 export function setDocumentStarred(id: string, starred: boolean): void {

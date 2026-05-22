@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, NotebookPen, RefreshCw, Search, Sparkles, Star } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, FolderOpen, FolderPlus, Loader2, NotebookPen, Pencil, RefreshCw, Search, Sparkles, Star, Trash2, X } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import FolderInput from "@/components/FolderInput";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -17,11 +17,21 @@ interface TreeNode {
   type: "file" | "dir";
   children?: TreeNode[];
   mtimeMs?: number;
-  /** Indexer-set fields — present on file nodes after the docs
-   *  table has been populated. */
   documentId?: string;
   starred?: number;
   category?: string;
+}
+
+interface DocsRoot {
+  id: string;
+  path: string;
+  label: string;
+}
+
+interface RootTree {
+  root: DocsRoot;
+  tree: TreeNode[];
+  error?: string;
 }
 
 interface DocumentMeta {
@@ -30,34 +40,42 @@ interface DocumentMeta {
   title: string;
   starred: number;
   category: string;
+  root_id?: string | null;
+}
+
+interface FileSelection {
+  rootId: string;
+  path: string;
 }
 
 /**
- * /docs — read-only markdown viewer. Point at a folder of .md files in
- * Settings, browse the tree on the left, read rendered markdown on
- * the right. No DB writes; the tree is recomputed server-side on each
- * GET (cheap for the hundreds-of-files scale).
+ * /docs — multi-root markdown viewer. Each configured root renders as
+ * its own collapsible section in the sidebar; tree nodes within a
+ * section share the root's id, which is what makes deep-link URLs +
+ * doc-id lookups unambiguous when two roots share a rel_path.
  */
 export default function Docs() {
   const { toast } = useToast();
   const { serverCategory } = useCategory();
-  const [rootFolder, setRootFolder] = useState("");
-  const [draftFolder, setDraftFolder] = useState("");
-  const [editing, setEditing] = useState(false);
-  const [tree, setTree] = useState<TreeNode[]>([]);
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [roots, setRoots] = useState<DocsRoot[]>([]);
+  const [rootTrees, setRootTrees] = useState<RootTree[]>([]);
+  const [selected, setSelected] = useState<FileSelection | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<DocumentMeta | null>(null);
   const [content, setContent] = useState<string>("");
   const [loadingTree, setLoadingTree] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
   const [filter, setFilter] = useState("");
 
+  // "Add root" form state — kept inline so the user can add a new
+  // folder without leaving the page.
+  const [addingRoot, setAddingRoot] = useState(false);
+  const [draftRootPath, setDraftRootPath] = useState("");
+
   const loadConfig = useCallback(async () => {
     try {
       const r = await apiRequest("GET", "/api/docs/config");
-      const data = await r.json() as { rootFolder?: string };
-      setRootFolder(data.rootFolder ?? "");
-      setDraftFolder(data.rootFolder ?? "");
+      const data = await r.json() as { roots?: DocsRoot[] };
+      setRoots(data.roots ?? []);
     } catch (err: any) {
       toast({ variant: "destructive", title: "Failed to load config", description: err.message });
     }
@@ -72,12 +90,13 @@ export default function Docs() {
         ? `/api/docs/tree?${params.toString()}`
         : "/api/docs/tree";
       const r = await apiRequest("GET", url);
-      const data = await r.json() as { tree?: TreeNode[]; rootFolder?: string; error?: string };
+      const data = await r.json() as { trees?: RootTree[]; roots?: DocsRoot[]; error?: string };
       if (data.error) throw new Error(data.error);
-      setTree(data.tree ?? []);
+      setRootTrees(data.trees ?? []);
+      if (data.roots) setRoots(data.roots);
     } catch (err: any) {
       toast({ variant: "destructive", title: "Failed to scan folder", description: err.message });
-      setTree([]);
+      setRootTrees([]);
     } finally {
       setLoadingTree(false);
     }
@@ -111,41 +130,64 @@ export default function Docs() {
   }, [embedding, toast]);
 
   useEffect(() => { void loadConfig(); }, [loadConfig]);
-  useEffect(() => { if (rootFolder) void loadTree(); }, [rootFolder, loadTree]);
+  useEffect(() => { if (roots.length > 0) void loadTree(); }, [roots.length, loadTree]);
 
-  // Deep link support: /docs?path=foo/bar.md opens that file once the
-  // tree has loaded. Lets a Notes anchor link straight to its source.
+  // Deep link: /docs?path=foo/bar.md&rootId=... opens that file once
+  // the trees have loaded. rootId optional for back-compat — defaults
+  // to the first root.
   useEffect(() => {
-    if (!rootFolder || tree.length === 0) return;
+    if (roots.length === 0 || rootTrees.length === 0) return;
     const params = new URLSearchParams(window.location.search);
     const wanted = params.get("path");
-    if (wanted && wanted !== selectedPath) void openFile(wanted);
+    const wantedRoot = params.get("rootId") ?? roots[0].id;
+    if (wanted && (wanted !== selected?.path || wantedRoot !== selected?.rootId)) {
+      void openFile(wantedRoot, wanted);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rootFolder, tree.length]);
+  }, [roots.length, rootTrees.length]);
 
-  const saveFolder = async () => {
+  const saveNewRoot = async () => {
+    const path = draftRootPath.trim();
+    if (!path) return;
     try {
-      const r = await apiRequest("POST", "/api/docs/config", { rootFolder: draftFolder.trim() });
-      const data = await r.json() as { rootFolder?: string; error?: string };
+      const r = await apiRequest("POST", "/api/docs/roots", { path });
+      const data = await r.json() as { root?: DocsRoot; error?: string };
       if (data.error) throw new Error(data.error);
-      setRootFolder(data.rootFolder ?? "");
-      setEditing(false);
-      toast({ title: "Folder saved" });
+      setAddingRoot(false);
+      setDraftRootPath("");
+      await loadConfig();
+      void loadTree();
+      toast({ title: "Root added", description: data.root?.path });
     } catch (err: any) {
-      toast({ variant: "destructive", title: "Save failed", description: err.message });
+      toast({ variant: "destructive", title: "Add root failed", description: err.message });
     }
   };
 
-  const openFile = useCallback(async (filePath: string) => {
-    setSelectedPath(filePath);
+  const deleteRoot = async (root: DocsRoot) => {
+    if (!confirm(`Remove "${root.label}" from docs roots? Documents from this folder will be dropped from the index (the files themselves stay on disk).`)) return;
+    try {
+      await apiRequest("DELETE", `/api/docs/roots/${encodeURIComponent(root.id)}`);
+      if (selected?.rootId === root.id) {
+        setSelected(null);
+        setSelectedDoc(null);
+        setContent("");
+      }
+      await loadConfig();
+      void loadTree();
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Remove failed", description: err.message });
+    }
+  };
+
+  const openFile = useCallback(async (rootId: string, filePath: string) => {
+    setSelected({ rootId, path: filePath });
     setLoadingFile(true);
     try {
-      // Fetch content + indexed doc metadata in parallel — the
-      // header needs the document_id + star/category to render
-      // the controls.
+      const fileQs = new URLSearchParams({ path: filePath, rootId });
+      const metaQs = new URLSearchParams({ path: filePath, rootId });
       const [fileRes, metaRes] = await Promise.all([
-        apiRequest("GET", `/api/docs/file?path=${encodeURIComponent(filePath)}`),
-        apiRequest("GET", `/api/docs/by-path?path=${encodeURIComponent(filePath)}`),
+        apiRequest("GET", `/api/docs/file?${fileQs.toString()}`),
+        apiRequest("GET", `/api/docs/by-path?${metaQs.toString()}`),
       ]);
       if (!fileRes.ok) {
         const data = await fileRes.json().catch(() => ({}));
@@ -167,8 +209,6 @@ export default function Docs() {
     }
   }, [toast]);
 
-  // Star + category mutators — optimistic update on the selected doc
-  // + the tree node, then refresh tree to pick up filter changes.
   const toggleStar = async () => {
     if (!selectedDoc) return;
     const next = selectedDoc.starred ? 0 : 1;
@@ -178,7 +218,7 @@ export default function Docs() {
       void loadTree();
     } catch (err: any) {
       toast({ variant: "destructive", title: "Star failed", description: err.message });
-      setSelectedDoc(selectedDoc); // revert
+      setSelectedDoc(selectedDoc);
     }
   };
 
@@ -193,13 +233,6 @@ export default function Docs() {
     }
   };
 
-  /** Create a note anchored to the current text selection (if any),
-   *  or to the whole doc otherwise. Finds character offsets in the
-   *  source markdown by searching for the selected string — works
-   *  whenever the selection is uniquely present, which is the common
-   *  case for prose. Falls back to whole-doc when ambiguous so the
-   *  anchor is always valid. Generates a title from the excerpt; user
-   *  can edit on the Notes page. */
   const addNoteForSelection = async () => {
     if (!selectedDoc) return;
     const sel = window.getSelection()?.toString().trim() ?? "";
@@ -222,12 +255,7 @@ export default function Docs() {
       const r = await apiRequest("POST", "/api/clips", {
         title,
         note: null,
-        anchors: [{
-          documentId: selectedDoc.id,
-          docStartChar,
-          docEndChar,
-          excerpt,
-        }],
+        anchors: [{ documentId: selectedDoc.id, docStartChar, docEndChar, excerpt }],
       });
       const data = await r.json() as { clip?: { id: string }; error?: string };
       if (data.error) throw new Error(data.error);
@@ -240,25 +268,24 @@ export default function Docs() {
     }
   };
 
-  // Flatten tree for the filter input — when filter is non-empty,
-  // show a flat list of matching files instead of the nested tree.
+  // Flat-list filter mode: search across every root.
   const flatFiles = useMemo(() => {
-    const out: TreeNode[] = [];
-    const walk = (nodes: TreeNode[]) => {
+    const out: { root: DocsRoot; node: TreeNode }[] = [];
+    const walk = (root: DocsRoot, nodes: TreeNode[]) => {
       for (const n of nodes) {
-        if (n.type === "file") out.push(n);
-        if (n.children) walk(n.children);
+        if (n.type === "file") out.push({ root, node: n });
+        if (n.children) walk(root, n.children);
       }
     };
-    walk(tree);
+    for (const rt of rootTrees) walk(rt.root, rt.tree);
     return out;
-  }, [tree]);
+  }, [rootTrees]);
 
   const filteredFlat = useMemo(() => {
     const q = filter.trim().toLowerCase();
     if (!q) return [];
-    return flatFiles.filter(f =>
-      f.path.toLowerCase().includes(q) || f.name.toLowerCase().includes(q),
+    return flatFiles.filter(({ node }) =>
+      node.path.toLowerCase().includes(q) || node.name.toLowerCase().includes(q),
     );
   }, [filter, flatFiles]);
 
@@ -272,29 +299,7 @@ export default function Docs() {
               Docs
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              {!editing && rootFolder && (
-                <span className="font-mono text-muted-foreground">{rootFolder}</span>
-              )}
-              {editing ? (
-                <>
-                  <div className="w-[420px]">
-                    <FolderInput
-                      value={draftFolder}
-                      onChange={setDraftFolder}
-                      placeholder="/absolute/path/to/docs/folder"
-                      prompt="Choose your markdown docs folder"
-                      className="font-mono text-xs"
-                    />
-                  </div>
-                  <Button size="sm" onClick={saveFolder}>Save</Button>
-                  <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setDraftFolder(rootFolder); }}>Cancel</Button>
-                </>
-              ) : (
-                <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-                  {rootFolder ? "Change folder" : "Set folder"}
-                </Button>
-              )}
-              <Button size="sm" variant="ghost" onClick={() => void refresh()} disabled={loadingTree || !rootFolder}>
+              <Button size="sm" variant="ghost" onClick={() => void refresh()} disabled={loadingTree || roots.length === 0}>
                 <RefreshCw className={cn("h-3.5 w-3.5", loadingTree && "animate-spin")} />
                 Refresh
               </Button>
@@ -302,7 +307,7 @@ export default function Docs() {
                 size="sm"
                 variant="ghost"
                 onClick={() => void backfillEmbeddings(false)}
-                disabled={embedding || !rootFolder}
+                disabled={embedding || roots.length === 0}
                 title="Embed every doc that isn't already embedded with the current model. Re-embeds happen automatically on file change; this is for the one-time backfill of existing files."
               >
                 {embedding
@@ -312,14 +317,58 @@ export default function Docs() {
               </Button>
             </div>
           </div>
+
+          {/* Roots list — show each configured root with a remove
+              button, plus a row to add a new one. */}
+          <div className="mt-3 space-y-1.5 text-xs">
+            {roots.map((r) => (
+              <div key={r.id} className="flex items-center gap-2 rounded border bg-muted/30 px-2 py-1">
+                <FolderOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="font-medium">{r.label}</span>
+                <span className="font-mono text-muted-foreground truncate flex-1" title={r.path}>{r.path}</span>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                  onClick={() => deleteRoot(r)}
+                  aria-label="Remove root"
+                  title="Remove this root from the index"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+            {addingRoot ? (
+              <div className="flex items-center gap-2">
+                <div className="flex-1">
+                  <FolderInput
+                    value={draftRootPath}
+                    onChange={setDraftRootPath}
+                    placeholder="/absolute/path/to/docs/folder"
+                    prompt="Choose another markdown docs folder"
+                    className="font-mono text-xs"
+                  />
+                </div>
+                <Button size="sm" onClick={saveNewRoot} disabled={!draftRootPath.trim()}>Save</Button>
+                <Button size="sm" variant="ghost" onClick={() => { setAddingRoot(false); setDraftRootPath(""); }}>
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddingRoot(true)}>
+                <FolderPlus className="h-3.5 w-3.5" />
+                Add root folder
+              </Button>
+            )}
+          </div>
         </CardHeader>
       </Card>
 
-      {!rootFolder ? (
+      {roots.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            Point Concord at a folder of <code>.md</code> files to browse them here.
-            Read-only — nothing is written or indexed yet.
+            Point Concord at one or more folders of <code>.md</code> files to browse them here.
+            Click "Add root folder" above.
           </CardContent>
         </Card>
       ) : (
@@ -331,7 +380,7 @@ export default function Docs() {
                 <Input
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
-                  placeholder="Filter files"
+                  placeholder="Filter files across all roots"
                   className="pl-7 h-8 text-xs"
                 />
               </div>
@@ -343,19 +392,39 @@ export default function Docs() {
                 <div className="text-xs">
                   {filteredFlat.length === 0
                     ? <div className="px-2 py-1 text-muted-foreground">No matches</div>
-                    : filteredFlat.map(f => (
-                      <FileRow key={f.path} node={f} selectedPath={selectedPath} onOpen={openFile} showFullPath />
+                    : filteredFlat.map(({ root, node }) => (
+                      <FileRow
+                        key={`${root.id}|${node.path}`}
+                        node={node}
+                        rootId={root.id}
+                        rootLabel={roots.length > 1 ? root.label : undefined}
+                        selected={selected}
+                        onOpen={openFile}
+                        showFullPath
+                      />
                     ))}
                 </div>
               ) : (
-                <TreeList nodes={tree} selectedPath={selectedPath} onOpen={openFile} />
+                <div className="space-y-2">
+                  {rootTrees.map((rt) => (
+                    <RootSection
+                      key={rt.root.id}
+                      root={rt.root}
+                      tree={rt.tree}
+                      error={rt.error}
+                      selected={selected}
+                      onOpen={openFile}
+                      collapsibleHeader={rootTrees.length > 1}
+                    />
+                  ))}
+                </div>
               )}
             </CardContent>
           </Card>
 
           <Card className="lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto">
             <CardContent className="p-6">
-              {!selectedPath ? (
+              {!selected ? (
                 <div className="text-sm text-muted-foreground">Pick a file from the tree.</div>
               ) : loadingFile ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -400,7 +469,12 @@ export default function Docs() {
                         </Button>
                       </>
                     )}
-                    <span className="text-xs text-muted-foreground font-mono break-all">{selectedPath}</span>
+                    <span className="text-xs text-muted-foreground font-mono break-all">
+                      {roots.length > 1 && roots.find(r => r.id === selected.rootId)
+                        ? `[${roots.find(r => r.id === selected.rootId)!.label}] `
+                        : ""}
+                      {selected.path}
+                    </span>
                   </div>
                   <Markdown source={content} />
                 </>
@@ -413,17 +487,59 @@ export default function Docs() {
   );
 }
 
-// ---- Tree rendering ----------------------------------------------------
+// ---- Per-root tree section --------------------------------------------
+
+function RootSection({
+  root,
+  tree,
+  error,
+  selected,
+  onOpen,
+  collapsibleHeader,
+}: {
+  root: DocsRoot;
+  tree: TreeNode[];
+  error?: string;
+  selected: FileSelection | null;
+  onOpen: (rootId: string, path: string) => void;
+  collapsibleHeader: boolean;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div>
+      {collapsibleHeader && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-[11px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
+        >
+          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          <FolderOpen className="h-3 w-3" />
+          <span className="font-medium">{root.label}</span>
+        </button>
+      )}
+      {(!collapsibleHeader || open) && (
+        error
+          ? <div className="px-2 py-1 text-xs text-destructive">{error}</div>
+          : tree.length === 0
+            ? <div className="px-2 py-1 text-xs text-muted-foreground">No matching files</div>
+            : <TreeList nodes={tree} rootId={root.id} selected={selected} onOpen={onOpen} />
+      )}
+    </div>
+  );
+}
 
 function TreeList({
   nodes,
-  selectedPath,
+  rootId,
+  selected,
   onOpen,
   depth = 0,
 }: {
   nodes: TreeNode[];
-  selectedPath: string | null;
-  onOpen: (path: string) => void;
+  rootId: string;
+  selected: FileSelection | null;
+  onOpen: (rootId: string, path: string) => void;
   depth?: number;
 }) {
   return (
@@ -432,7 +548,8 @@ function TreeList({
         <TreeNodeRow
           key={node.path}
           node={node}
-          selectedPath={selectedPath}
+          rootId={rootId}
+          selected={selected}
           onOpen={onOpen}
           depth={depth}
         />
@@ -443,18 +560,20 @@ function TreeList({
 
 function TreeNodeRow({
   node,
-  selectedPath,
+  rootId,
+  selected,
   onOpen,
   depth,
 }: {
   node: TreeNode;
-  selectedPath: string | null;
-  onOpen: (path: string) => void;
+  rootId: string;
+  selected: FileSelection | null;
+  onOpen: (rootId: string, path: string) => void;
   depth: number;
 }) {
   const [open, setOpen] = useState(depth === 0);
   if (node.type === "file") {
-    return <FileRow node={node} selectedPath={selectedPath} onOpen={onOpen} depth={depth} />;
+    return <FileRow node={node} rootId={rootId} selected={selected} onOpen={onOpen} depth={depth} />;
   }
   return (
     <li>
@@ -469,7 +588,7 @@ function TreeNodeRow({
         <span className="font-medium">{node.name}</span>
       </button>
       {open && node.children && (
-        <TreeList nodes={node.children} selectedPath={selectedPath} onOpen={onOpen} depth={depth + 1} />
+        <TreeList nodes={node.children} rootId={rootId} selected={selected} onOpen={onOpen} depth={depth + 1} />
       )}
     </li>
   );
@@ -477,23 +596,27 @@ function TreeNodeRow({
 
 function FileRow({
   node,
-  selectedPath,
+  rootId,
+  rootLabel,
+  selected,
   onOpen,
   depth = 0,
   showFullPath = false,
 }: {
   node: TreeNode;
-  selectedPath: string | null;
-  onOpen: (path: string) => void;
+  rootId: string;
+  rootLabel?: string;
+  selected: FileSelection | null;
+  onOpen: (rootId: string, path: string) => void;
   depth?: number;
   showFullPath?: boolean;
 }) {
-  const active = selectedPath === node.path;
+  const active = selected?.rootId === rootId && selected?.path === node.path;
   return (
     <li>
       <button
         type="button"
-        onClick={() => onOpen(node.path)}
+        onClick={() => onOpen(rootId, node.path)}
         className={cn(
           "flex items-center gap-1 w-full rounded px-1 py-0.5 text-left hover:bg-secondary",
           active && "bg-secondary text-foreground",
@@ -503,7 +626,10 @@ function FileRow({
       >
         <span className="w-3 inline-block" />
         <FileText className="h-3 w-3 text-muted-foreground" />
-        <span className="truncate flex-1">{showFullPath ? node.path : node.name}</span>
+        <span className="truncate flex-1">
+          {rootLabel && <span className="text-muted-foreground/70 mr-1">[{rootLabel}]</span>}
+          {showFullPath ? node.path : node.name}
+        </span>
         {node.starred ? <Star className="h-3 w-3 text-amber-500 fill-current shrink-0" /> : null}
       </button>
     </li>
