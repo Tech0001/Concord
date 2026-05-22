@@ -99,6 +99,13 @@ export default function TranscriptSearch() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [results, setResults] = useState<TranscriptSearchResult[]>([]);
+
+  // Client-side sort over the result set. "Relevance" preserves the
+  // server's order (semantic = score desc, FTS = rank asc). The rest
+  // are stable sorts off the chosen field; nulls bubble to the end
+  // so they don't crowd the top in date-sort views.
+  type SortKey = "relevance" | "date-desc" | "date-asc" | "title-asc" | "title-desc" | "channel-asc";
+  const [sortKey, setSortKey] = useState<SortKey>("relevance");
   const [searched, setSearched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [reindexing, setReindexing] = useState(false);
@@ -123,6 +130,50 @@ export default function TranscriptSearch() {
   const resultCountByVideo = useMemo(() => {
     return new Set(results.map(result => `${result.channel_id}:${result.video_id}`)).size;
   }, [results]);
+
+  /** Sorted view over results. Server-side order is preserved when
+   *  the user picks "relevance" so semantic + FTS rankings still
+   *  flow through. For the other keys we copy-then-sort so we don't
+   *  mutate the result of the fetch. Comparators favour the
+   *  isDoc-aware fields (doc_title / doc_rel_path) when present so
+   *  doc results sort sensibly alongside video results. */
+  const sortedResults = useMemo(() => {
+    if (sortKey === "relevance") return results;
+    const list = [...results];
+    const titleOf = (r: TranscriptSearchResult) => (r.source === "doc" ? (r.doc_title ?? r.doc_rel_path ?? r.title) : r.title) || "";
+    const channelOf = (r: TranscriptSearchResult) => (r.source === "doc" ? "" : (r.channel_name ?? r.channel_id ?? ""));
+    // upload_date is YYYYMMDD for videos; for doc results it's null
+    // — keep nulls at the END regardless of asc/desc so they don't
+    // crowd the top in date views.
+    const dateOf = (r: TranscriptSearchResult) => r.upload_date ?? "";
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case "date-desc": {
+          const da = dateOf(a), db = dateOf(b);
+          if (!da && !db) return 0;
+          if (!da) return 1;
+          if (!db) return -1;
+          return db.localeCompare(da);
+        }
+        case "date-asc": {
+          const da = dateOf(a), db = dateOf(b);
+          if (!da && !db) return 0;
+          if (!da) return 1;
+          if (!db) return -1;
+          return da.localeCompare(db);
+        }
+        case "title-asc":
+          return titleOf(a).localeCompare(titleOf(b), undefined, { numeric: true, sensitivity: "base" });
+        case "title-desc":
+          return titleOf(b).localeCompare(titleOf(a), undefined, { numeric: true, sensitivity: "base" });
+        case "channel-asc":
+          return channelOf(a).localeCompare(channelOf(b), undefined, { sensitivity: "base" });
+        default:
+          return 0;
+      }
+    });
+    return list;
+  }, [results, sortKey]);
 
   const loadTagOptions = async () => {
     try {
@@ -456,14 +507,32 @@ export default function TranscriptSearch() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-1.5">
-            <FileText className="h-4 w-4" />
-            Results
-          </CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-1.5">
+              <FileText className="h-4 w-4" />
+              Results
+            </CardTitle>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span>Sort</span>
+              <Select value={sortKey} onValueChange={(v) => setSortKey(v as typeof sortKey)}>
+                <SelectTrigger className="h-7 w-[160px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="relevance" className="text-xs">Relevance</SelectItem>
+                  <SelectItem value="date-desc" className="text-xs">Date · newest</SelectItem>
+                  <SelectItem value="date-asc" className="text-xs">Date · oldest</SelectItem>
+                  <SelectItem value="title-asc" className="text-xs">Title · A→Z</SelectItem>
+                  <SelectItem value="title-desc" className="text-xs">Title · Z→A</SelectItem>
+                  <SelectItem value="channel-asc" className="text-xs">Channel · A→Z</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="divide-y rounded-md border">
-            {results.map(result => {
+            {sortedResults.map(result => {
               const isDoc = result.source === "doc";
               return (
               <div key={isDoc ? `doc:${result.document_id}:${result.segment_index}` : `${result.channel_id}:${result.video_id}:${result.segment_index}`} className="p-3 text-sm">
