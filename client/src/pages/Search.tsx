@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
+import { DocDrawer, type DocDrawerEntry } from "@/components/DocDrawer";
 import { useToast } from "@/hooks/use-toast";
 import { useCategory } from "@/hooks/use-category";
 import { apiRequest } from "@/lib/queryClient";
@@ -112,6 +113,7 @@ export default function TranscriptSearch() {
   const [mode, setMode] = useState<"words" | "meaning">("words");
   const [embeddingStats, setEmbeddingStats] = useState<{ totalSegments: number; totalVideos: number } | null>(null);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
+  const [drawerDoc, setDrawerDoc] = useState<DocDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerSegmentIndex, setDrawerSegmentIndex] = useState<number | undefined>();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -237,9 +239,13 @@ export default function TranscriptSearch() {
   const openDrawer = (result: TranscriptSearchResult) => {
     // Doc results have no video to play — route to the Docs viewer.
     if (result.source === "doc" && result.doc_rel_path) {
-      const qs = new URLSearchParams({ path: result.doc_rel_path });
-      if (result.text) qs.set("excerpt", result.text);
-      window.location.href = `/docs?${qs.toString()}`;
+      setDrawerDoc({
+        documentId: result.document_id,
+        relPath: result.doc_rel_path,
+        title: result.doc_title ?? result.title ?? result.doc_rel_path,
+        excerpt: result.text,
+        subtitle: result.doc_heading_path ?? null,
+      });
       return;
     }
     setDrawerVideo({
@@ -547,6 +553,11 @@ export default function TranscriptSearch() {
         initialSeconds={drawerSeconds}
         initialSegmentIndex={drawerSegmentIndex}
         onOpenChange={setDrawerOpen}
+      />
+      <DocDrawer
+        open={!!drawerDoc}
+        doc={drawerDoc}
+        onOpenChange={(open) => { if (!open) setDrawerDoc(null); }}
       />
     </div>
   );

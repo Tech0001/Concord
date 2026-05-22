@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { TagChip, TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
+import { DocDrawer, type DocDrawerEntry } from "@/components/DocDrawer";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useCategory } from "@/hooks/use-category";
@@ -149,6 +150,7 @@ export default function Clips() {
   const [renameDescendants, setRenameDescendants] = useState(false);
   const [loading, setLoading] = useState(false);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
+  const [drawerDoc, setDrawerDoc] = useState<DocDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [linksByClipId, setLinksByClipId] = useState<Record<string, ClipLink[]>>({});
@@ -379,9 +381,12 @@ export default function Clips() {
     // Doc anchors don't open in the VideoDrawer — route to the Docs
     // viewer for the source file instead.
     if (anchor.document_id && anchor.doc_rel_path) {
-      const qs = new URLSearchParams({ path: anchor.doc_rel_path });
-      if (anchor.excerpt) qs.set("excerpt", anchor.excerpt);
-      window.location.href = `/docs?${qs.toString()}`;
+      setDrawerDoc({
+        documentId: anchor.document_id,
+        relPath: anchor.doc_rel_path,
+        title: anchor.doc_title ?? anchor.doc_rel_path,
+        excerpt: anchor.excerpt,
+      });
       return;
     }
     if (!anchor.video_id || !anchor.channel_id) return;
@@ -738,6 +743,12 @@ export default function Clips() {
         video={drawerVideo}
         initialSeconds={drawerSeconds}
         onOpenChange={setDrawerOpen}
+      />
+
+      <DocDrawer
+        open={!!drawerDoc}
+        doc={drawerDoc}
+        onOpenChange={(open) => { if (!open) setDrawerDoc(null); }}
       />
 
       {addAnchorFor && (

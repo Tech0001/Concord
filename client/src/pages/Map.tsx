@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TagPicker } from "@/components/TagPicker";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
+import { DocDrawer, type DocDrawerEntry } from "@/components/DocDrawer";
 import { apiRequest } from "@/lib/queryClient";
 import { ChevronDown, LayoutGrid, Link2, Loader2, Map as MapIcon, RefreshCw, Search, Spline, StickyNote, Trash2, X, Zap } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -81,6 +82,7 @@ export default function MapPage() {
   const [selectedClip, setSelectedClip] = useState<GraphNodeData | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
+  const [drawerDoc, setDrawerDoc] = useState<DocDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [flowNodesState, setFlowNodesState] = useState<Node[]>([]);
@@ -423,11 +425,18 @@ export default function MapPage() {
   }
 
   function openClipVideo(clip: GraphNodeData) {
-    // Doc-anchored clips: jump straight to the Docs viewer for the
-    // anchored file. Video-anchored: open the VideoDrawer as before.
+    // Doc-anchored clips: pop the DocDrawer with the anchored file.
+    // Video-anchored: open the VideoDrawer as before. The clip's
+    // `quote` is the closest thing to an excerpt on the map data
+    // shape — passed through so the drawer can scroll to it.
     const docAnchor = clip.anchors?.find((a: any) => a.documentId && a.docRelPath);
     if (docAnchor && !clip.videoId) {
-      window.location.href = `/docs?path=${encodeURIComponent(docAnchor.docRelPath!)}`;
+      setDrawerDoc({
+        documentId: docAnchor.documentId ?? undefined,
+        relPath: docAnchor.docRelPath!,
+        title: docAnchor.docTitle ?? clip.title ?? docAnchor.docRelPath!,
+        excerpt: clip.quote || null,
+      });
       return;
     }
     setDrawerVideo(clipToDrawerEntry(clip));
@@ -966,6 +975,11 @@ export default function MapPage() {
         video={drawerVideo}
         initialSeconds={drawerSeconds}
         onOpenChange={setDrawerOpen}
+      />
+      <DocDrawer
+        open={!!drawerDoc}
+        doc={drawerDoc}
+        onOpenChange={(open) => { if (!open) setDrawerDoc(null); }}
       />
     </div>
   );

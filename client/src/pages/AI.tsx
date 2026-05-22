@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
+import { DocDrawer, type DocDrawerEntry } from "@/components/DocDrawer";
 import { TagPicker } from "@/components/TagPicker";
 import { useToast } from "@/hooks/use-toast";
 import { useCategory } from "@/hooks/use-category";
@@ -221,6 +222,7 @@ export default function AI() {
 
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
   const [drawerSeconds, setDrawerSeconds] = useState<number | undefined>(undefined);
+  const [drawerDoc, setDrawerDoc] = useState<DocDrawerEntry | null>(null);
 
   const [saveDialog, setSaveDialog] = useState<{ source: ChatSource; messageId: string; surroundingText: string } | null>(null);
 
@@ -442,18 +444,22 @@ export default function AI() {
   }, []);
 
   const openSource = useCallback((src: ChatSource) => {
-    // Doc sources don't have a video to play — open the source markdown
-    // in the Docs viewer instead. The rel_path comes through as either
-    // snake_case (persisted) or camelCase (streaming context payload).
-    // Pass the excerpt so the Docs page can scroll to + highlight the
-    // cited passage on load.
+    // Doc sources open in a side drawer so the chat stays visible —
+    // mirrors the VideoDrawer pattern for video citations. The drawer
+    // does its own scroll-to-excerpt + highlight after the markdown
+    // renders. "Open in Docs page" inside the drawer is the escape
+    // hatch for users who want the full file tree + filters.
     if (src.source === "doc") {
       const docPath = src.doc_rel_path ?? src.docRelPath;
-      if (docPath) {
-        const qs = new URLSearchParams({ path: docPath });
-        if (src.excerpt) qs.set("excerpt", src.excerpt);
-        window.location.href = `/docs?${qs.toString()}`;
-      }
+      if (!docPath) return;
+      setDrawerDoc({
+        documentId: src.document_id ?? src.documentId,
+        rootId: undefined, // server's first-root fallback works for v1
+        relPath: docPath,
+        title: src.doc_title ?? src.docTitle ?? docPath,
+        excerpt: src.excerpt,
+        subtitle: src.doc_heading_path ?? src.docHeadingPath ?? null,
+      });
       return;
     }
     if (!src.video_id || !src.channel_id) return;
@@ -677,6 +683,12 @@ export default function AI() {
         video={drawerVideo}
         initialSeconds={drawerSeconds}
         onOpenChange={(open) => { if (!open) setDrawerVideo(null); }}
+      />
+
+      <DocDrawer
+        open={!!drawerDoc}
+        doc={drawerDoc}
+        onOpenChange={(open) => { if (!open) setDrawerDoc(null); }}
       />
 
       {saveDialog && (
