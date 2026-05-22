@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { DocDrawer, type DocDrawerEntry } from "@/components/DocDrawer";
+import { chatStream, useChatStream } from "@/hooks/use-chat-stream";
 import { TagPicker } from "@/components/TagPicker";
 import { useToast } from "@/hooks/use-toast";
 import { useCategory } from "@/hooks/use-category";
@@ -109,14 +110,8 @@ interface ChannelOption {
   name: string;
 }
 
-type AskEvent =
-  | { type: "conversation"; conversationId: string; userMessageId: string }
-  | { type: "context"; sources: ChatSource[]; weakRetrieval: boolean }
-  | { type: "delta"; text: string }
-  | { type: "done" }
-  | { type: "persisted"; assistantMessageId: string }
-  | { type: "error"; error: string }
-  | { type: "end" };
+// AskEvent now lives in hooks/use-chat-stream.tsx alongside the
+// singleton that consumes the SSE stream.
 
 function fmtTimestamp(seconds: number | null): string {
   if (seconds == null) return "—";
@@ -178,11 +173,16 @@ export default function AI() {
   const [loadingConv, setLoadingConv] = useState(false);
 
   const [composer, setComposer] = useState("");
-  const [streaming, setStreaming] = useState(false);
-  const [streamingText, setStreamingText] = useState("");
-  const [streamingSources, setStreamingSources] = useState<ChatSource[]>([]);
-  const [weakRetrieval, setWeakRetrieval] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
+  // Streaming state lives in a module-level singleton (see
+  // hooks/use-chat-stream.tsx) so navigating away from this page
+  // doesn't kill the in-flight fetch. The hook re-subscribes on
+  // re-mount and the snapshot reflects current state including any
+  // partial response that arrived while we were elsewhere.
+  const streamSnap = useChatStream();
+  const streaming = streamSnap.isStreaming;
+  const streamingText = streamSnap.streamingText;
+  const streamingSources = streamSnap.streamingSources;
+  const weakRetrieval = streamSnap.weakRetrieval;
 
   const [channels, setChannels] = useState<ChannelOption[]>([]);
   const [channelFilter, setChannelFilter] = useState<string>("all");
@@ -285,11 +285,10 @@ export default function AI() {
     const question = composer.trim();
     if (!question || streaming) return;
     setComposer("");
-    setStreaming(true);
-    setStreamingText("");
-    setStreamingSources([]);
-    setWeakRetrieval(false);
 
+    // Optimistic user bubble stays local — the singleton tracks the
+    // pending question, but we render the bubble inline here so it
+    // appears in the message list immediately.
     const optimisticUser: ChatMessage = {
       id: `optimistic-${Date.now()}`,
       conversation_id: active.id || "",
@@ -303,89 +302,59 @@ export default function AI() {
     setActive((prev) => ({ ...prev, messages: [...prev.messages, optimisticUser] }));
     scrollToBottom();
 
-    const ctl = new AbortController();
-    abortRef.current = ctl;
+    // Delegate to the singleton — it owns the AbortController, the
+    // fetch, and the SSE parsing. We don't await anything that lives
+    // for the duration of the stream; the snapshot subscription
+    // drives our re-renders. Awaiting ask() here is fine for the
+    // "after the stream is over" branch but the page can navigate
+    // away in the middle and the stream continues.
+    await chatStream.ask({
+      question,
+      conversationId: active.id || undefined,
+      channelIds: channelFilter === "all" ? undefined : [channelFilter],
+      category: serverCategory || undefined,
+      sources: enabledSources.size === 3 ? undefined : Array.from(enabledSources),
+    });
+  }, [composer, streaming, active.id, channelFilter, serverCategory, enabledSources, scrollToBottom]);
 
-    let serverConversationId = active.id || "";
-
-    try {
-      const res = await fetch("/api/llm/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: ctl.signal,
-        body: JSON.stringify({
-          question,
-          conversationId: active.id || undefined,
-          channelIds: channelFilter === "all" ? undefined : [channelFilter],
-          category: serverCategory || undefined,
-          // Only send when the user has narrowed; an array of all
-          // three is equivalent to "no filter" and would just bloat
-          // the request body.
-          sources: enabledSources.size === 3 ? undefined : Array.from(enabledSources),
-        }),
-      });
-
-      if (!res.ok || !res.body) {
-        const text = await res.text().catch(() => `HTTP ${res.status}`);
-        throw new Error(text);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buf.indexOf("\n\n")) !== -1) {
-          const block = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const eventMatch = block.match(/^event: (.+)$/m);
-          const dataMatch = block.match(/^data: (.+)$/m);
-          if (!eventMatch || !dataMatch) continue;
-          const event = eventMatch[1];
-          const data = JSON.parse(dataMatch[1]);
-          const evt = { type: event, ...data } as AskEvent;
-
-          if (evt.type === "conversation") {
-            serverConversationId = evt.conversationId;
-            setActive((prev) => ({ ...prev, id: serverConversationId }));
-          } else if (evt.type === "context") {
-            setStreamingSources(evt.sources);
-            setWeakRetrieval(evt.weakRetrieval);
-            scrollToBottom();
-          } else if (evt.type === "delta") {
-            setStreamingText((s) => s + evt.text);
-            scrollToBottom();
-          } else if (evt.type === "error") {
-            toast({ title: "Chat error", description: evt.error, variant: "destructive" });
-          }
-        }
-      }
-
-      if (serverConversationId) {
-        await loadConversation(serverConversationId);
+  // When the singleton finishes (success / abort / error), reload the
+  // active conversation so persisted messages replace the optimistic
+  // user bubble + streaming preview. Also reloads the conversation
+  // list so titles update. This is what makes "navigate away while
+  // streaming, come back" work — on remount the snapshot's
+  // completionTick may already be ahead of our local tracker, in
+  // which case we reload immediately.
+  const lastTickRef = useRef(streamSnap.completionTick);
+  useEffect(() => {
+    if (streamSnap.completionTick === lastTickRef.current) return;
+    lastTickRef.current = streamSnap.completionTick;
+    const finishedId = streamSnap.lastCompletedConversationId;
+    if (finishedId) {
+      // If the user already moved to a different conversation, leave
+      // active alone — they'll see the result next time they open the
+      // one that just finished.
+      if (active.id === finishedId || active.id === "" || active.id == null) {
+        void loadConversation(finishedId);
       }
       loadConversations();
-    } catch (err) {
-      if ((err as any)?.name === "AbortError") {
-        toast({ title: "Cancelled", description: "Stopped the assistant mid-answer." });
-      } else {
-        toast({ title: "Ask failed", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
-      }
-    } finally {
-      setStreaming(false);
-      setStreamingText("");
-      setStreamingSources([]);
-      setWeakRetrieval(false);
-      abortRef.current = null;
     }
-  }, [composer, streaming, active.id, channelFilter, toast, loadConversation, loadConversations, scrollToBottom]);
+    if (streamSnap.error) {
+      toast({ title: "Ask failed", description: streamSnap.error, variant: "destructive" });
+      chatStream.clearError();
+    }
+  }, [streamSnap.completionTick, streamSnap.lastCompletedConversationId, streamSnap.error, active.id, loadConversation, loadConversations, toast]);
+
+  // When the conversation id is assigned mid-stream by the server,
+  // surface it on the local `active` record so navigation / titles /
+  // child queries can use it.
+  useEffect(() => {
+    if (streamSnap.conversationId && streamSnap.conversationId !== active.id && streamSnap.isStreaming) {
+      setActive((prev) => ({ ...prev, id: streamSnap.conversationId! }));
+    }
+  }, [streamSnap.conversationId, streamSnap.isStreaming, active.id]);
 
   const stop = useCallback(() => {
-    abortRef.current?.abort();
+    chatStream.abort();
   }, []);
 
   const newChat = useCallback(() => {
