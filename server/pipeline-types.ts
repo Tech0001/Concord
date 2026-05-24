@@ -19,6 +19,14 @@ export interface PipelineConfig {
   videoQuality: string;
   /** Preferred video codec: "av01" | "vp9" | "avc1" | "any" */
   videoCodec: string;
+  /** Preferred audio language for downloads — ISO 639-1 code (e.g.
+   *  "en", "es", "ja"). When a video has multiple audio tracks (a
+   *  common pattern on YouTube for international creators), yt-dlp
+   *  picks the track matching this language; falls back to bestaudio
+   *  when no track matches. Empty string = no preference (yt-dlp's
+   *  default selection, which is unpredictable for multi-track
+   *  videos). */
+  audioLanguage: string;
   /** Source for the YouTube auth cookies that defeat bot-detection.
    *  Empty string = no cookies (anonymous, will hit "Sign in to confirm
    *  you're not a bot" eventually). Pass through to yt-dlp's

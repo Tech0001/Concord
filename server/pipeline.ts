@@ -233,6 +233,7 @@ export class Pipeline extends EventEmitter {
       skipShorts: true,
       videoQuality: "1080",
       videoCodec: "any",
+      audioLanguage: "en",
       youtubeCookiesFromBrowser: "",
       youtubeCookiesFile: "",
       youtubeSpeedPreset: "conservative",
@@ -283,6 +284,7 @@ export class Pipeline extends EventEmitter {
       skipShorts: parseConfigBoolean(stored.skipShorts, defaults.skipShorts),
       videoQuality: stored.videoQuality || defaults.videoQuality,
       videoCodec: stored.videoCodec || defaults.videoCodec,
+      audioLanguage: stored.audioLanguage ?? defaults.audioLanguage,
       youtubeCookiesFromBrowser: stored.youtubeCookiesFromBrowser || defaults.youtubeCookiesFromBrowser,
       youtubeCookiesFile: stored.youtubeCookiesFile || defaults.youtubeCookiesFile,
       youtubeSpeedPreset: parseSpeedPreset(stored.youtubeSpeedPreset, defaults.youtubeSpeedPreset),
@@ -377,6 +379,7 @@ export class Pipeline extends EventEmitter {
       skipShorts: config.skipShorts,
       videoQuality: config.videoQuality,
       videoCodec: config.videoCodec,
+      audioLanguage: config.audioLanguage,
       youtubeCookiesFromBrowser: config.youtubeCookiesFromBrowser,
       youtubeCookiesFile: config.youtubeCookiesFile,
       youtubeSpeedPreset: config.youtubeSpeedPreset,
@@ -1055,11 +1058,20 @@ export class Pipeline extends EventEmitter {
     const codec = codecOverride || this.config.videoCodec || "any";
     const heightCap = q === "best" ? "" : `[height<=${parseInt(q) || 1080}]`;
 
+    // Audio selector — when audioLanguage is set, prefer that
+    // language's track; fall back to any audio. Solves the
+    // multi-language-channel case (YouTube creators who publish
+    // dubbed tracks in several languages and yt-dlp picks one at
+    // random without this filter).
+    const lang = this.config.audioLanguage;
+    const audioLangM4a = lang ? `bestaudio[language=${lang}][ext=m4a]` : "bestaudio[ext=m4a]";
+    const audioLangAny = lang ? `bestaudio[language=${lang}]` : "bestaudio";
+
     // Per-codec selectors. AV1/VP9 ship in WebM, H.264 in MP4.
-    const av1   = `bestvideo${heightCap}[vcodec^=av01]+bestaudio[ext=m4a]/bestvideo${heightCap}[vcodec^=av01]+bestaudio`;
-    const vp9   = `bestvideo${heightCap}[vcodec^=vp9]+bestaudio[ext=m4a]/bestvideo${heightCap}[vcodec^=vp9]+bestaudio`;
-    const avc1  = `bestvideo${heightCap}[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best${heightCap}[ext=mp4][vcodec^=avc1]`;
-    const anyMp4 = `bestvideo${heightCap}[ext=mp4]+bestaudio[ext=m4a]`;
+    const av1   = `bestvideo${heightCap}[vcodec^=av01]+${audioLangM4a}/bestvideo${heightCap}[vcodec^=av01]+${audioLangAny}/bestvideo${heightCap}[vcodec^=av01]+bestaudio`;
+    const vp9   = `bestvideo${heightCap}[vcodec^=vp9]+${audioLangM4a}/bestvideo${heightCap}[vcodec^=vp9]+${audioLangAny}/bestvideo${heightCap}[vcodec^=vp9]+bestaudio`;
+    const avc1  = `bestvideo${heightCap}[ext=mp4][vcodec^=avc1]+${audioLangM4a}/bestvideo${heightCap}[ext=mp4][vcodec^=avc1]+${audioLangAny}/best${heightCap}[ext=mp4][vcodec^=avc1]`;
+    const anyMp4 = `bestvideo${heightCap}[ext=mp4]+${audioLangM4a}/bestvideo${heightCap}[ext=mp4]+${audioLangAny}`;
     const anyAny = `best${heightCap}/best`;
 
     let order: string[];
@@ -1079,7 +1091,7 @@ export class Pipeline extends EventEmitter {
         break;
       default: // "any" — let yt-dlp pick the best by size/bitrate
         order = [
-          `bestvideo${heightCap}+bestaudio[ext=m4a]/bestvideo${heightCap}+bestaudio`,
+          `bestvideo${heightCap}+${audioLangM4a}/bestvideo${heightCap}+${audioLangAny}/bestvideo${heightCap}+bestaudio`,
           anyMp4,
           anyAny,
         ];
@@ -1349,6 +1361,18 @@ export class Pipeline extends EventEmitter {
       const videoPath = entry.video_path;
       const retainedM4aPath = videoPath ? replaceExtension(videoPath, ".m4a") : null;
       let audioPath: string | null = retainedM4aPath ? replaceExtension(retainedM4aPath, ".wav") : null;
+
+      // Retranscribe ALWAYS forces a fresh extract from the source —
+      // otherwise a redownload (e.g. picking a different audio track
+      // for a multi-language video) silently keeps using the cached
+      // .wav from the prior run and reproduces the same transcript.
+      // Cheap: ffmpeg copy/extract is seconds for typical videos.
+      if (audioPath && fs.existsSync(audioPath)) {
+        try { fs.unlinkSync(audioPath); } catch { /* ignore */ }
+      }
+      if (retainedM4aPath && fs.existsSync(retainedM4aPath)) {
+        try { fs.unlinkSync(retainedM4aPath); } catch { /* ignore */ }
+      }
 
       if (!audioPath || !fs.existsSync(audioPath)) {
         if (!videoPath || !fs.existsSync(videoPath)) {

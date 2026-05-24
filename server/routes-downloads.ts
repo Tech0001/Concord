@@ -178,6 +178,14 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
         isComplete: false,
       });
 
+      // Pull the preferred audio language from pipeline config so the
+      // format string can target it. The download endpoint doesn't
+      // currently accept a per-call override — the global setting is
+      // the right scope for "I want English audio on every download
+      // from this channel". A future enhancement could surface a
+      // per-download picker in the manual download UI.
+      const audioLanguage = pipeline.getConfig().audioLanguage || "";
+
       downloadYouTubeVideo(
         videoId,
         formatId,
@@ -196,6 +204,7 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
             activeDownloads.set(downloadId, { ...download, percent: adjustedPercent });
           }
         },
+        { audioLanguage },
       )
         .then(async () => {
           console.log(`Download ${downloadId} (ffmpeg processing) complete.`);
