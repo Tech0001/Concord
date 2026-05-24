@@ -124,6 +124,14 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
           resolution: format.resolution,
           filesize: format.filesize,
           filesize_approx: format.filesize_approx,
+          // Pass the language + codec metadata through so the UI
+          // can show "English audio" / "Spanish audio" badges on
+          // each format and the user can pick the right track for
+          // multi-language YouTube videos.
+          language: format.language ?? null,
+          acodec: format.acodec,
+          vcodec: format.vcodec,
+          format_note: format.format_note,
         })),
       };
 

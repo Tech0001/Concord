@@ -59,6 +59,15 @@ interface YouTubeDlFormat {
   filesize?: number;
   filesize_approx?: number;
   quality?: string;
+  // yt-dlp fills these for multi-language audio tracks and any
+  // codec-aware UI surfacing. `language` is ISO 639-1 (e.g. "en",
+  // "es", "ja"); `format_note` is yt-dlp's free-form label which
+  // often spells out "English original", "Spanish (Latin America)",
+  // etc. when language alone is ambiguous.
+  language?: string | null;
+  acodec?: string;
+  vcodec?: string;
+  format_note?: string;
 }
 
 interface ProgressCallback {

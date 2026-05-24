@@ -80,6 +80,7 @@ interface Config {
   skipShorts: boolean;
   videoQuality: string;
   videoCodec: string;
+  audioLanguage: string;
   youtubeCookiesFromBrowser: string;
   youtubeCookiesFile: string;
   youtubeSpeedPreset: "fast" | "balanced" | "conservative";
@@ -615,6 +616,8 @@ export default function PipelineStatus() {
             <code className="font-mono text-foreground">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code>
             <span className="text-muted-foreground">Video codec</span>
             <code className="font-mono text-foreground">{codecLabel(config?.videoCodec || "any")}</code>
+            <span className="text-muted-foreground">Audio language</span>
+            <code className="font-mono text-foreground">{config?.audioLanguage || "(any)"}</code>
             <span className="text-muted-foreground">Daily cap</span>
             <code className="font-mono text-foreground">{config?.dailyDownloadCap ?? 200}{config?.dailyDownloadCap === 0 ? " (disabled)" : ""}</code>
             <span className="text-muted-foreground">Check interval</span>
