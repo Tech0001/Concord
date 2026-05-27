@@ -402,6 +402,20 @@ export function registerPipelineRoutes(app: Express, pipeline: Pipeline): void {
   });
 
   // Transcribe an already-downloaded video file. Used by the
+  // Manual trigger for the channel UC-id backfill. Same job that
+  // runs in the background at server startup, exposed so the user
+  // can re-run after adding new channels without restarting.
+  app.post("/api/pipeline/resolve-channel-ucs", async (_req, res) => {
+    try {
+      const { backfillChannelUcIds } = await import("./db");
+      const { resolveChannelUcId } = await import("./channel-monitor");
+      const result = await backfillChannelUcIds(resolveChannelUcId);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to resolve channel UC ids" });
+    }
+  });
+
   // file-import flow when the user drops a local video into the app
   // without going through a YouTube download.
   app.post("/api/pipeline/transcribe-file", async (req, res) => {

@@ -313,6 +313,55 @@ function detectShorts(title: string, duration: number | null, entry: any): boole
 }
 
 /**
+ * Resolve a configured channel URL (e.g. `youtube.com/@handle`) to
+ * its YouTube UC... id. yt-dlp will flat-extract one entry from the
+ * channel and emit its channel_id, which is canonical and survives
+ * handle / display-name changes.
+ *
+ * Returns null when:
+ *   - The URL is local (file://) — local-folder channels have no UC id.
+ *   - yt-dlp can't reach YouTube or the channel doesn't exist.
+ *   - The entry is missing channel_id (unlikely on real channels).
+ *
+ * Used to backfill youtube_channel_id on configured channels so manual
+ * downloads can attach to the right row via direct id equality
+ * (otherwise we fall back to URL/handle/name heuristics that miss when
+ * yt-dlp returns the /channel/UC... URL form against an @handle row).
+ */
+export async function resolveChannelUcId(channelUrl: string): Promise<string | null> {
+  if (!channelUrl || channelUrl.startsWith("file://")) return null;
+  try {
+    // --playlist-items 1 grabs just the first video to keep this
+    // cheap; --flat-playlist skips per-video metadata fetches.
+    // The entry's channel_id is what we're after.
+    const info = await youtubedl(channelUrl, {
+      dumpSingleJson: true,
+      flatPlaylist: true,
+      playlistEnd: 1,
+      noWarnings: true,
+      cacheDir: "./youtube-dl-cache",
+      skipDownload: true,
+    }) as any;
+    // For a channel URL, yt-dlp returns either:
+    //   - a playlist-shaped object with `channel_id` on the root, OR
+    //   - an entries[] where entries[0].channel_id is the id.
+    const id = info?.channel_id
+      || info?.uploader_id
+      || info?.entries?.[0]?.channel_id
+      || info?.entries?.[0]?.uploader_id
+      || null;
+    // YouTube UC ids are 24 chars starting with UC. Anything else
+    // (a handle like @moneyotm, a /user/ legacy id) isn't what we
+    // want — skip rather than poison the cache.
+    if (typeof id === "string" && /^UC[A-Za-z0-9_-]{22}$/.test(id)) return id;
+    return null;
+  } catch (err) {
+    console.warn(`[channel-monitor] resolveChannelUcId failed for ${channelUrl}:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/**
  * Check if a specific video is a live stream that's currently live.
  */
 export async function isVideoCurrentlyLive(videoUrl: string): Promise<boolean> {

@@ -305,6 +305,45 @@ export function cacheYouTubeChannelId(channelRowId: string, youtubeChannelId: st
     .run(youtubeChannelId, channelRowId, youtubeChannelId);
 }
 
+/** One-shot: resolve YouTube UC ids for every configured channel
+ *  that doesn't have one cached yet. Skips local-folder channels
+ *  (file:// URLs have no UC). Runs probes in parallel so total wall
+ *  time is bounded by the slowest single probe (~5-10s), not the
+ *  sum across N channels.
+ *
+ *  Intended to run once on server startup (background, non-
+ *  blocking). After it completes, manual downloads can attach to
+ *  the right configured channel via direct UC id equality
+ *  regardless of URL format quirks or display-name drift.
+ *
+ *  Pass a custom resolver for tests; defaults to the yt-dlp probe
+ *  in channel-monitor. */
+export async function backfillChannelUcIds(
+  resolver: (url: string) => Promise<string | null>,
+): Promise<{ resolved: number; skipped: number; failed: number }> {
+  const channels = getChannels();
+  const todo = channels.filter((c) =>
+    !c.youtube_channel_id && c.url && !c.url.startsWith("file://"));
+  let resolved = 0, failed = 0;
+  // Parallel — bounded by the slowest probe rather than the sum.
+  // yt-dlp probes hit YouTube directly; running 5 at once is fine.
+  await Promise.all(todo.map(async (c) => {
+    try {
+      const uc = await resolver(c.url);
+      if (uc) {
+        cacheYouTubeChannelId(c.id, uc);
+        console.log(`[channels] resolved UC id for "${c.name}": ${uc}`);
+        resolved += 1;
+      } else {
+        failed += 1;
+      }
+    } catch {
+      failed += 1;
+    }
+  }));
+  return { resolved, skipped: channels.length - todo.length, failed };
+}
+
 export function getChannelById(channelId: string): StoredChannel | undefined {
   const row = getDb().prepare(
     `SELECT ${CHANNEL_COLUMNS} FROM channels WHERE id = ?`
