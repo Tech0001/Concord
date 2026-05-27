@@ -209,60 +209,87 @@ export function findChannelByYouTubeInfo(
 ): StoredChannel | undefined {
   const channels = getChannels();
 
-  // 1. Stored UC id — most reliable once populated. Survives URL
-  //    format quirks, display-name drift, anything.
+  // Diagnostic — surfaces exactly which step fires (or why none did)
+  // when manual downloads aren't attaching to the right configured
+  // channel. Strip after the matcher is confirmed working.
+  const dbg = (step: string, extra?: unknown) => {
+    console.log(`[match-channel] ${step}`, extra ?? "");
+  };
+  dbg("input", {
+    youtubeChannelId,
+    youtubeChannelName,
+    youtubeChannelUrl,
+    knownChannels: channels.map(c => ({
+      id: c.id,
+      name: c.name,
+      url: c.url,
+      youtube_channel_id: c.youtube_channel_id,
+      handle: extractHandle(c.url),
+      norm: normalizeChannelUrl(c.url),
+    })),
+  });
+
+  // 1. Stored UC id — most reliable once populated.
   if (youtubeChannelId) {
     const byStoredId = channels.find(c => c.youtube_channel_id === youtubeChannelId);
-    if (byStoredId) return byStoredId;
+    if (byStoredId) { dbg("MATCH step1 stored UC id", byStoredId.id); return byStoredId; }
   }
 
   // 2. UC id appears in the configured URL — covers /channel/UC... URLs.
   if (youtubeChannelId) {
     const byUcInUrl = channels.find(c => c.url.includes(youtubeChannelId));
     if (byUcInUrl) {
+      dbg("MATCH step2 UC-in-URL", byUcInUrl.id);
       cacheYouTubeChannelId(byUcInUrl.id, youtubeChannelId);
       return { ...byUcInUrl, youtube_channel_id: youtubeChannelId };
     }
   }
 
   // 3. Handle match — yt-dlp's channel_url and the user's typed URL
-  //    both carry the same @handle for /@handle channels. The most
-  //    common modern shape; the prior implementation missed this.
+  //    both carry the same @handle for /@handle channels.
   const ytHandle = extractHandle(youtubeChannelUrl);
   if (ytHandle) {
     const byHandle = channels.find(c => extractHandle(c.url) === ytHandle);
     if (byHandle) {
+      dbg("MATCH step3 @handle", { handle: ytHandle, channelId: byHandle.id });
       if (youtubeChannelId) cacheYouTubeChannelId(byHandle.id, youtubeChannelId);
       return byHandle;
+    } else {
+      dbg("step3 @handle MISS — yt handle did not match any configured channel handle", { ytHandle });
     }
+  } else {
+    dbg("step3 skipped — no @handle in yt channel_url", { youtubeChannelUrl });
   }
 
-  // 4. Normalized URL equality — last URL-based fallback. Catches the
-  //    case where the user added a /user/legacyname channel and
-  //    yt-dlp returns the same URL.
+  // 4. Normalized URL equality.
   if (youtubeChannelUrl) {
     const normYt = normalizeChannelUrl(youtubeChannelUrl);
     if (normYt) {
       const byUrl = channels.find(c => normalizeChannelUrl(c.url) === normYt);
       if (byUrl) {
+        dbg("MATCH step4 normalized URL", { normYt, channelId: byUrl.id });
         if (youtubeChannelId) cacheYouTubeChannelId(byUrl.id, youtubeChannelId);
         return byUrl;
+      } else {
+        dbg("step4 normalized-URL MISS", { normYt });
       }
     }
   }
 
-  // 5. Case-insensitive name equality — last resort. Loose by design;
-  //    fails when yt-dlp's display name and the channel row's name
-  //    differ even slightly (extra " - Topic", "VEVO", etc.).
+  // 5. Case-insensitive name equality.
   if (youtubeChannelName) {
     const needle = youtubeChannelName.toLowerCase().trim();
     const byName = channels.find(c => c.name.toLowerCase().trim() === needle);
     if (byName) {
+      dbg("MATCH step5 name", { needle, channelId: byName.id });
       if (youtubeChannelId) cacheYouTubeChannelId(byName.id, youtubeChannelId);
       return byName;
+    } else {
+      dbg("step5 name MISS", { needle });
     }
   }
 
+  dbg("NO MATCH — will fall back to display-name as channel_id");
   return undefined;
 }
 

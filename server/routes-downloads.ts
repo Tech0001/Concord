@@ -296,6 +296,21 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
                 || (download.channelName ? String(download.channelName) : null)
                 || download.channelId
                 || "manual";
+              // Diagnostic — shows what each candidate source
+              // produced and which won. Lets us see at a glance
+              // whether matchedChannel returned undefined (in
+              // which case the match cascade log above tells us
+              // why) or it matched but something downstream is
+              // overwriting it.
+              console.log("[manual-dl] enqueue decision", {
+                videoId: download.videoId,
+                matchedChannelId: matchedChannel?.id ?? null,
+                existingEntryChannelId: existingEntry?.channel_id ?? null,
+                downloadChannelName: download.channelName,
+                downloadChannelId: download.channelId,
+                downloadChannelUrl: download.channelUrl,
+                FINAL_dbChannelId: dbChannelId,
+              });
               // Category priority: explicit on the request > matched
               // configured channel's category > 'personal' fallback
               // (resolveCategoryForChannel inside enqueueVideo handles the
