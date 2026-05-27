@@ -396,6 +396,79 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
 
   const capped = applyPerVideoCap(fused, perVideoCap).slice(0, topK);
 
+  // Neighbor expansion. For each video-source hit, pull the
+  // ±NEIGHBOR_WINDOW adjacent transcript segments from the same
+  // video and inject them as context rows. The retrieval embedding
+  // ranks chunks individually, but a lot of substantive content
+  // (extended metaphors, multi-segment explanations, prophetic
+  // imagery) only makes sense across consecutive segments. Without
+  // expansion the LLM sees one cryptic line ("Your thing became a
+  // pillar on my pillar") in isolation and can't recognize that the
+  // surrounding 5-6 segments are about networks merging.
+  //
+  // Neighbors keep the parent hit's score so they cluster together
+  // in the final sort, then a per-video chronological sort below
+  // makes the LLM read each video's segments in temporal order.
+  // Doc-source hits already chunk by section so expansion is less
+  // useful there — skip.
+  const NEIGHBOR_WINDOW = 2;
+  const cappedKeys = new Set(capped.map(speakerHitKey));
+  const expanded: SemanticSearchResult[] = [...capped];
+  const neighborStmt = getDb().prepare(`
+    SELECT video_id, channel_id, segment_index, start_seconds, end_seconds, speaker, text
+    FROM transcript_segments_fts
+    WHERE video_id = ? AND channel_id = ?
+      AND segment_index BETWEEN ? AND ?
+      AND segment_index <> ?
+    ORDER BY segment_index
+  `);
+  for (const hit of capped) {
+    if (hit.source === "doc" || !hit.video_id || !hit.channel_id) continue;
+    const lo = Math.max(0, hit.segment_index - NEIGHBOR_WINDOW);
+    const hi = hit.segment_index + NEIGHBOR_WINDOW;
+    const rows = neighborStmt.all(
+      hit.video_id, hit.channel_id, lo, hi, hit.segment_index,
+    ) as Array<{
+      video_id: string; channel_id: string; segment_index: number;
+      start_seconds: number; end_seconds: number;
+      speaker: string | null; text: string;
+    }>;
+    for (const r of rows) {
+      const key = `vid:${r.video_id}:${r.channel_id}:${r.segment_index}`;
+      if (cappedKeys.has(key)) continue;
+      cappedKeys.add(key);
+      // Inherit the parent's video metadata + score so neighbors
+      // sort adjacent to their hit. Mark with score=0 so the
+      // formatter can distinguish "primary hit" vs "context"
+      // visually later if we want.
+      expanded.push({
+        ...hit,
+        segment_index: r.segment_index,
+        start_seconds: r.start_seconds,
+        end_seconds: r.end_seconds,
+        speaker: r.speaker,
+        text: r.text,
+        score: 0,
+      });
+    }
+  }
+
+  // Sort the final context so each video's hits + neighbors read
+  // in chronological order. Doc-source rows interleave by their
+  // distance rank (preserved from the merge above) — keep them at
+  // the front since the model usually wants written docs to anchor
+  // the answer.
+  expanded.sort((a, b) => {
+    if (a.source === "doc" && b.source !== "doc") return -1;
+    if (a.source !== "doc" && b.source === "doc") return 1;
+    if (a.source === "doc" && b.source === "doc") return a.rank - b.rank;
+    // video-source: same video → segment order; different videos →
+    // rank order (best-scoring video first).
+    const sameVideo = a.video_id === b.video_id && a.channel_id === b.channel_id;
+    if (sameVideo) return a.segment_index - b.segment_index;
+    return a.rank - b.rank;
+  });
+
   // Resolve local "S0"/"S1" speaker labels to global speaker names
   // for everything in the final context. Without this the LLM only
   // sees the opaque local label and can't attribute quotes by name.
@@ -404,7 +477,7 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
   const speakerKey = (videoId: string, channelId: string, local: string) =>
     `${videoId}|${channelId}|${local}`;
   const speakerNames = new Map<string, string>();
-  const triples = capped
+  const triples = expanded
     .filter((r) => r.source !== "doc" && r.video_id && r.channel_id && r.speaker)
     .map((r) => ({ video_id: r.video_id, channel_id: r.channel_id, local_speaker: r.speaker! }));
   if (triples.length > 0) {
@@ -430,7 +503,7 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
     }
   }
 
-  const sources: ContextSource[] = capped.map((r, idx) => ({
+  const sources: ContextSource[] = expanded.map((r, idx) => ({
     sourceIndex: idx + 1,
     source: r.source ?? "video",
     videoId: r.video_id,
@@ -464,17 +537,6 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
 
   const topScore = sources[0]?.score ?? 0;
   const weakRetrieval = sources.length === 0 || topScore < RELEVANT_SCORE_FLOOR;
-
-  // Diagnostic — counts of each source kind in the emitted context.
-  // Helps spot when doc retrieval works server-side but doesn't
-  // arrive on the client correctly. Strip once the doc-citation
-  // flow is confirmed working end-to-end.
-  const counts = sources.reduce((acc, s) => {
-    const k = s.source ?? "video";
-    acc[k] = (acc[k] ?? 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-  console.log(`[ask] context: ${sources.length} sources (${JSON.stringify(counts)}, topScore=${topScore.toFixed(3)}, weakRetrieval=${weakRetrieval})`);
 
   yield { type: "context", sources, weakRetrieval };
 

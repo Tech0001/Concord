@@ -415,21 +415,6 @@ export default function AI() {
   }, []);
 
   const openSource = useCallback((src: ChatSource) => {
-    // Diagnostic — surfaces the full source shape at click time so
-    // we can see why a doc citation might not open the drawer. Keep
-    // until the doc-citation flow is confirmed working end-to-end
-    // (then strip).
-    console.log("[ai] openSource", {
-      source: src.source,
-      video_id: src.video_id,
-      doc_rel_path: src.doc_rel_path,
-      docRelPath: src.docRelPath,
-      document_id: src.document_id,
-      documentId: src.documentId,
-      doc_title: src.doc_title,
-      docTitle: src.docTitle,
-      full: src,
-    });
     // Doc sources open in a side drawer so the chat stays visible —
     // mirrors the VideoDrawer pattern for video citations. The drawer
     // does its own scroll-to-excerpt + highlight after the markdown
