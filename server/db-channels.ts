@@ -36,11 +36,15 @@ export interface StoredChannel {
   include_shorts?: boolean;
   /** Personal / work category. Defaults to 'personal' on writes. */
   category?: Category;
+  /** YouTube UC... channel id — populated lazily from yt-dlp metadata.
+   *  Lets manual downloads match against the configured channel
+   *  reliably (URL-substring + name-match both have failure modes). */
+  youtube_channel_id?: string | null;
 }
 
-type ChannelRow = { id: string; name: string; url: string; enabled: number; diarize: number; include_shorts: number; category: string };
+type ChannelRow = { id: string; name: string; url: string; enabled: number; diarize: number; include_shorts: number; category: string; youtube_channel_id: string | null };
 
-const CHANNEL_COLUMNS = "id, name, url, enabled, diarize, include_shorts, category";
+const CHANNEL_COLUMNS = "id, name, url, enabled, diarize, include_shorts, category, youtube_channel_id";
 
 function rowToChannel(row: ChannelRow): StoredChannel {
   return {
@@ -51,6 +55,7 @@ function rowToChannel(row: ChannelRow): StoredChannel {
     diarize: !!row.diarize,
     include_shorts: !!row.include_shorts,
     category: normalizeCategory(row.category),
+    youtube_channel_id: row.youtube_channel_id,
   };
 }
 
@@ -174,21 +179,103 @@ export function updateChannelDiarize(channelId: string, diarize: boolean): Store
  *       yt-dlp started returning channel ids, or local-folder channels).
  *  Returns undefined when there's no match; the caller is responsible
  *  for the legacy "treat the display name as the channel id" fallback. */
+/** Extract a YouTube channel handle (e.g. "@somehandle") from any
+ *  URL shape that contains one. Lowercased for case-insensitive
+ *  comparison. Returns null when the URL has no handle (the
+ *  /channel/UC... form, /user/foo, bare domain). */
+function extractHandle(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const m = url.match(/\/(@[A-Za-z0-9._-]+)/);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** Strip common suffixes and lowercase a URL for fuzzy comparison.
+ *  Handles trailing slashes, /videos, /streams, /featured — yt-dlp
+ *  may emit "youtube.com/@handle" while the user typed
+ *  "youtube.com/@handle/videos". */
+function normalizeChannelUrl(url: string | null | undefined): string {
+  if (!url) return "";
+  return url
+    .toLowerCase()
+    .replace(/\/(videos|streams|featured|live|playlists|community|about)\/?$/i, "")
+    .replace(/\/$/, "")
+    .trim();
+}
+
 export function findChannelByYouTubeInfo(
   youtubeChannelId: string | null | undefined,
   youtubeChannelName: string | null | undefined,
+  youtubeChannelUrl?: string | null | undefined,
 ): StoredChannel | undefined {
   const channels = getChannels();
+
+  // 1. Stored UC id — most reliable once populated. Survives URL
+  //    format quirks, display-name drift, anything.
   if (youtubeChannelId) {
-    const byUrl = channels.find(c => c.url.includes(youtubeChannelId));
-    if (byUrl) return byUrl;
+    const byStoredId = channels.find(c => c.youtube_channel_id === youtubeChannelId);
+    if (byStoredId) return byStoredId;
   }
+
+  // 2. UC id appears in the configured URL — covers /channel/UC... URLs.
+  if (youtubeChannelId) {
+    const byUcInUrl = channels.find(c => c.url.includes(youtubeChannelId));
+    if (byUcInUrl) {
+      cacheYouTubeChannelId(byUcInUrl.id, youtubeChannelId);
+      return { ...byUcInUrl, youtube_channel_id: youtubeChannelId };
+    }
+  }
+
+  // 3. Handle match — yt-dlp's channel_url and the user's typed URL
+  //    both carry the same @handle for /@handle channels. The most
+  //    common modern shape; the prior implementation missed this.
+  const ytHandle = extractHandle(youtubeChannelUrl);
+  if (ytHandle) {
+    const byHandle = channels.find(c => extractHandle(c.url) === ytHandle);
+    if (byHandle) {
+      if (youtubeChannelId) cacheYouTubeChannelId(byHandle.id, youtubeChannelId);
+      return byHandle;
+    }
+  }
+
+  // 4. Normalized URL equality — last URL-based fallback. Catches the
+  //    case where the user added a /user/legacyname channel and
+  //    yt-dlp returns the same URL.
+  if (youtubeChannelUrl) {
+    const normYt = normalizeChannelUrl(youtubeChannelUrl);
+    if (normYt) {
+      const byUrl = channels.find(c => normalizeChannelUrl(c.url) === normYt);
+      if (byUrl) {
+        if (youtubeChannelId) cacheYouTubeChannelId(byUrl.id, youtubeChannelId);
+        return byUrl;
+      }
+    }
+  }
+
+  // 5. Case-insensitive name equality — last resort. Loose by design;
+  //    fails when yt-dlp's display name and the channel row's name
+  //    differ even slightly (extra " - Topic", "VEVO", etc.).
   if (youtubeChannelName) {
     const needle = youtubeChannelName.toLowerCase().trim();
     const byName = channels.find(c => c.name.toLowerCase().trim() === needle);
-    if (byName) return byName;
+    if (byName) {
+      if (youtubeChannelId) cacheYouTubeChannelId(byName.id, youtubeChannelId);
+      return byName;
+    }
   }
+
   return undefined;
+}
+
+/** Cache the YouTube UC id on a channel row. Idempotent — writes
+ *  only when the column is empty or holds a different value.
+ *  Called opportunistically from findChannelByYouTubeInfo whenever a
+ *  match succeeds via URL or name, so future lookups can go straight
+ *  through the cheap id-equality path. */
+export function cacheYouTubeChannelId(channelRowId: string, youtubeChannelId: string): void {
+  if (!youtubeChannelId) return;
+  getDb()
+    .prepare("UPDATE channels SET youtube_channel_id = ? WHERE id = ? AND (youtube_channel_id IS NULL OR youtube_channel_id <> ?)")
+    .run(youtubeChannelId, channelRowId, youtubeChannelId);
 }
 
 export function getChannelById(channelId: string): StoredChannel | undefined {

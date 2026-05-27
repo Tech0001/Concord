@@ -37,6 +37,11 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
     uploadDate?: string | null;
     channelId?: string | null;
     channelName?: string | null;
+    /** yt-dlp's channel_url for the video — used by
+     *  findChannelByYouTubeInfo's handle / normalized-URL matchers
+     *  to attach the download to an already-configured channel when
+     *  the UC id and display name alone don't disambiguate. */
+    channelUrl?: string | null;
     /** Personal / work — passed through to enqueueVideo when the
      *  download finalizes. Defaults to the matched configured
      *  channel's category (or 'personal' if no match). */
@@ -180,6 +185,10 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
         finalLocation: finalDownloadLocation ?? undefined,
         videoId,
         uploadDate: uploadDate || videoInfo.uploadDate || null,
+        // channelUrl rides along so the post-download matcher can use
+        // it to attach to an existing configured channel. videoInfo
+        // stashes channelUrl alongside channelId from the info probe.
+        channelUrl: videoInfo.channelUrl || null,
         channelId: channelId || videoInfo.channelId || null,
         channelName: channelName || videoInfo.channelName || null,
         category: category === "work" ? "work" : category === "personal" ? "personal" : undefined,
@@ -260,19 +269,30 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
               }
 
               const existingEntry = getQueueEntryByVideoId(download.videoId);
-              // Attach to an already-configured channel when possible (matches
-              // by YouTube UC id in the channel URL or by case-insensitive
-              // name) — without this, a manual download of e.g. a live that
-              // just ended creates an orphan row keyed by the display name
-              // ("Last Days") instead of the channel's configured id
-              // ("ch-..."), so it doesn't show up when you filter by that
-              // channel in Library.
-              const matchedChannel = findChannelByYouTubeInfo(download.channelId, download.channelName);
-              // Prefer the readable channel name (yt-dlp's `channel` field,
-              // e.g. "Rick Joyner") over the UC... id so the Library shows
-              // the human-friendly name and matches the on-disk folder.
-              const dbChannelId = existingEntry?.channel_id
-                || matchedChannel?.id
+              // Attach to an already-configured channel when possible
+              // — matches by stored UC id, then UC-in-URL, then
+              // @handle, then normalized URL, then case-insensitive
+              // name. Without this, a manual download of e.g. a live
+              // that just ended creates an orphan row keyed by the
+              // display name instead of the configured channel id,
+              // so it doesn't show up when you filter by that
+              // channel in Library and downstream tables (vec_segments,
+              // FTS, anchors) all end up keyed by the wrong id.
+              const matchedChannel = findChannelByYouTubeInfo(
+                download.channelId,
+                download.channelName,
+                download.channelUrl,
+              );
+              // matchedChannel ALWAYS wins over a previously-saved
+              // orphan: if the user had a video saved with
+              // channel_id = display name (a stale orphan from
+              // before this fix), the second manual download for
+              // the same video should overwrite it with the
+              // configured channel's id. existingEntry is the last
+              // fallback for the case where we genuinely can't find
+              // a configured channel match.
+              const dbChannelId = matchedChannel?.id
+                || existingEntry?.channel_id
                 || (download.channelName ? String(download.channelName) : null)
                 || download.channelId
                 || "manual";

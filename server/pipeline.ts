@@ -18,6 +18,7 @@ import {
   enqueueVideo,
   enqueueVideos,
   countChannelQueueEntries,
+  findChannelByYouTubeInfo,
   getQueueEntryByVideoId,
   getNextPending,
   getConfigValues,
@@ -1469,11 +1470,20 @@ export class Pipeline extends EventEmitter {
     const monitoredChannel = channelId
       ? this.config.channels.find(c => c.id === channelId)
       : undefined;
-    const namedChannel = channelName
+    // findChannelByYouTubeInfo runs the full match cascade (stored
+    // UC id, UC-in-URL, @handle, normalized URL, name). When the
+    // caller passed a UC id as channelId, this catches it; when
+    // they passed only a display name, this catches the @handle /
+    // normalized URL cases the simpler name-equality check missed.
+    const matchedChannel = !monitoredChannel
+      ? findChannelByYouTubeInfo(channelId, channelName, null)
+      : undefined;
+    const namedChannel = !matchedChannel && channelName
       ? this.config.channels.find(c => c.name.toLowerCase() === channelName.toLowerCase())
       : undefined;
     const channel: ChannelConfig =
       monitoredChannel ||
+      (matchedChannel as ChannelConfig | undefined) ||
       namedChannel ||
       (existingEntry ? { id: existingEntry.channel_id, name: channelName || existingEntry.channel_id, url: "", enabled: true } : undefined) ||
       { id: channelId || "manual", name: channelName || "Manual", url: "", enabled: true };
