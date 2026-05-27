@@ -54,6 +54,7 @@ logs/
 .env
 .env.local
 .env.*.local
+.env.notarize
 pipeline.db
 __pycache__/
 *.pyc
