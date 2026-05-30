@@ -310,7 +310,8 @@ export default function Library() {
   // state. Idle when nothing's in flight (no wasted polls during normal
   // browsing).
   const hasInFlight = entries.some(
-    e => e.status === "queued" || e.status === "transcribing" || e.status === "extracting_audio",
+    e => e.status === "queued" || e.status === "transcribing"
+      || e.status === "extracting_audio" || e.status === "downloading",
   );
   useEffect(() => {
     if (!hasInFlight) return;
@@ -355,6 +356,27 @@ export default function Library() {
       fetchData();
     } catch (error: any) {
       toast({ variant: "destructive", title: "Re-transcribe failed", description: error.message });
+    } finally {
+      setRetranscribing(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  /** Retry a failed video from scratch — re-downloads + reprocesses.
+   *  Distinct from re-transcribe: that reuses the (possibly corrupt)
+   *  file on disk, which is useless for download failures. Reuses the
+   *  retranscribing latch so the row shows the same in-flight spinner. */
+  const retryDownload = async (entry: QueueEntry) => {
+    const key = `${entry.channel_id}:${entry.video_id}`;
+    setRetranscribing(prev => ({ ...prev, [key]: true }));
+    try {
+      await apiRequest("POST", "/api/pipeline/retry", {
+        videoId: entry.video_id,
+        channelId: entry.channel_id,
+      });
+      toast({ title: "Retry started", description: entry.title });
+      fetchData();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Retry failed", description: error.message });
     } finally {
       setRetranscribing(prev => ({ ...prev, [key]: false }));
     }
@@ -642,8 +664,30 @@ export default function Library() {
                             const inFlight = retranscribing[key]
                               || entry.status === "queued"
                               || entry.status === "transcribing"
-                              || entry.status === "extracting_audio";
+                              || entry.status === "extracting_audio"
+                              || entry.status === "downloading";
+                            // Retry (full re-download + reprocess) is the right
+                            // action for failed entries — re-transcribe reuses
+                            // the corrupt file and just fails again. Show it for
+                            // failed rows (and anything carrying an error).
+                            const showRetry = entry.status === "failed" || !!entry.error;
                             return (
+                            <>
+                            {showRetry && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 text-xs whitespace-nowrap"
+                                disabled={inFlight}
+                                onClick={() => retryDownload(entry)}
+                                title={inFlight ? `Retrying (${entry.status})` : "Re-download and reprocess from scratch"}
+                              >
+                                {inFlight
+                                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                                  : <RefreshCw className="h-3 w-3" />}
+                                <span className="ml-1">{inFlight ? "Retrying" : "Retry"}</span>
+                              </Button>
+                            )}
                               <Button
                                 size="sm"
                                 variant="ghost"
@@ -657,6 +701,7 @@ export default function Library() {
                                   : <RotateCcw className="h-3 w-3" />}
                                 <span className="ml-1">{inFlight ? entry.status === "queued" ? "Queued" : "Transcribing" : "Re-transcribe"}</span>
                               </Button>
+                            </>
                             );
                           })()}
 

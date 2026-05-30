@@ -973,6 +973,11 @@ export class Pipeline extends EventEmitter {
         playbackPath,
         mdPath: job.mdPath || null,
         wordCount: result.word_count,
+        // Clear any error from a prior failed attempt — without this a
+        // video that failed once (e.g. a truncated download) keeps
+        // showing the stale error text in the Library even after a
+        // successful retry.
+        error: null,
       });
 
       this.maybeEmbedSegments(video.id, channel.id);
@@ -1323,6 +1328,135 @@ export class Pipeline extends EventEmitter {
     // Store the JOB (not the Promise) so dedup returns the stub instantly.
     this.inflightRetranscribe.set(key, Promise.resolve(job));
     // Track work too so a future shutdown handler could await pending jobs.
+    void work;
+
+    return job;
+  }
+
+  /** Retry a failed (or stuck) video FROM SCRATCH: delete any partial /
+   *  corrupt download, reset the queue row to a clean state, and run the
+   *  full pipeline again (download → transcribe → embed → summarize).
+   *
+   *  This is the fix for download failures like a truncated container
+   *  ("moov atom not found"). Re-transcribe and the auto-retry loop both
+   *  REUSE the existing on-disk file (processVideo skips download when
+   *  video_path exists), so they re-hit the same corrupt bytes forever.
+   *  Deleting the file first forces a fresh download.
+   *
+   *  Shares the retranscribe FIFO queue + inflight-dedup map so manual
+   *  reprocessing never runs concurrently and overwhelms the machine.
+   *  Returns a stub job immediately; progress is watched via the same
+   *  /api/pipeline/state polling as every other job. */
+  async retryVideo(videoId: string, channelId: string): Promise<PipelineJob> {
+    const key = `${channelId}:${videoId}`;
+    const existing = this.inflightRetranscribe.get(key);
+    if (existing) return existing;
+
+    const entry = getDb()
+      .prepare("SELECT * FROM video_queue WHERE video_id = ? AND channel_id = ?")
+      .get(videoId, channelId) as QueueEntry | undefined;
+    if (!entry) throw new Error(`Video not found in queue: ${videoId}`);
+
+    const channel = this.config.channels.find(c => c.id === channelId) || {
+      id: channelId, name: channelId, url: "", enabled: true,
+    };
+
+    // Local-folder channels own their source file (we never downloaded
+    // it and must not delete it) — only the derived audio is ours to
+    // clean. YouTube-sourced channels: wipe the (possibly corrupt) mp4
+    // plus its sibling .m4a / .wav so processVideo re-downloads fresh.
+    const isLocal = isLocalVideoUrl(entry.url);
+    const toRemove = new Set<string>();
+    if (entry.video_path) {
+      if (!isLocal) toRemove.add(entry.video_path);
+      toRemove.add(replaceExtension(entry.video_path, ".m4a"));
+      toRemove.add(replaceExtension(entry.video_path, ".wav"));
+    }
+    if (!isLocal && entry.playback_path) toRemove.add(entry.playback_path);
+
+    // CRUCIAL: a video that failed *during* download/extraction never
+    // got its video_path persisted (that only happens on "complete"),
+    // so the sibling-deletion above misses the orphaned working-dir
+    // artifacts. processVideo reuses an existing working-dir .m4a
+    // (line ~874: `if (!fs.existsSync(m4aPath))`), so a stale corrupt
+    // .m4a would be reused and reproduce the exact same failure
+    // ("moov atom not found"). Reconstruct the working-dir paths the
+    // same way processVideo does and wipe them too. Local channels
+    // skip the .mp4 (it's the user's source) but still clear derived
+    // audio.
+    if (!isLocal) {
+      const safeName = datedBaseName(entry.title, entry.upload_date);
+      const channelFolder = channelFolderName(channel.name);
+      const workDir = path.join(this.config.workingDir, channelFolder);
+      for (const ext of [".mp4", ".m4a", ".wav", ".playback.m4a"]) {
+        toRemove.add(path.join(workDir, `${safeName}${ext}`));
+      }
+    }
+
+    toRemove.forEach((f) => {
+      try { fs.unlinkSync(f); } catch { /* already gone — fine */ }
+    });
+
+    // Reset the row: queued state, error cleared, retry counter zeroed,
+    // and (for non-local) the file pointers dropped so the download-skip
+    // shortcut in processVideo doesn't fire on the stale path.
+    updateQueueStatus(videoId, channelId, {
+      status: "queued",
+      error: null,
+      retries: 0,
+      mdPath: null,
+      wordCount: 0,
+      ...(isLocal ? {} : { videoPath: null, playbackPath: null }),
+    });
+
+    const video: ChannelVideo = {
+      id: entry.video_id,
+      title: entry.title,
+      url: entry.url,
+      duration: entry.duration,
+      isLive: !!entry.is_live,
+      isShorts: !!entry.is_shorts,
+      uploadDate: entry.upload_date,
+      thumbnail: null,
+    };
+
+    const job: PipelineJob = {
+      id: `retry-${videoId}-${Date.now()}`,
+      channelId: channel.id,
+      channelName: channel.name,
+      videoId,
+      videoTitle: entry.title,
+      videoUrl: entry.url,
+      status: "queued",
+      progress: 0,
+      startedAt: new Date().toISOString(),
+      retries: 0,
+    };
+    this.jobs.unshift(job);
+    this.emit("jobStarted", job);
+
+    const previous = this.retranscribeQueue;
+    let releaseSlot: () => void = () => {};
+    this.retranscribeQueue = new Promise<void>((resolve) => { releaseSlot = resolve; });
+
+    const work = (async () => {
+      try { await previous; } catch { /* swallow — we want the slot */ }
+      try {
+        // Re-read the row so processVideo sees the freshly-reset state
+        // (null file paths in particular) rather than the stale entry.
+        const fresh = getDb()
+          .prepare("SELECT * FROM video_queue WHERE video_id = ? AND channel_id = ?")
+          .get(videoId, channelId) as QueueEntry | undefined;
+        await this.processVideo(channel, video, fresh ?? entry);
+      } catch (err) {
+        console.error(`[retry] background failure for ${videoId}:`, err);
+      } finally {
+        this.inflightRetranscribe.delete(key);
+        releaseSlot();
+      }
+    })();
+
+    this.inflightRetranscribe.set(key, Promise.resolve(job));
     void work;
 
     return job;
