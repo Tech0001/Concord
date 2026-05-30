@@ -675,17 +675,17 @@ export default function Library() {
                             <>
                             {showRetry && (
                               <Button
-                                size="sm"
+                                size="icon"
                                 variant="ghost"
-                                className="h-8 text-xs whitespace-nowrap"
+                                className="h-8 w-8 shrink-0"
                                 disabled={inFlight}
                                 onClick={() => retryDownload(entry)}
-                                title={inFlight ? `Retrying (${entry.status})` : "Re-download and reprocess from scratch"}
+                                title={inFlight ? `Retrying (${entry.status})` : "Retry: re-download and reprocess from scratch"}
+                                aria-label="Retry download"
                               >
                                 {inFlight
                                   ? <Loader2 className="h-3 w-3 animate-spin" />
                                   : <RefreshCw className="h-3 w-3" />}
-                                <span className="ml-1">{inFlight ? "Retrying" : "Retry"}</span>
                               </Button>
                             )}
                               <Button
