@@ -401,7 +401,7 @@ export default function Library() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-4 space-y-4">
+    <div className="mx-auto max-w-[1350px] px-4 py-4 space-y-4">
       <Card>
         <CardHeader className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
