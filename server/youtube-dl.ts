@@ -59,6 +59,15 @@ interface YouTubeDlFormat {
   filesize?: number;
   filesize_approx?: number;
   quality?: string;
+  // yt-dlp fills these for multi-language audio tracks and any
+  // codec-aware UI surfacing. `language` is ISO 639-1 (e.g. "en",
+  // "es", "ja"); `format_note` is yt-dlp's free-form label which
+  // often spells out "English original", "Spanish (Latin America)",
+  // etc. when language alone is ambiguous.
+  language?: string | null;
+  acodec?: string;
+  vcodec?: string;
+  format_note?: string;
 }
 
 interface ProgressCallback {
@@ -128,15 +137,16 @@ export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoIn
 }
 
 export async function downloadYouTubeVideo(
-  videoId: string, 
-  formatId: string, 
+  videoId: string,
+  formatId: string,
   outputPath: string,
-  progressCallback: ProgressCallback
+  progressCallback: ProgressCallback,
+  opts: { audioLanguage?: string } = {},
 ): Promise<void> {
   try {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
-    
-    console.log(`Starting download for video ${videoId} with format ${formatId}`);
+
+    console.log(`Starting download for video ${videoId} with format ${formatId} (audioLang: ${opts.audioLanguage || "any"})`);
     console.log(`Output path: ${outputPath}`);
     
     // Start downloading with progress tracking
@@ -152,11 +162,23 @@ export async function downloadYouTubeVideo(
     const cookieOpts = youtubeCookieOpts();
     const sleep = youtubeSleep();
 
-    // When downloading, we need to specify that we want both video and audio
+    // Build the audio selector. yt-dlp's selector grammar lets us
+    // express "prefer audio in language X but fall back if none":
+    //   bestaudio[language=en][ext=m4a] / bestaudio[language=en] / bestaudio[ext=m4a]
+    // The double-slash chain tries each branch left-to-right until
+    // one matches a real stream. Without the audioLanguage filter
+    // yt-dlp picks whichever audio comes first — usually the
+    // channel's original language, not the user's preference.
+    const audioSelector = opts.audioLanguage
+      ? `(bestaudio[language=${opts.audioLanguage}][ext=m4a]/bestaudio[language=${opts.audioLanguage}]/bestaudio[ext=m4a])`
+      : "bestaudio[ext=m4a]";
+
+    // youtube-dl-exec library call (NOT child_process.exec) — runs
+    // yt-dlp with the format selector built above so the user's
+    // preferred audio language wins on multi-track videos.
     const downloader = youtubedl.exec(url, {
       output: outputPath,
-      // Use format-specific download with audio - This ensures we get both video and audio streams
-      format: formatId + "+bestaudio[ext=m4a]/best",
+      format: `${formatId}+${audioSelector}/best`,
       // Merge video and audio streams into a single file
       mergeOutputFormat: "mp4",
       // Important: Force enabling the postprocessor for proper audio/video merging

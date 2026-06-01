@@ -401,7 +401,38 @@ export function registerPipelineRoutes(app: Express, pipeline: Pipeline): void {
     }
   });
 
+  // Retry a failed video from scratch — deletes any partial/corrupt
+  // download and re-runs the full pipeline (download → transcribe →
+  // embed → summarize). Unlike retranscribe (which reuses the existing
+  // file), this re-downloads, so it's the right tool for download
+  // failures like a truncated container ("moov atom not found"). Returns
+  // a stub job immediately; progress watched via /api/pipeline/state.
+  app.post("/api/pipeline/retry", async (req, res) => {
+    try {
+      const { videoId, channelId } = req.body;
+      if (!videoId || !channelId) return res.status(400).json({ error: "videoId and channelId required" });
+      const job = await pipeline.retryVideo(videoId, channelId);
+      res.json(job);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Retry failed" });
+    }
+  });
+
   // Transcribe an already-downloaded video file. Used by the
+  // Manual trigger for the channel UC-id backfill. Same job that
+  // runs in the background at server startup, exposed so the user
+  // can re-run after adding new channels without restarting.
+  app.post("/api/pipeline/resolve-channel-ucs", async (_req, res) => {
+    try {
+      const { backfillChannelUcIds } = await import("./db");
+      const { resolveChannelUcId } = await import("./channel-monitor");
+      const result = await backfillChannelUcIds(resolveChannelUcId);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to resolve channel UC ids" });
+    }
+  });
+
   // file-import flow when the user drops a local video into the app
   // without going through a YouTube download.
   app.post("/api/pipeline/transcribe-file", async (req, res) => {

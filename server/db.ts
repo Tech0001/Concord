@@ -450,6 +450,15 @@ function runMigrations(database: Database.Database) {
   ensureColumn("video_queue", "category", "TEXT NOT NULL DEFAULT 'personal'");
   ensureColumn("youtube_watchers", "category", "TEXT NOT NULL DEFAULT 'personal'");
 
+  // YouTube UC... channel id stored on the channel row so manual
+  // downloads can attach to the right configured channel reliably.
+  // Populated opportunistically — every time yt-dlp tells us the UC
+  // id for a video belonging to a known channel, we cache it here.
+  // Match logic in findChannelByYouTubeInfo prefers this column over
+  // URL substring or name match (both of which have failure modes:
+  // /@handle URLs don't contain the UC id; display names can drift).
+  ensureColumn("channels", "youtube_channel_id", "TEXT");
+
   // ---- Markdown docs as a first-class content type ----
   //
   // documents rows mirror files under one of the configured docs

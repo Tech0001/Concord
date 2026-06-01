@@ -14,6 +14,8 @@ import { registerVoiceNoteRoutes } from "./routes-voice-notes";
 import { registerYouTubeRoutes } from "./routes-youtube";
 import { registerDocsRoutes } from "./routes-docs";
 import { indexDocs } from "./docs-index";
+import { backfillChannelUcIds } from "./db";
+import { resolveChannelUcId } from "./channel-monitor";
 
 /**
  * Top-level HTTP wire-up. Every actual endpoint lives in a sibling
@@ -95,6 +97,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   } catch (err) {
     console.warn("[docs] Initial index failed:", err instanceof Error ? err.message : err);
   }
+
+  // Background backfill: resolve YouTube UC ids for any configured
+  // channels that don't have one cached yet. Lets manual downloads
+  // attach to the right configured channel via direct id equality
+  // (matching by name or URL substring misses when yt-dlp returns
+  // the /channel/UC... URL form against an @handle row, or when
+  // the user's display name differs from yt-dlp's). Fire-and-forget
+  // — server boot doesn't wait on YouTube round-trips.
+  void backfillChannelUcIds(resolveChannelUcId).then((result) => {
+    if (result.resolved > 0) {
+      console.log(`[channels] backfilled ${result.resolved} UC id(s) (${result.failed} failed, ${result.skipped} already cached or local)`);
+    }
+  }).catch((err) => {
+    console.warn("[channels] UC backfill failed:", err instanceof Error ? err.message : err);
+  });
 
   // ---- Pipeline lifecycle + channel management ----
   // /api/pipeline/{start,stop,check-now,process,events,transcripts,

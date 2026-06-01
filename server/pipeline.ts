@@ -18,6 +18,7 @@ import {
   enqueueVideo,
   enqueueVideos,
   countChannelQueueEntries,
+  findChannelByYouTubeInfo,
   getQueueEntryByVideoId,
   getNextPending,
   getConfigValues,
@@ -233,6 +234,7 @@ export class Pipeline extends EventEmitter {
       skipShorts: true,
       videoQuality: "1080",
       videoCodec: "any",
+      audioLanguage: "en",
       youtubeCookiesFromBrowser: "",
       youtubeCookiesFile: "",
       youtubeSpeedPreset: "conservative",
@@ -283,6 +285,7 @@ export class Pipeline extends EventEmitter {
       skipShorts: parseConfigBoolean(stored.skipShorts, defaults.skipShorts),
       videoQuality: stored.videoQuality || defaults.videoQuality,
       videoCodec: stored.videoCodec || defaults.videoCodec,
+      audioLanguage: stored.audioLanguage ?? defaults.audioLanguage,
       youtubeCookiesFromBrowser: stored.youtubeCookiesFromBrowser || defaults.youtubeCookiesFromBrowser,
       youtubeCookiesFile: stored.youtubeCookiesFile || defaults.youtubeCookiesFile,
       youtubeSpeedPreset: parseSpeedPreset(stored.youtubeSpeedPreset, defaults.youtubeSpeedPreset),
@@ -377,6 +380,7 @@ export class Pipeline extends EventEmitter {
       skipShorts: config.skipShorts,
       videoQuality: config.videoQuality,
       videoCodec: config.videoCodec,
+      audioLanguage: config.audioLanguage,
       youtubeCookiesFromBrowser: config.youtubeCookiesFromBrowser,
       youtubeCookiesFile: config.youtubeCookiesFile,
       youtubeSpeedPreset: config.youtubeSpeedPreset,
@@ -969,6 +973,11 @@ export class Pipeline extends EventEmitter {
         playbackPath,
         mdPath: job.mdPath || null,
         wordCount: result.word_count,
+        // Clear any error from a prior failed attempt — without this a
+        // video that failed once (e.g. a truncated download) keeps
+        // showing the stale error text in the Library even after a
+        // successful retry.
+        error: null,
       });
 
       this.maybeEmbedSegments(video.id, channel.id);
@@ -1055,11 +1064,20 @@ export class Pipeline extends EventEmitter {
     const codec = codecOverride || this.config.videoCodec || "any";
     const heightCap = q === "best" ? "" : `[height<=${parseInt(q) || 1080}]`;
 
+    // Audio selector — when audioLanguage is set, prefer that
+    // language's track; fall back to any audio. Solves the
+    // multi-language-channel case (YouTube creators who publish
+    // dubbed tracks in several languages and yt-dlp picks one at
+    // random without this filter).
+    const lang = this.config.audioLanguage;
+    const audioLangM4a = lang ? `bestaudio[language=${lang}][ext=m4a]` : "bestaudio[ext=m4a]";
+    const audioLangAny = lang ? `bestaudio[language=${lang}]` : "bestaudio";
+
     // Per-codec selectors. AV1/VP9 ship in WebM, H.264 in MP4.
-    const av1   = `bestvideo${heightCap}[vcodec^=av01]+bestaudio[ext=m4a]/bestvideo${heightCap}[vcodec^=av01]+bestaudio`;
-    const vp9   = `bestvideo${heightCap}[vcodec^=vp9]+bestaudio[ext=m4a]/bestvideo${heightCap}[vcodec^=vp9]+bestaudio`;
-    const avc1  = `bestvideo${heightCap}[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best${heightCap}[ext=mp4][vcodec^=avc1]`;
-    const anyMp4 = `bestvideo${heightCap}[ext=mp4]+bestaudio[ext=m4a]`;
+    const av1   = `bestvideo${heightCap}[vcodec^=av01]+${audioLangM4a}/bestvideo${heightCap}[vcodec^=av01]+${audioLangAny}/bestvideo${heightCap}[vcodec^=av01]+bestaudio`;
+    const vp9   = `bestvideo${heightCap}[vcodec^=vp9]+${audioLangM4a}/bestvideo${heightCap}[vcodec^=vp9]+${audioLangAny}/bestvideo${heightCap}[vcodec^=vp9]+bestaudio`;
+    const avc1  = `bestvideo${heightCap}[ext=mp4][vcodec^=avc1]+${audioLangM4a}/bestvideo${heightCap}[ext=mp4][vcodec^=avc1]+${audioLangAny}/best${heightCap}[ext=mp4][vcodec^=avc1]`;
+    const anyMp4 = `bestvideo${heightCap}[ext=mp4]+${audioLangM4a}/bestvideo${heightCap}[ext=mp4]+${audioLangAny}`;
     const anyAny = `best${heightCap}/best`;
 
     let order: string[];
@@ -1079,7 +1097,7 @@ export class Pipeline extends EventEmitter {
         break;
       default: // "any" — let yt-dlp pick the best by size/bitrate
         order = [
-          `bestvideo${heightCap}+bestaudio[ext=m4a]/bestvideo${heightCap}+bestaudio`,
+          `bestvideo${heightCap}+${audioLangM4a}/bestvideo${heightCap}+${audioLangAny}/bestvideo${heightCap}+bestaudio`,
           anyMp4,
           anyAny,
         ];
@@ -1315,6 +1333,135 @@ export class Pipeline extends EventEmitter {
     return job;
   }
 
+  /** Retry a failed (or stuck) video FROM SCRATCH: delete any partial /
+   *  corrupt download, reset the queue row to a clean state, and run the
+   *  full pipeline again (download → transcribe → embed → summarize).
+   *
+   *  This is the fix for download failures like a truncated container
+   *  ("moov atom not found"). Re-transcribe and the auto-retry loop both
+   *  REUSE the existing on-disk file (processVideo skips download when
+   *  video_path exists), so they re-hit the same corrupt bytes forever.
+   *  Deleting the file first forces a fresh download.
+   *
+   *  Shares the retranscribe FIFO queue + inflight-dedup map so manual
+   *  reprocessing never runs concurrently and overwhelms the machine.
+   *  Returns a stub job immediately; progress is watched via the same
+   *  /api/pipeline/state polling as every other job. */
+  async retryVideo(videoId: string, channelId: string): Promise<PipelineJob> {
+    const key = `${channelId}:${videoId}`;
+    const existing = this.inflightRetranscribe.get(key);
+    if (existing) return existing;
+
+    const entry = getDb()
+      .prepare("SELECT * FROM video_queue WHERE video_id = ? AND channel_id = ?")
+      .get(videoId, channelId) as QueueEntry | undefined;
+    if (!entry) throw new Error(`Video not found in queue: ${videoId}`);
+
+    const channel = this.config.channels.find(c => c.id === channelId) || {
+      id: channelId, name: channelId, url: "", enabled: true,
+    };
+
+    // Local-folder channels own their source file (we never downloaded
+    // it and must not delete it) — only the derived audio is ours to
+    // clean. YouTube-sourced channels: wipe the (possibly corrupt) mp4
+    // plus its sibling .m4a / .wav so processVideo re-downloads fresh.
+    const isLocal = isLocalVideoUrl(entry.url);
+    const toRemove = new Set<string>();
+    if (entry.video_path) {
+      if (!isLocal) toRemove.add(entry.video_path);
+      toRemove.add(replaceExtension(entry.video_path, ".m4a"));
+      toRemove.add(replaceExtension(entry.video_path, ".wav"));
+    }
+    if (!isLocal && entry.playback_path) toRemove.add(entry.playback_path);
+
+    // CRUCIAL: a video that failed *during* download/extraction never
+    // got its video_path persisted (that only happens on "complete"),
+    // so the sibling-deletion above misses the orphaned working-dir
+    // artifacts. processVideo reuses an existing working-dir .m4a
+    // (line ~874: `if (!fs.existsSync(m4aPath))`), so a stale corrupt
+    // .m4a would be reused and reproduce the exact same failure
+    // ("moov atom not found"). Reconstruct the working-dir paths the
+    // same way processVideo does and wipe them too. Local channels
+    // skip the .mp4 (it's the user's source) but still clear derived
+    // audio.
+    if (!isLocal) {
+      const safeName = datedBaseName(entry.title, entry.upload_date);
+      const channelFolder = channelFolderName(channel.name);
+      const workDir = path.join(this.config.workingDir, channelFolder);
+      for (const ext of [".mp4", ".m4a", ".wav", ".playback.m4a"]) {
+        toRemove.add(path.join(workDir, `${safeName}${ext}`));
+      }
+    }
+
+    toRemove.forEach((f) => {
+      try { fs.unlinkSync(f); } catch { /* already gone — fine */ }
+    });
+
+    // Reset the row: queued state, error cleared, retry counter zeroed,
+    // and (for non-local) the file pointers dropped so the download-skip
+    // shortcut in processVideo doesn't fire on the stale path.
+    updateQueueStatus(videoId, channelId, {
+      status: "queued",
+      error: null,
+      retries: 0,
+      mdPath: null,
+      wordCount: 0,
+      ...(isLocal ? {} : { videoPath: null, playbackPath: null }),
+    });
+
+    const video: ChannelVideo = {
+      id: entry.video_id,
+      title: entry.title,
+      url: entry.url,
+      duration: entry.duration,
+      isLive: !!entry.is_live,
+      isShorts: !!entry.is_shorts,
+      uploadDate: entry.upload_date,
+      thumbnail: null,
+    };
+
+    const job: PipelineJob = {
+      id: `retry-${videoId}-${Date.now()}`,
+      channelId: channel.id,
+      channelName: channel.name,
+      videoId,
+      videoTitle: entry.title,
+      videoUrl: entry.url,
+      status: "queued",
+      progress: 0,
+      startedAt: new Date().toISOString(),
+      retries: 0,
+    };
+    this.jobs.unshift(job);
+    this.emit("jobStarted", job);
+
+    const previous = this.retranscribeQueue;
+    let releaseSlot: () => void = () => {};
+    this.retranscribeQueue = new Promise<void>((resolve) => { releaseSlot = resolve; });
+
+    const work = (async () => {
+      try { await previous; } catch { /* swallow — we want the slot */ }
+      try {
+        // Re-read the row so processVideo sees the freshly-reset state
+        // (null file paths in particular) rather than the stale entry.
+        const fresh = getDb()
+          .prepare("SELECT * FROM video_queue WHERE video_id = ? AND channel_id = ?")
+          .get(videoId, channelId) as QueueEntry | undefined;
+        await this.processVideo(channel, video, fresh ?? entry);
+      } catch (err) {
+        console.error(`[retry] background failure for ${videoId}:`, err);
+      } finally {
+        this.inflightRetranscribe.delete(key);
+        releaseSlot();
+      }
+    })();
+
+    this.inflightRetranscribe.set(key, Promise.resolve(job));
+    void work;
+
+    return job;
+  }
+
   /** Worker invoked from retranscribeVideo's queue. Receives the
    *  pre-built stub job + entry + channel (all looked up by the
    *  enqueueing call) so we don't double-fetch. Mutates the job in
@@ -1349,6 +1496,18 @@ export class Pipeline extends EventEmitter {
       const videoPath = entry.video_path;
       const retainedM4aPath = videoPath ? replaceExtension(videoPath, ".m4a") : null;
       let audioPath: string | null = retainedM4aPath ? replaceExtension(retainedM4aPath, ".wav") : null;
+
+      // Retranscribe ALWAYS forces a fresh extract from the source —
+      // otherwise a redownload (e.g. picking a different audio track
+      // for a multi-language video) silently keeps using the cached
+      // .wav from the prior run and reproduces the same transcript.
+      // Cheap: ffmpeg copy/extract is seconds for typical videos.
+      if (audioPath && fs.existsSync(audioPath)) {
+        try { fs.unlinkSync(audioPath); } catch { /* ignore */ }
+      }
+      if (retainedM4aPath && fs.existsSync(retainedM4aPath)) {
+        try { fs.unlinkSync(retainedM4aPath); } catch { /* ignore */ }
+      }
 
       if (!audioPath || !fs.existsSync(audioPath)) {
         if (!videoPath || !fs.existsSync(videoPath)) {
@@ -1445,11 +1604,20 @@ export class Pipeline extends EventEmitter {
     const monitoredChannel = channelId
       ? this.config.channels.find(c => c.id === channelId)
       : undefined;
-    const namedChannel = channelName
+    // findChannelByYouTubeInfo runs the full match cascade (stored
+    // UC id, UC-in-URL, @handle, normalized URL, name). When the
+    // caller passed a UC id as channelId, this catches it; when
+    // they passed only a display name, this catches the @handle /
+    // normalized URL cases the simpler name-equality check missed.
+    const matchedChannel = !monitoredChannel
+      ? findChannelByYouTubeInfo(channelId, channelName, null)
+      : undefined;
+    const namedChannel = !matchedChannel && channelName
       ? this.config.channels.find(c => c.name.toLowerCase() === channelName.toLowerCase())
       : undefined;
     const channel: ChannelConfig =
       monitoredChannel ||
+      (matchedChannel as ChannelConfig | undefined) ||
       namedChannel ||
       (existingEntry ? { id: existingEntry.channel_id, name: channelName || existingEntry.channel_id, url: "", enabled: true } : undefined) ||
       { id: channelId || "manual", name: channelName || "Manual", url: "", enabled: true };

@@ -507,12 +507,27 @@ export default function VideoPreview({
                       if (format.ext === "m4a" && !format.resolution) return true;
                       return format.format_id && (format.ext === "mp4" || format.ext === "webm");
                     })
-                    .map(format => (
-                      <SelectItem key={format.format_id} value={format.format_id}>
-                        {format.resolution || "Audio only"} ({format.ext.toUpperCase()})
-                        {format.quality ? ` - ${format.quality}` : ''}
-                      </SelectItem>
-                    ))
+                    .map(format => {
+                      // Surface the audio-track language so the user
+                      // can pick the right one on multi-language
+                      // videos. yt-dlp gives us either `language`
+                      // (ISO 639-1) or a richer `format_note`
+                      // ("English original", "Spanish (Latin
+                      // America)"). Prefer the note when available
+                      // — it disambiguates dialect / role variants
+                      // that the bare code can't.
+                      const hasAudio = format.acodec && format.acodec !== "none";
+                      const langLabel = hasAudio
+                        ? (format.format_note || (format.language ? `audio: ${format.language}` : null))
+                        : null;
+                      return (
+                        <SelectItem key={format.format_id} value={format.format_id}>
+                          {format.resolution || "Audio only"} ({format.ext.toUpperCase()})
+                          {format.quality ? ` - ${format.quality}` : ''}
+                          {langLabel ? ` · ${langLabel}` : ''}
+                        </SelectItem>
+                      );
+                    })
                   }
                 </SelectContent>
               </Select>

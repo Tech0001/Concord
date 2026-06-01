@@ -40,23 +40,57 @@ function summarizeFfmpegStderr(stderr: string): string {
   return pick.join(" | ").slice(0, 300);
 }
 
+/** Probe the codec of the first audio stream (e.g. "aac", "opus",
+ *  "vorbis"). Returns null when it can't be determined — the caller
+ *  treats unknown as "not safe to stream-copy" and re-encodes. */
+function probeAudioCodec(filePath: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const args = [
+      "-v", "error",
+      "-select_streams", "a:0",
+      "-show_entries", "stream=codec_name",
+      "-of", "default=nokey=1:noprint_wrappers=1",
+      filePath,
+    ];
+    const proc = spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    proc.stdout.on("data", (d: Buffer) => { out += d.toString(); });
+    proc.on("close", () => resolve(out.trim() || null));
+    proc.on("error", () => resolve(null));
+  });
+}
+
 /**
- * Fast extract: just demux the audio track from a video file without re-encoding.
- * Returns the path to the extracted audio file (typically m4a for YouTube videos).
+ * Extract the audio track from a video into an .m4a sidecar.
+ *
+ * AAC audio (YouTube's itag 140 / most H.264 + VP9 pairings) stream-
+ * copies into the m4a container in ~no time. But MP4/m4a can't hold a
+ * copied Opus or Vorbis stream — and YouTube serves Opus (itag 251)
+ * alongside AV1 video, so a user who prefers the av01 codec, or any
+ * video that only offers Opus audio, would hit:
+ *   "Could not write header ... incorrect codec parameters ... Invalid argument"
+ * Probe the source codec and re-encode to AAC when a stream-copy
+ * isn't possible. Re-encoding audio is cheap (well under 1× realtime)
+ * and keeps the output a universally-valid .m4a for both whisper and
+ * browser playback.
  */
-export function copyAudioTrack(
+export async function copyAudioTrack(
   videoPath: string,
   outputPath: string,
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const args = [
-      "-i", videoPath,
-      "-vn",                      // No video
-      "-acodec", "copy",           // Stream copy — no re-encode, nearly instant
-      "-y", outputPath,
-    ];
+  const codec = (await probeAudioCodec(videoPath))?.toLowerCase() ?? null;
+  // Only AAC is safe to copy into an MP4/m4a container. Everything
+  // else (opus, vorbis, or unknown) gets re-encoded to AAC.
+  const canStreamCopy = codec === "aac";
 
-    console.log(`[audio] Demuxing audio: ffmpeg ${args.join(" ")}`);
+  return new Promise((resolve, reject) => {
+    const args = canStreamCopy
+      ? ["-i", videoPath, "-vn", "-acodec", "copy", "-y", outputPath]
+      : ["-i", videoPath, "-vn", "-c:a", "aac", "-b:a", "192k", "-y", outputPath];
+
+    console.log(
+      `[audio] ${canStreamCopy ? "Demuxing" : `Re-encoding ${codec ?? "unknown"}→aac`} audio: ffmpeg ${args.join(" ")}`,
+    );
 
     const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
@@ -64,7 +98,7 @@ export function copyAudioTrack(
 
     proc.on("close", (code) => {
       if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
-        console.log(`[audio] Audio track copied: ${outputPath}`);
+        console.log(`[audio] Audio track written: ${outputPath}`);
         resolve(outputPath);
       } else {
         reject(new Error(`Audio track copy failed (code ${code}): ${summarizeFfmpegStderr(stderr)}`));

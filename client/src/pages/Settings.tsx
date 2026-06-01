@@ -952,6 +952,7 @@ interface PipelineConfigShape {
   transcriptDir?: string;
   videoQuality?: string;
   videoCodec?: string;
+  audioLanguage?: string;
   youtubeCookiesFromBrowser?: string;
   youtubeCookiesFile?: string;
   youtubeSpeedPreset?: "fast" | "balanced" | "conservative";
@@ -975,6 +976,7 @@ function PipelineSettingsCard() {
   const [transcriptDir, setTranscriptDir] = useState("");
   const [videoQuality, setVideoQuality] = useState("1080");
   const [videoCodec, setVideoCodec] = useState("any");
+  const [audioLanguage, setAudioLanguage] = useState("en");
   const [youtubeCookies, setYoutubeCookies] = useState("");
   const [youtubeCookiesFile, setYoutubeCookiesFile] = useState("");
   const [youtubeSpeed, setYoutubeSpeed] = useState<"fast" | "balanced" | "conservative">("conservative");
@@ -994,6 +996,7 @@ function PipelineSettingsCard() {
       setTranscriptDir(c.transcriptDir ?? "");
       setVideoQuality(c.videoQuality ?? "1080");
       setVideoCodec(c.videoCodec ?? "any");
+      setAudioLanguage(c.audioLanguage ?? "en");
       setYoutubeCookies(c.youtubeCookiesFromBrowser ?? "");
       setYoutubeCookiesFile(c.youtubeCookiesFile ?? "");
       setYoutubeSpeed(c.youtubeSpeedPreset ?? "conservative");
@@ -1034,6 +1037,7 @@ function PipelineSettingsCard() {
         transcriptDir,
         videoQuality,
         videoCodec,
+        audioLanguage,
         youtubeCookiesFromBrowser: youtubeCookies,
         youtubeCookiesFile: youtubeCookiesFile.trim(),
         youtubeSpeedPreset: youtubeSpeed,
@@ -1118,6 +1122,17 @@ function PipelineSettingsCard() {
                 ))}
               </SelectContent>
             </Select>
+          </div>
+          <div className="grid grid-cols-[160px_1fr] items-center gap-2">
+            <label className="text-muted-foreground" htmlFor="settings-audioLang">Audio language</label>
+            <Input
+              id="settings-audioLang"
+              value={audioLanguage}
+              onChange={(e) => setAudioLanguage(e.target.value.trim().toLowerCase())}
+              className="h-8 font-mono"
+              placeholder="en"
+              title="Preferred audio track language (ISO 639-1, e.g. en, es, ja). Used when YouTube serves multiple language audio tracks for the same video. Leave blank to let yt-dlp pick whichever audio it lists first."
+            />
           </div>
           <div className="grid grid-cols-[160px_1fr] items-center gap-2">
             <label className="text-muted-foreground" htmlFor="settings-dailyCap">Daily cap</label>

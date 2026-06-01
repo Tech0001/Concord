@@ -1,7 +1,7 @@
 {
   "name": "concord",
   "productName": "Concord",
-  "version": "2.0.0",
+  "version": "2.2.0",
   "description": "Concord — personal research archive for spoken-word media",
   "author": "mackers",
   "homepage": "https://github.com/mackers/concord",
@@ -21,6 +21,7 @@
     "electron:dev": "pnpm run build && pnpm run electron:rebuild && NODE_ENV=production electron dist/electron/main.js",
     "fetch-binaries": "./scripts/fetch-binaries.sh",
     "electron:dist": "pnpm run fetch-binaries && pnpm run build && electron-builder --mac --arm64",
+    "electron:dist:notarize": ". ./.env.notarize && pnpm run electron:dist",
     "electron:dist:linux": "pnpm run build && pnpm run electron:rebuild && electron-builder --linux"
   },
   "dependencies": {

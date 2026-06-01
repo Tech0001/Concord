@@ -310,7 +310,8 @@ export default function Library() {
   // state. Idle when nothing's in flight (no wasted polls during normal
   // browsing).
   const hasInFlight = entries.some(
-    e => e.status === "queued" || e.status === "transcribing" || e.status === "extracting_audio",
+    e => e.status === "queued" || e.status === "transcribing"
+      || e.status === "extracting_audio" || e.status === "downloading",
   );
   useEffect(() => {
     if (!hasInFlight) return;
@@ -360,6 +361,27 @@ export default function Library() {
     }
   };
 
+  /** Retry a failed video from scratch — re-downloads + reprocesses.
+   *  Distinct from re-transcribe: that reuses the (possibly corrupt)
+   *  file on disk, which is useless for download failures. Reuses the
+   *  retranscribing latch so the row shows the same in-flight spinner. */
+  const retryDownload = async (entry: QueueEntry) => {
+    const key = `${entry.channel_id}:${entry.video_id}`;
+    setRetranscribing(prev => ({ ...prev, [key]: true }));
+    try {
+      await apiRequest("POST", "/api/pipeline/retry", {
+        videoId: entry.video_id,
+        channelId: entry.channel_id,
+      });
+      toast({ title: "Retry started", description: entry.title });
+      fetchData();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Retry failed", description: error.message });
+    } finally {
+      setRetranscribing(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
   const openDrawer = (entry: QueueEntry) => {
     setDrawerVideo({
       video_id: entry.video_id,
@@ -379,7 +401,7 @@ export default function Library() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-4 space-y-4">
+    <div className="mx-auto max-w-[1350px] px-4 py-4 space-y-4">
       <Card>
         <CardHeader className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -539,13 +561,13 @@ export default function Library() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-[36px]" aria-label="Starred"></TableHead>
-                  <TableHead className="w-[110px]">Upload</TableHead>
+                  <TableHead className="w-[96px]">Upload</TableHead>
                   <TableHead>Title</TableHead>
-                  <TableHead className="w-[150px]">Channel</TableHead>
-                  <TableHead className="w-[120px]">Status</TableHead>
-                  <TableHead className="w-[95px]">Words</TableHead>
-                  <TableHead className="w-[120px]">Files</TableHead>
-                  <TableHead className="w-[200px] text-right">Actions</TableHead>
+                  <TableHead className="w-[130px]">Channel</TableHead>
+                  <TableHead className="w-[110px]">Status</TableHead>
+                  <TableHead className="w-[64px]">Words</TableHead>
+                  <TableHead className="w-[90px]">Files</TableHead>
+                  <TableHead className="w-[110px] text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -572,7 +594,7 @@ export default function Library() {
                         {formatDate(entry.upload_date) || "No date"}
                         {entry.duration ? <div>{formatDuration(entry.duration)}</div> : null}
                       </TableCell>
-                      <TableCell className="py-2 min-w-[280px]">
+                      <TableCell className="py-2 min-w-[220px]">
                         <div className="font-medium line-clamp-2">{entry.title}</div>
                         <div className="text-xs text-muted-foreground font-mono mt-1">{entry.video_id}</div>
                         {(speakerBadges[`${entry.video_id}|${entry.channel_id}`] || []).slice(0, 3).length > 0 && (
@@ -599,7 +621,7 @@ export default function Library() {
                         {entry.error && <div className="text-xs text-destructive mt-1 line-clamp-2">{entry.error}</div>}
                       </TableCell>
                       <TableCell className="py-2 text-sm">
-                        <div className="truncate max-w-[140px]">{channelNames[entry.channel_id] || entry.channel_id}</div>
+                        <div className="truncate max-w-[120px]">{channelNames[entry.channel_id] || entry.channel_id}</div>
                         {!!entry.is_live && <Badge variant="outline" className="mt-1 gap-1"><Radio className="h-3 w-3" />Live</Badge>}
                       </TableCell>
                       <TableCell className="py-2">{statusBadge(entry.status)}</TableCell>
@@ -618,91 +640,104 @@ export default function Library() {
                         </div>
                       </TableCell>
                       <TableCell className="py-2">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 text-xs whitespace-nowrap"
-                            disabled={!entry.video_path}
-                            onClick={() => openDrawer(entry)}
-                          >
-                            <Play className="h-3 w-3" />
-                            <span className="ml-1">Open</span>
-                          </Button>
-                          {(() => {
-                            // The button reflects an active retranscribe via
-                            // either of two signals so the spinner stays up
-                            // for the entire job (not just the click→enqueue
-                            // millisecond):
-                            //   • retranscribing[key] — local "I just clicked"
-                            //     latch, true until fetchData replies.
-                            //   • entry.status — server-side queue state. A
-                            //     retranscribe sets it to "queued" then
-                            //     "transcribing"; revert (or "complete") on done.
-                            const inFlight = retranscribing[key]
-                              || entry.status === "queued"
-                              || entry.status === "transcribing"
-                              || entry.status === "extracting_audio";
-                            return (
+                        {(() => {
+                          // inFlight reflects an active retry/retranscribe so
+                          // the menu items disable + the trigger shows a
+                          // spinner. The Status column carries the live
+                          // queued/transcribing/downloading badge, so inline
+                          // progress text in the actions cell is redundant —
+                          // which is what lets us collapse everything but
+                          // "Open" into the overflow menu and keep the column
+                          // narrow.
+                          const inFlight = retranscribing[key]
+                            || entry.status === "queued"
+                            || entry.status === "transcribing"
+                            || entry.status === "extracting_audio"
+                            || entry.status === "downloading";
+                          // Retry = full re-download + reprocess; the right
+                          // action for failed/errored rows (re-transcribe
+                          // reuses the existing file, useless for download
+                          // failures).
+                          const showRetry = entry.status === "failed" || !!entry.error;
+                          const hasMenuActions = showRetry || canRetranscribe || !!entry.video_path;
+                          return (
+                            <div className="flex items-center justify-end gap-1">
                               <Button
                                 size="sm"
-                                variant="ghost"
-                                className="h-8 text-xs whitespace-nowrap"
-                                disabled={!canRetranscribe || inFlight}
-                                onClick={() => retranscribe(entry)}
-                                title={inFlight ? `Re-transcribing (${entry.status})` : `Re-transcribe with: ${model}`}
+                                variant="outline"
+                                className="h-8 px-2 text-xs"
+                                disabled={!entry.video_path}
+                                onClick={() => openDrawer(entry)}
                               >
-                                {inFlight
-                                  ? <Loader2 className="h-3 w-3 animate-spin" />
-                                  : <RotateCcw className="h-3 w-3" />}
-                                <span className="ml-1">{inFlight ? entry.status === "queued" ? "Queued" : "Transcribing" : "Re-transcribe"}</span>
+                                <Play className="h-3 w-3" />
+                                <span className="ml-1">Open</span>
                               </Button>
-                            );
-                          })()}
-
-                          {/* Row overflow menu — currently just Rename;
-                              Move-to-Trash will land here once wired. */}
-                          <Popover>
-                            <PopoverTrigger asChild>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-8 w-8"
-                                disabled={!entry.video_path}
-                                title="More actions"
-                              >
-                                <MoreVertical className="h-3.5 w-3.5" />
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-48 p-1" align="end">
-                              <button
-                                type="button"
-                                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
-                                disabled={!entry.video_path}
-                                onClick={() => setRenameTarget(entry)}
-                              >
-                                <Pencil className="h-3 w-3" />
-                                Rename file
-                              </button>
-                              <button
-                                type="button"
-                                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400"
-                                disabled={!entry.video_path}
-                                onClick={() => setTrashTarget(entry)}
-                              >
-                                <Trash2 className="h-3 w-3" />
-                                Move to trash…
-                              </button>
-                            </PopoverContent>
-                          </Popover>
-                        </div>
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-8 w-8 shrink-0"
+                                    disabled={!hasMenuActions}
+                                    title="More actions"
+                                  >
+                                    {inFlight
+                                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      : <MoreVertical className="h-3.5 w-3.5" />}
+                                  </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-52 p-1" align="end">
+                                  {showRetry && (
+                                    <button
+                                      type="button"
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                                      disabled={inFlight}
+                                      onClick={() => retryDownload(entry)}
+                                    >
+                                      <RefreshCw className="h-3 w-3" />
+                                      {inFlight ? "Retrying…" : "Retry (re-download)"}
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                                    disabled={!canRetranscribe || inFlight}
+                                    onClick={() => retranscribe(entry)}
+                                    title={`Re-transcribe with: ${model}`}
+                                  >
+                                    <RotateCcw className="h-3 w-3" />
+                                    {inFlight ? "Working…" : "Re-transcribe"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                                    disabled={!entry.video_path}
+                                    onClick={() => setRenameTarget(entry)}
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                    Rename file
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400"
+                                    disabled={!entry.video_path}
+                                    onClick={() => setTrashTarget(entry)}
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                    Move to trash…
+                                  </button>
+                                </PopoverContent>
+                              </Popover>
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                     </TableRow>
                   );
                 })}
                 {!entries.length && (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
                       No videos match these filters.
                     </TableCell>
                   </TableRow>
