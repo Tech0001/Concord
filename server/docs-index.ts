@@ -26,6 +26,13 @@ export interface DocumentRow {
   bytes: number;
   mtime_ms: number;
   root_id: string | null;
+  /** Raw author string from the doc's YAML frontmatter (`author:`).
+   *  Null when the doc declares none. */
+  author: string | null;
+  /** Resolved global speaker id when `author` matches a known speaker
+   *  (case-insensitive); null otherwise. Links docs + transcripts by
+   *  the same person. */
+  speaker_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -142,10 +149,53 @@ export function renameRoot(id: string, label: string): DocsRoot | null {
 /** First H1 in the file, falling back to the filename (without
  *  extension). Used so the Docs list shows something readable when the
  *  user hasn't given the file a title. */
+/** Split a leading YAML frontmatter block (delimited by `---` lines)
+ *  from the markdown body. Returns the parsed key→value map (flat,
+ *  string values only — enough for `author`, `title`, etc.) plus the
+ *  body with the block removed. No YAML dependency: we only need
+ *  simple `key: value` lines, which keeps the supply-chain surface
+ *  small. A doc with no frontmatter returns {} + the original body. */
+export function parseFrontmatter(content: string): { data: Record<string, string>; body: string } {
+  // Must start at the very top (allow a leading BOM / blank lines).
+  const m = content.match(/^﻿?\s*---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!m) return { data: {}, body: content };
+  const data: Record<string, string> = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = line.match(/^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/);
+    if (!kv) continue;
+    let value = kv[2].trim();
+    // Strip surrounding quotes and a trailing inline comment is left
+    // alone (rare in author lines); unwrap a single-item flow list
+    // like [Brandon Biggs] → Brandon Biggs (first element).
+    if (/^\[.*\]$/.test(value)) {
+      value = value.slice(1, -1).split(",")[0].trim();
+    }
+    value = value.replace(/^["']|["']$/g, "").trim();
+    if (value) data[kv[1].toLowerCase()] = value;
+  }
+  return { data, body: content.slice(m[0].length) };
+}
+
 function extractTitle(content: string, relPath: string): string {
-  const m = content.match(/^#\s+(.+)$/m);
+  // Look for the title in frontmatter first, then the first H1 in the
+  // body, then fall back to the filename.
+  const { data, body } = parseFrontmatter(content);
+  if (data.title) return data.title;
+  const m = body.match(/^#\s+(.+)$/m);
   if (m) return m[1].trim();
   return path.basename(relPath, path.extname(relPath));
+}
+
+/** Resolve an author name to a global speaker id (case-insensitive
+ *  exact match on speakers.name). Returns null when no speaker matches
+ *  — the raw author text is still stored, so attribution isn't lost,
+ *  it just isn't linked to a person entity yet. */
+function resolveSpeakerIdByName(author: string | null): string | null {
+  if (!author) return null;
+  const row = getDb()
+    .prepare("SELECT id FROM speakers WHERE lower(name) = lower(?) AND is_noise = 0 LIMIT 1")
+    .get(author.trim()) as { id: string } | undefined;
+  return row?.id ?? null;
 }
 
 /** Walk the docs root and return every .md file (relPath + absPath).
@@ -215,13 +265,13 @@ export function indexDocs(options: IndexOptions = {}): IndexResult {
   let inserted = 0, updated = 0, unchanged = 0;
 
   const insertStmt = db.prepare(`
-    INSERT INTO documents (id, rel_path, title, content_hash, bytes, mtime_ms, root_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO documents (id, rel_path, title, content_hash, bytes, mtime_ms, root_id, author, speaker_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const updateStmt = db.prepare(`
     UPDATE documents
        SET title = ?, content_hash = ?, bytes = ?, mtime_ms = ?,
-           updated_at = datetime('now')
+           author = ?, speaker_id = ?, updated_at = datetime('now')
      WHERE id = ?
   `);
 
@@ -232,10 +282,15 @@ export function indexDocs(options: IndexOptions = {}): IndexResult {
         seenKeys.add(key);
         let stat: fs.Stats;
         let hash: string, bytes: number, title: string;
+        let author: string | null = null;
+        let speakerId: string | null = null;
         try {
           stat = fs.statSync(abs);
           ({ hash, bytes } = sha256File(abs));
-          title = extractTitle(fs.readFileSync(abs, "utf-8"), rel);
+          const content = fs.readFileSync(abs, "utf-8");
+          title = extractTitle(content, rel);
+          author = parseFrontmatter(content).data.author ?? null;
+          speakerId = resolveSpeakerIdByName(author);
         } catch (err) {
           console.warn(`[docs-index] Skipping ${root.label}/${rel}: ${err instanceof Error ? err.message : err}`);
           continue;
@@ -245,11 +300,11 @@ export function indexDocs(options: IndexOptions = {}): IndexResult {
         const existing = existingByKey.get(key);
 
         if (!existing) {
-          insertStmt.run(id, rel, title, hash, bytes, stat.mtimeMs, root.id);
+          insertStmt.run(id, rel, title, hash, bytes, stat.mtimeMs, root.id, author, speakerId);
           inserted += 1;
           toEmbed.push(id);
         } else if (existing.content_hash !== hash) {
-          updateStmt.run(title, hash, bytes, stat.mtimeMs, existing.id);
+          updateStmt.run(title, hash, bytes, stat.mtimeMs, author, speakerId, existing.id);
           updated += 1;
           toEmbed.push(existing.id);
         } else {
@@ -274,6 +329,22 @@ export function indexDocs(options: IndexOptions = {}): IndexResult {
       }
     }
   })();
+
+  // Re-resolve author → speaker links for ALL docs in one pass. This
+  // is what makes "I labeled a Brandon Biggs speaker last week, now my
+  // older Brandon docs should link to him" work on a plain Refresh
+  // without touching the files. Cheap — a single correlated UPDATE.
+  // is_noise speakers are excluded so a doc never links to a noise
+  // cluster that happens to share a name.
+  db.prepare(`
+    UPDATE documents
+       SET speaker_id = (
+         SELECT s.id FROM speakers s
+         WHERE lower(s.name) = lower(documents.author) AND s.is_noise = 0
+         LIMIT 1
+       )
+     WHERE author IS NOT NULL AND author <> ''
+  `).run();
 
   // Re-embed changed/new docs in the background — don't block the
   // sync response on the LLM round-trip. Each call is best-effort;

@@ -502,6 +502,19 @@ function runMigrations(database: Database.Database) {
   ensureColumn("documents", "root_id", "TEXT");
   relaxDocumentsRelPathUnique(database);
 
+  // Author attribution. `author` holds the raw frontmatter value
+  // (always set when the doc declares one), so docs by people who
+  // aren't in the speakers registry still get attributed. `speaker_id`
+  // is the resolved link to the global speakers table — populated when
+  // the author name matches a known speaker (case-insensitive), so a
+  // doc written by Brandon Biggs and a video where Brandon Biggs
+  // speaks point at the same person entity. Re-resolved on every
+  // index so a speaker created AFTER the doc still links on the next
+  // Refresh.
+  ensureColumn("documents", "author", "TEXT");
+  ensureColumn("documents", "speaker_id", "TEXT");
+  database.exec("CREATE INDEX IF NOT EXISTS idx_documents_speaker ON documents(speaker_id)");
+
   // note_anchors gains optional doc-source columns so a single anchor
   // can point at either a video timestamp or a doc character range.
   // The video_id/channel_id columns were NOT NULL in the original

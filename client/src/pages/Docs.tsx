@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import { ChevronDown, ChevronRight, FileText, FolderOpen, FolderPlus, Loader2, NotebookPen, Pencil, RefreshCw, Search, Sparkles, Star, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, FolderOpen, FolderPlus, Loader2, NotebookPen, Pencil, RefreshCw, Search, Sparkles, Star, Trash2, User, X } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import FolderInput from "@/components/FolderInput";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -41,6 +41,14 @@ interface DocumentMeta {
   starred: number;
   category: string;
   root_id?: string | null;
+  /** Raw frontmatter author (null when none declared). */
+  author?: string | null;
+  /** Resolved global speaker, when `author` matched a known speaker.
+   *  speaker_name/color come from the speakers registry so the chip
+   *  matches the transcript-side styling. */
+  speaker_id?: string | null;
+  speaker_name?: string | null;
+  speaker_color?: string | null;
 }
 
 interface FileSelection {
@@ -512,6 +520,20 @@ export default function Docs() {
                           <NotebookPen className="h-3.5 w-3.5" />
                           Add note
                         </Button>
+                        {selectedDoc.author && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
+                            style={selectedDoc.speaker_color
+                              ? { background: selectedDoc.speaker_color, color: "white" }
+                              : { background: "var(--secondary)" }}
+                            title={selectedDoc.speaker_id
+                              ? `Attributed to ${selectedDoc.speaker_name} (linked to speaker)`
+                              : `Author: ${selectedDoc.author} (no matching speaker — add one on the Speakers page to link)`}
+                          >
+                            <User className="h-3 w-3" />
+                            {selectedDoc.speaker_name ?? selectedDoc.author}
+                          </span>
+                        )}
                       </>
                     )}
                     <span className="text-xs text-muted-foreground font-mono break-all">

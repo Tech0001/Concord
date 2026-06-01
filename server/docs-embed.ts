@@ -207,8 +207,8 @@ export async function embedDocument(documentId: string, opts: EmbedDocOptions = 
   // rel_path. COALESCE handles legacy rows from before the column
   // existed; those map to the empty-id root.
   const doc = db
-    .prepare("SELECT id, rel_path, COALESCE(root_id, '') AS root_id FROM documents WHERE id = ?")
-    .get(documentId) as { id: string; rel_path: string; root_id: string } | undefined;
+    .prepare("SELECT id, rel_path, author, COALESCE(root_id, '') AS root_id FROM documents WHERE id = ?")
+    .get(documentId) as { id: string; rel_path: string; author: string | null; root_id: string } | undefined;
   if (!doc) return { documentId, chunks: 0, embedded: 0, skipped: 0, ms: 0, error: "Document not found" };
 
   const roots = listRoots();
@@ -259,10 +259,16 @@ export async function embedDocument(documentId: string, opts: EmbedDocOptions = 
   let embedded = 0;
   for (let i = 0; i < chunks.length; i += BATCH) {
     const slice = chunks.slice(i, i + BATCH);
-    // Doc passages get embedded raw — same convention as transcript
-    // segments in embed-segments.ts (no document-side instruction
-    // prefix; the query side gets the prefix via formatEmbeddingQuery).
-    const inputs = slice.map(c => c.text);
+    // Prefix the author's name onto each chunk's embed INPUT (not the
+    // stored text) when the doc declares one — the same trick that
+    // makes "what did Brandon say about X" surface his spoken
+    // segments. With the author prefixed, the person-aware query
+    // expansion in rag-chat ("Brandon Biggs: <query>") ranks this
+    // author's written passages too, so a question about a person
+    // pulls both their docs and their transcripts. Authorless docs
+    // embed raw — same convention as transcript segments.
+    const authorPrefix = doc.author ? `${doc.author}: ` : "";
+    const inputs = slice.map(c => `${authorPrefix}${c.text}`);
     const vectors = await embed({ texts: inputs, model });
     db.transaction(() => {
       for (let j = 0; j < slice.length; j++) {

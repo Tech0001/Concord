@@ -18,6 +18,7 @@ import {
   type DocumentRow,
 } from "./docs-index";
 import { embedDocument } from "./docs-embed";
+import { getDb } from "./db";
 
 /**
  * Markdown file viewer + roots-management endpoints. Multi-root:
@@ -159,7 +160,12 @@ export function registerDocsRoutes(app: Express): void {
     const rootId = typeof req.query.rootId === "string" ? req.query.rootId : undefined;
     const doc = getDocumentByRelPath(rel, rootId);
     if (!doc) return res.status(404).json({ error: "Document not in index — try Refresh" });
-    res.json({ document: doc });
+    // Attach the resolved speaker's display name + color so the viewer
+    // can render an author chip that matches the speaker styling used
+    // on the transcript side. author_unlinked surfaces the raw
+    // frontmatter author when it didn't resolve to a known speaker, so
+    // the UI can still show "by <name>" (just without the chip color).
+    res.json({ document: enrichDocAuthor(doc) });
   });
 
   app.patch("/api/docs/:id/starred", (req: Request<{ id: string }>, res) => {
@@ -261,6 +267,29 @@ export interface DocsTreeNode {
   documentId?: string;
   starred?: number;
   category?: string;
+  /** Raw frontmatter author, surfaced so the tree can show a "by …"
+   *  hint and the list can be grouped/filtered by person later. */
+  author?: string | null;
+}
+
+/** Attach the resolved speaker's display name + color to a document
+ *  row for the API response. When `speaker_id` is set we return the
+ *  speaker's canonical name + color (chip styling matches the
+ *  transcript side); otherwise the raw frontmatter `author` is still
+ *  present on the row so the UI shows "by <name>" without a color. */
+function enrichDocAuthor(doc: DocumentRow): DocumentRow & {
+  speaker_name?: string | null;
+  speaker_color?: string | null;
+} {
+  if (!doc.speaker_id) return doc;
+  const sp = getDocSpeaker(doc.speaker_id);
+  return { ...doc, speaker_name: sp?.name ?? null, speaker_color: sp?.display_color ?? null };
+}
+
+function getDocSpeaker(speakerId: string): { name: string; display_color: string | null } | undefined {
+  return getDb()
+    .prepare("SELECT name, display_color FROM speakers WHERE id = ?")
+    .get(speakerId) as { name: string; display_color: string | null } | undefined;
 }
 
 /** Recursive directory walk. Only includes .md files (and the folders
@@ -297,6 +326,7 @@ function buildTree(
         documentId: doc?.id,
         starred: doc?.starred ?? 0,
         category: doc?.category ?? "personal",
+        author: doc?.author ?? null,
       });
     }
   }
