@@ -620,6 +620,96 @@ export function searchTranscriptSegments(query: string, filters: TranscriptSearc
   `).all(...params) as TranscriptSearchResult[];
 }
 
+/** Doc-shaped search result — the video fields are placeholders ("")
+ *  and the source/doc_* fields tell the client to render a doc
+ *  citation. Mirrors the doc rows that searchSemantic emits, so the
+ *  Transcripts page can interleave keyword doc hits with transcript
+ *  hits using the same rendering path. */
+export interface DocSearchResult extends TranscriptSearchResult {
+  source: "doc";
+  document_id: string;
+  doc_root_id: string;
+  doc_rel_path: string;
+  doc_title: string;
+  doc_heading_path: string;
+  doc_start_char: number;
+  doc_end_char: number;
+  doc_chunk_index: number;
+}
+
+/** Keyword (FTS5) search over markdown doc chunks. Returns doc-shaped
+ *  results ranked by bm25 (lower = better, same convention as the
+ *  transcript FTS). Honors the category filter; channel / speaker /
+ *  tag / date filters are video-only and ignored for docs. */
+export function searchDocsFts(query: string, filters: TranscriptSearchFilters = {}): DocSearchResult[] {
+  const ftsQuery = buildFtsQuery(query);
+  if (!ftsQuery) return [];
+
+  const where: string[] = ["docs_fts MATCH ?"];
+  const params: any[] = [ftsQuery];
+  if (filters.category === "personal" || filters.category === "work") {
+    where.push("d.category = ?");
+    params.push(filters.category);
+  }
+  const limit = Math.min(Math.max(Math.floor(filters.limit ?? 100), 1), 500);
+  params.push(limit);
+
+  const rows = getDb().prepare(`
+    SELECT
+      d.id          AS document_id,
+      COALESCE(d.root_id, '') AS doc_root_id,
+      d.rel_path    AS doc_rel_path,
+      d.title       AS doc_title,
+      d.category    AS doc_category,
+      f.heading_path AS doc_heading_path,
+      CAST(f.chunk_index AS INTEGER) AS doc_chunk_index,
+      CAST(f.start_char AS INTEGER)  AS doc_start_char,
+      CAST(f.end_char AS INTEGER)    AS doc_end_char,
+      f.text        AS text,
+      bm25(docs_fts) AS rank
+    FROM docs_fts f
+    JOIN documents d ON d.id = f.document_id
+    WHERE ${where.join(" AND ")}
+    ORDER BY rank ASC
+    LIMIT ?
+  `).all(...params) as Array<{
+    document_id: string; doc_root_id: string; doc_rel_path: string;
+    doc_title: string; doc_category: string; doc_heading_path: string | null;
+    doc_chunk_index: number; doc_start_char: number; doc_end_char: number;
+    text: string; rank: number;
+  }>;
+
+  return rows.map((r) => ({
+    source: "doc" as const,
+    // Placeholder video fields — the client branches on `source`.
+    video_id: "",
+    channel_id: "",
+    channel_name: null,
+    title: r.doc_title,
+    url: "",
+    upload_date: null,
+    status: "doc",
+    is_live: 0,
+    video_path: null,
+    md_path: null,
+    word_count: 0,
+    segment_index: r.doc_chunk_index,
+    start_seconds: 0,
+    end_seconds: 0,
+    speaker: null,
+    text: r.text,
+    rank: r.rank,
+    document_id: r.document_id,
+    doc_root_id: r.doc_root_id,
+    doc_rel_path: r.doc_rel_path,
+    doc_title: r.doc_title,
+    doc_heading_path: r.doc_heading_path ?? "",
+    doc_start_char: r.doc_start_char,
+    doc_end_char: r.doc_end_char,
+    doc_chunk_index: r.doc_chunk_index,
+  }));
+}
+
 export function getTranscriptSegmentsForVideo(videoId: string, channelId: string): TranscriptSegment[] {
   const entry = getQueueEntry(videoId, channelId);
   if (!entry?.md_path || !fs.existsSync(entry.md_path)) return [];

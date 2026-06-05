@@ -13,6 +13,8 @@ import {
   getTranscriptSearchIndexStats,
   refreshTranscriptSearchIndex,
   searchTranscriptSegments,
+  searchDocsFts,
+  videoKind,
   setVideoNotes,
   setVideoStarred,
   updateQueueStatus,
@@ -144,17 +146,54 @@ export function registerLibraryRoutes(app: Express, pipeline: Pipeline): void {
       const tagsParam = typeof req.query.tags === "string" ? req.query.tags : "";
       const tags = tagsParam.split(",").map(t => t.trim()).filter(Boolean);
       const speakerIdParam = typeof req.query.speakerId === "string" && req.query.speakerId ? req.query.speakerId : undefined;
-      const results = searchTranscriptSegments(query, {
-        channelId: String(req.query.channelId || "all"),
-        status: String(req.query.status || "complete"),
-        isLive: liveFilter === "live" ? true : liveFilter === "video" ? false : undefined,
-        dateFrom: req.query.dateFrom ? String(req.query.dateFrom) : undefined,
-        dateTo: req.query.dateTo ? String(req.query.dateTo) : undefined,
-        tags,
-        speakerId: speakerIdParam,
-        category: req.query.category ? String(req.query.category) : undefined,
-        limit: req.query.limit ? Number(req.query.limit) : 100,
-      });
+      const category = req.query.category ? String(req.query.category) : undefined;
+      const limit = req.query.limit ? Number(req.query.limit) : 100;
+
+      // File-type scope: any subset of audio / video / doc. Missing or
+      // "audio,video,doc" means "all kinds". Keyword search of docs
+      // hits the docs_fts index; transcript hits get filtered to the
+      // selected audio/video kinds by file extension.
+      const allowed = new Set(["audio", "video", "doc"]);
+      const sources = String(req.query.sources || "")
+        .split(",").map(s => s.trim()).filter(s => allowed.has(s));
+      const set = sources.length > 0 ? new Set(sources) : null;
+      const wantVideo = !set || set.has("video") || set.has("audio");
+      const wantDoc = !set || set.has("doc");
+
+      let transcriptResults: ReturnType<typeof searchTranscriptSegments> = [];
+      if (wantVideo) {
+        transcriptResults = searchTranscriptSegments(query, {
+          channelId: String(req.query.channelId || "all"),
+          status: String(req.query.status || "complete"),
+          isLive: liveFilter === "live" ? true : liveFilter === "video" ? false : undefined,
+          dateFrom: req.query.dateFrom ? String(req.query.dateFrom) : undefined,
+          dateTo: req.query.dateTo ? String(req.query.dateTo) : undefined,
+          tags,
+          speakerId: speakerIdParam,
+          category,
+          limit,
+        });
+        // Narrow by audio-vs-video kind when only one is selected.
+        if (set && !(set.has("video") && set.has("audio"))) {
+          transcriptResults = transcriptResults.filter((r) => {
+            const k = videoKind(r.video_path);
+            if (k === "video") return set.has("video");
+            if (k === "audio") return set.has("audio");
+            return true; // unknown extension — keep
+          });
+        }
+      }
+
+      // Doc keyword search is independent of channel/speaker/tag/date
+      // (those are video-only). Only the category scope applies.
+      const docResults = wantDoc ? searchDocsFts(query, { category, limit }) : [];
+
+      // Merge + interleave by bm25 rank (lower = better). Cap at limit
+      // so one source can't crowd out the other.
+      const results = [...transcriptResults, ...docResults]
+        .sort((a, b) => a.rank - b.rank)
+        .slice(0, limit);
+
       res.json({ results, index: getTranscriptSearchIndexStats() });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Transcript search failed" });

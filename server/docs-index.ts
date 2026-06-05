@@ -14,7 +14,26 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { getConfigValues, getDb, setConfigValues } from "./db";
-import { embedDocument } from "./docs-embed";
+import { embedDocument, chunkMarkdown } from "./docs-embed";
+
+/** Rebuild the docs_fts keyword index for one document from its
+ *  current content. Same chunk boundaries the embedder uses, so a
+ *  keyword hit deep-links to the same passage a semantic hit would.
+ *  Runs during indexing — independent of any embedding model — so
+ *  keyword search of docs works even when embeddings aren't set up.
+ *  Pass the already-read file content to avoid a second read. */
+function reindexDocFts(db: ReturnType<typeof getDb>, documentId: string, content: string): void {
+  db.prepare("DELETE FROM docs_fts WHERE document_id = ?").run(documentId);
+  const chunks = chunkMarkdown(content);
+  if (chunks.length === 0) return;
+  const insert = db.prepare(`
+    INSERT INTO docs_fts (document_id, chunk_index, heading_path, start_char, end_char, text)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  for (const c of chunks) {
+    insert.run(documentId, c.index, c.headingPath || null, c.startChar, c.endChar, c.text);
+  }
+}
 
 export interface DocumentRow {
   id: string;
@@ -282,12 +301,13 @@ export function indexDocs(options: IndexOptions = {}): IndexResult {
         seenKeys.add(key);
         let stat: fs.Stats;
         let hash: string, bytes: number, title: string;
+        let content = "";
         let author: string | null = null;
         let speakerId: string | null = null;
         try {
           stat = fs.statSync(abs);
           ({ hash, bytes } = sha256File(abs));
-          const content = fs.readFileSync(abs, "utf-8");
+          content = fs.readFileSync(abs, "utf-8");
           title = extractTitle(content, rel);
           author = parseFrontmatter(content).data.author ?? null;
           speakerId = resolveSpeakerIdByName(author);
@@ -301,10 +321,12 @@ export function indexDocs(options: IndexOptions = {}): IndexResult {
 
         if (!existing) {
           insertStmt.run(id, rel, title, hash, bytes, stat.mtimeMs, root.id, author, speakerId);
+          reindexDocFts(db, id, content);
           inserted += 1;
           toEmbed.push(id);
         } else if (existing.content_hash !== hash) {
           updateStmt.run(title, hash, bytes, stat.mtimeMs, author, speakerId, existing.id);
+          reindexDocFts(db, existing.id, content);
           updated += 1;
           toEmbed.push(existing.id);
         } else {
@@ -320,15 +342,41 @@ export function indexDocs(options: IndexOptions = {}): IndexResult {
   // anchors are gone.
   let removed = 0;
   const deleteStmt = db.prepare("DELETE FROM documents WHERE id = ?");
+  const deleteFtsStmt = db.prepare("DELETE FROM docs_fts WHERE document_id = ?");
   db.transaction(() => {
     for (const row of existingRows) {
       const key = keyFor(row.root_id ?? "", row.rel_path);
       if (!seenKeys.has(key)) {
         deleteStmt.run(row.id);
+        deleteFtsStmt.run(row.id);
         removed += 1;
       }
     }
   })();
+
+  // One-time backfill: docs indexed before docs_fts existed are
+  // "unchanged" each run, so the main loop never builds their keyword
+  // rows. Catch any document with zero FTS rows and index it now.
+  // Self-limiting — once every doc has rows this query returns empty.
+  const rootPathById = new Map(roots.map((r) => [r.id, r.path]));
+  const missingFts = db.prepare(`
+    SELECT id, rel_path, COALESCE(root_id, '') AS root_id
+    FROM documents
+    WHERE id NOT IN (SELECT DISTINCT document_id FROM docs_fts)
+  `).all() as { id: string; rel_path: string; root_id: string }[];
+  if (missingFts.length > 0) {
+    db.transaction(() => {
+      for (const d of missingFts) {
+        const base = rootPathById.get(d.root_id) ?? roots[0]?.path;
+        if (!base) continue;
+        try {
+          const c = fs.readFileSync(path.join(base, d.rel_path), "utf-8");
+          reindexDocFts(db, d.id, c);
+        } catch { /* file gone — the delete pass above already handles it */ }
+      }
+    })();
+    console.log(`[docs-index] Backfilled keyword index for ${missingFts.length} doc(s)`);
+  }
 
   // Re-resolve author → speaker links for ALL docs in one pass. This
   // is what makes "I labeled a Brandon Biggs speaker last week, now my

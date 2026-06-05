@@ -119,6 +119,34 @@ export default function TranscriptSearch() {
   // "meaning" embeds the query and cosine-ranks against the embedding store
   // (semantic — finds conceptually-related segments without literal overlap).
   const [mode, setMode] = useState<"words" | "meaning">("words");
+  // File-type scope — audio / video / docs, any combination. Persisted
+  // so the choice sticks. All three on = no filter. Last one can't be
+  // turned off (the page would have nothing to search).
+  type SourceKind = "audio" | "video" | "doc";
+  const SOURCE_KEY = "concord-search-sources-v1";
+  const [enabledSources, setEnabledSources] = useState<Set<SourceKind>>(() => {
+    const all = new Set<SourceKind>(["audio", "video", "doc"]);
+    if (typeof window === "undefined") return all;
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(SOURCE_KEY) ?? "null");
+      if (Array.isArray(stored) && stored.length) {
+        const valid = stored.filter((s: string) => s === "audio" || s === "video" || s === "doc");
+        if (valid.length) return new Set<SourceKind>(valid as SourceKind[]);
+      }
+    } catch { /* ignore */ }
+    return all;
+  });
+  useEffect(() => {
+    window.localStorage.setItem(SOURCE_KEY, JSON.stringify(Array.from(enabledSources)));
+  }, [enabledSources]);
+  const toggleSource = (k: SourceKind) => {
+    setEnabledSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) { if (next.size === 1) return next; next.delete(k); }
+      else next.add(k);
+      return next;
+    });
+  };
   const [embeddingStats, setEmbeddingStats] = useState<{ totalSegments: number; totalVideos: number } | null>(null);
   const [drawerVideo, setDrawerVideo] = useState<VideoDrawerEntry | null>(null);
   const [drawerDoc, setDrawerDoc] = useState<DocDrawerEntry | null>(null);
@@ -228,6 +256,9 @@ export default function TranscriptSearch() {
     setLoading(true);
     setSearched(true);
     try {
+      // Only send sources when the user has narrowed — all three on is
+      // equivalent to no filter.
+      const sourcesArg = enabledSources.size === 3 ? undefined : Array.from(enabledSources);
       if (mode === "meaning") {
         const response = await apiRequest("POST", "/api/transcripts/search-semantic", {
           query: trimmed,
@@ -241,6 +272,7 @@ export default function TranscriptSearch() {
             tags: tagFilter,
             speakerId: speakerFilter === "all" ? undefined : speakerFilter,
             category: serverCategory || undefined,
+            ...(sourcesArg ? { sources: sourcesArg } : {}),
           },
         });
         const data = await response.json() as { results: TranscriptSearchResult[] };
@@ -256,6 +288,7 @@ export default function TranscriptSearch() {
           tags: tagFilter.join(","),
           speakerId: speakerFilter === "all" ? "" : speakerFilter,
           category: serverCategory,
+          sources: sourcesArg ? sourcesArg.join(",") : "",
           limit: "200",
           t: String(Date.now()),
         }));
@@ -367,6 +400,28 @@ export default function TranscriptSearch() {
                 >
                   Meaning
                 </button>
+              </div>
+              {/* File-type scope — audio / video / docs. The last one
+                  can't be turned off so there's always something to
+                  search. */}
+              <div className="inline-flex h-9 items-center gap-1 rounded-md border bg-card px-1 text-xs" role="group" aria-label="Source types">
+                {(["audio", "video", "doc"] as const).map((k) => {
+                  const on = enabledSources.has(k);
+                  const label = k === "doc" ? "Docs" : k === "audio" ? "Audio" : "Video";
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={on}
+                      onClick={() => toggleSource(k)}
+                      title={on ? `Searching ${label.toLowerCase()}` : `${label} excluded — click to include`}
+                      className={`rounded px-2 py-1 transition-colors ${on ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
             <Select value={channelId} onValueChange={setChannelId}>
@@ -610,7 +665,7 @@ export default function TranscriptSearch() {
               );
             })}
             {searched && !loading && results.length === 0 && (
-              <p className="text-xs text-muted-foreground p-3">No transcript segments matched this search.</p>
+              <p className="text-xs text-muted-foreground p-3">Nothing matched this search across the selected sources.</p>
             )}
             {!searched && (
               <p className="text-xs text-muted-foreground p-3">Search for words or phrases spoken in transcripts.</p>

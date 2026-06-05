@@ -108,6 +108,21 @@ const SCHEMA = `
     tokenize = 'unicode61'
   );
 
+  -- Keyword (FTS5) index over markdown doc chunks, mirroring
+  -- transcript_segments_fts. Populated during indexing (NOT embedding)
+  -- so keyword search of docs works even with no embedding model
+  -- configured. One row per chunk; keyed on document_id (chunks share
+  -- the same chunk boundaries the embedder uses, for deep-linking).
+  CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
+    document_id UNINDEXED,
+    chunk_index UNINDEXED,
+    heading_path UNINDEXED,
+    start_char UNINDEXED,
+    end_char UNINDEXED,
+    text,
+    tokenize = 'unicode61'
+  );
+
   CREATE TABLE IF NOT EXISTS transcript_clips (
     id            TEXT PRIMARY KEY,
     video_id      TEXT NOT NULL,
