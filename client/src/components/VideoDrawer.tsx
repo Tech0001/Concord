@@ -330,6 +330,11 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
       setVideoDuration(player.duration);
     }
     if (activeSeconds > 0) seekTo(activeSeconds, false);
+    // Opt into WebKit/Chromium automatic PiP — the browser pops the
+    // video out on its own when the app is backgrounded. The official
+    // mechanism (cleaner than the visibilitychange fallback); harmless
+    // where unsupported.
+    try { (player as any).autoPictureInPicture = true; } catch { /* ignore */ }
   };
 
   // Whether the platform exposes ANY PiP entry point. Kept broad (not a
