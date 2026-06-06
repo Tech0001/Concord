@@ -332,38 +332,13 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     if (activeSeconds > 0) seekTo(activeSeconds, false);
   };
 
-  // Picture-in-Picture. On iOS this is the ONLY way media keeps playing
-  // while you switch to another app — the floating "popout" like
-  // YouTube. iOS exposes the webkit presentation-mode API on <video>;
-  // other browsers use the standard requestPictureInPicture(). Audio-
-  // only files now also use a <video> element (just a black frame) so
-  // PiP works for them too. Returns silently when unsupported (older
-  // iOS / standalone-PWA quirks) — the button is hidden in that case.
-  const togglePiP = useCallback(async () => {
-    const el = videoRef.current as (HTMLVideoElement & {
-      webkitSetPresentationMode?: (m: "picture-in-picture" | "inline") => void;
-      webkitPresentationMode?: string;
-    }) | null;
-    if (!el) return;
-    try {
-      if (typeof el.webkitSetPresentationMode === "function") {
-        el.webkitSetPresentationMode(
-          el.webkitPresentationMode === "picture-in-picture" ? "inline" : "picture-in-picture",
-        );
-        return;
-      }
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture();
-      } else if (typeof el.requestPictureInPicture === "function") {
-        await el.requestPictureInPicture();
-      }
-    } catch { /* user-gesture / unsupported — no-op */ }
-  }, []);
-
-  // True when the current platform exposes any PiP entry point, so the
-  // button only shows where it can actually do something.
-  const pipSupported = useMemo(() => {
-    if (typeof document === "undefined") return false;
+  // Whether the platform exposes ANY PiP entry point. Kept broad (not a
+  // strict per-element capability check) so the button still shows in
+  // contexts where the call MIGHT be blocked — e.g. iOS home-screen
+  // PWAs — and togglePiP can then explain via a toast rather than the
+  // button silently vanishing.
+  const pipApiPresent = useMemo(() => {
+    if (typeof window === "undefined") return false;
     const proto = (window as any).HTMLVideoElement?.prototype;
     return Boolean(
       (document as any).pictureInPictureEnabled ||
@@ -371,6 +346,75 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
       proto?.requestPictureInPicture,
     );
   }, []);
+
+  /** Enter PiP on the given element. iOS uses the webkit presentation-
+   *  mode API; standards-based browsers use requestPictureInPicture().
+   *  Ensures the element is playing first (iOS refuses PiP on a
+   *  not-yet-playing video). Returns true if a PiP entry point fired. */
+  const enterPiP = useCallback(async (el: HTMLVideoElement | null): Promise<boolean> => {
+    const v = el as (HTMLVideoElement & {
+      webkitSetPresentationMode?: (m: "picture-in-picture" | "inline") => void;
+      webkitSupportsPresentationMode?: (m: string) => boolean;
+      webkitPresentationMode?: string;
+    }) | null;
+    if (!v) return false;
+    try { if (v.paused) await v.play(); } catch { /* gesture issues — keep going */ }
+    try {
+      if (typeof v.webkitSetPresentationMode === "function") {
+        if (v.webkitSupportsPresentationMode && !v.webkitSupportsPresentationMode("picture-in-picture")) {
+          return false;
+        }
+        v.webkitSetPresentationMode("picture-in-picture");
+        return true;
+      }
+      if (typeof v.requestPictureInPicture === "function") {
+        await v.requestPictureInPicture();
+        return true;
+      }
+    } catch { /* fall through */ }
+    return false;
+  }, []);
+
+  // Picture-in-Picture toggle — the "Pop out" button. On iOS this is
+  // the only way media keeps playing while you switch to another app.
+  const togglePiP = useCallback(async () => {
+    const el = videoRef.current as (HTMLVideoElement & {
+      webkitSetPresentationMode?: (m: "picture-in-picture" | "inline") => void;
+      webkitPresentationMode?: string;
+    }) | null;
+    if (!el) return;
+    // Already in PiP → return inline.
+    if (el.webkitPresentationMode === "picture-in-picture") {
+      el.webkitSetPresentationMode?.("inline");
+      return;
+    }
+    if (document.pictureInPictureElement) { try { await document.exitPictureInPicture(); } catch {} return; }
+    const ok = await enterPiP(el);
+    if (!ok) {
+      // Most common on iOS home-screen PWAs, where Apple blocks the web
+      // PiP API. Tell the user the reliable workaround instead of
+      // failing silently.
+      toast({
+        title: "Picture-in-Picture unavailable here",
+        description: "iOS blocks pop-out in home-screen web apps. Open Concord in Safari, or tap the video → fullscreen, then switch apps to auto-pop-out.",
+      });
+    }
+  }, [enterPiP, toast]);
+
+  // Auto-PiP on app switch — the YouTube behavior. When the page hides
+  // (you swap to another app or lock) while a video is playing, try to
+  // pop it out automatically. Works wherever the web PiP API is allowed
+  // (Safari; standalone PWAs depending on iOS version). No-ops where
+  // it's blocked, same as the button.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== "hidden") return;
+      const el = videoRef.current as HTMLVideoElement | null;
+      if (el && !el.paused && !el.ended) void enterPiP(el);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [enterPiP]);
 
   // Media Session — lock-screen / Control Center metadata + transport
   // controls. Improves the background-audio experience and gives iOS
@@ -702,7 +746,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                     )}
                     src={streamUrl}
                   />
-                  {pipSupported && (
+                  {pipApiPresent && (
                     <Button
                       type="button"
                       size="sm"
