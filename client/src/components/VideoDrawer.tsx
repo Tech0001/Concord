@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,8 +13,9 @@ import {
 import { TagChip, TagPicker } from "@/components/TagPicker";
 import { SpeakerLabelDialog } from "@/components/SpeakerLabelDialog";
 import { apiRequest } from "@/lib/queryClient";
+import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Bookmark, BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, Download, FileText, Loader2, Play, Plus, Radio, RefreshCw, Scissors, Search, Sparkles, X } from "lucide-react";
+import { Bookmark, BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, Download, FileText, Loader2, PictureInPicture2, Play, Plus, Radio, RefreshCw, Scissors, Search, Sparkles, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 export interface VideoDrawerEntry {
@@ -331,6 +332,81 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     if (activeSeconds > 0) seekTo(activeSeconds, false);
   };
 
+  // Picture-in-Picture. On iOS this is the ONLY way media keeps playing
+  // while you switch to another app — the floating "popout" like
+  // YouTube. iOS exposes the webkit presentation-mode API on <video>;
+  // other browsers use the standard requestPictureInPicture(). Audio-
+  // only files now also use a <video> element (just a black frame) so
+  // PiP works for them too. Returns silently when unsupported (older
+  // iOS / standalone-PWA quirks) — the button is hidden in that case.
+  const togglePiP = useCallback(async () => {
+    const el = videoRef.current as (HTMLVideoElement & {
+      webkitSetPresentationMode?: (m: "picture-in-picture" | "inline") => void;
+      webkitPresentationMode?: string;
+    }) | null;
+    if (!el) return;
+    try {
+      if (typeof el.webkitSetPresentationMode === "function") {
+        el.webkitSetPresentationMode(
+          el.webkitPresentationMode === "picture-in-picture" ? "inline" : "picture-in-picture",
+        );
+        return;
+      }
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else if (typeof el.requestPictureInPicture === "function") {
+        await el.requestPictureInPicture();
+      }
+    } catch { /* user-gesture / unsupported — no-op */ }
+  }, []);
+
+  // True when the current platform exposes any PiP entry point, so the
+  // button only shows where it can actually do something.
+  const pipSupported = useMemo(() => {
+    if (typeof document === "undefined") return false;
+    const proto = (window as any).HTMLVideoElement?.prototype;
+    return Boolean(
+      (document as any).pictureInPictureEnabled ||
+      proto?.webkitSetPresentationMode ||
+      proto?.requestPictureInPicture,
+    );
+  }, []);
+
+  // Media Session — lock-screen / Control Center metadata + transport
+  // controls. Improves the background-audio experience and gives iOS
+  // the hooks it needs to keep playback alive and show nice now-playing
+  // info. Cleared when the drawer closes.
+  useEffect(() => {
+    const ms = (navigator as any).mediaSession;
+    if (!ms || !open || !video) return;
+    try {
+      ms.metadata = new (window as any).MediaMetadata({
+        title: video.title || "Concord",
+        artist: video.channel_name || "",
+        album: "Concord",
+      });
+      const player = () => videoRef.current;
+      ms.setActionHandler("play", () => { void player()?.play().catch(() => {}); });
+      ms.setActionHandler("pause", () => player()?.pause());
+      ms.setActionHandler("seekbackward", (d: any) => {
+        const p = player(); if (p) p.currentTime = Math.max(0, p.currentTime - (d?.seekOffset || 10));
+      });
+      ms.setActionHandler("seekforward", (d: any) => {
+        const p = player(); if (p) p.currentTime = p.currentTime + (d?.seekOffset || 10);
+      });
+      ms.setActionHandler("seekto", (d: any) => {
+        const p = player(); if (p && typeof d?.seekTime === "number") p.currentTime = d.seekTime;
+      });
+    } catch { /* MediaMetadata unsupported — fine */ }
+    return () => {
+      try {
+        for (const a of ["play", "pause", "seekbackward", "seekforward", "seekto"]) {
+          ms.setActionHandler(a, null);
+        }
+      } catch { /* ignore */ }
+    };
+  }, [open, videoKey(video)]);
+
   // Reset duration when switching videos so the strip doesn't briefly render
   // markers against the previous video's length.
   useEffect(() => {
@@ -606,29 +682,40 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
 
             <div className="space-y-4 p-4">
               {streamUrl ? (
-                isAudioPath(video.video_path) ? (
-                  <audio
-                    key={streamUrl}
-                    ref={videoRef as RefObject<HTMLAudioElement>}
-                    controls
-                    preload="metadata"
-                    onLoadedMetadata={onLoadedMetadata}
-                    onTimeUpdate={event => setActiveSeconds(event.currentTarget.currentTime)}
-                    className="w-full rounded-md border bg-muted"
-                    src={streamUrl}
-                  />
-                ) : (
+                <div className="relative">
+                  {/* Both audio + video use a <video> element so
+                      Picture-in-Picture works for either — PiP is what
+                      lets playback continue while you use other apps on
+                      iOS. Audio-only files just render a slim black bar
+                      (the native control row); video uses 16:9. */}
                   <video
                     key={streamUrl}
                     ref={videoRef as RefObject<HTMLVideoElement>}
                     controls
+                    playsInline
                     preload="metadata"
                     onLoadedMetadata={onLoadedMetadata}
                     onTimeUpdate={event => setActiveSeconds(event.currentTarget.currentTime)}
-                    className="aspect-video w-full rounded-md border bg-black"
+                    className={cn(
+                      "w-full rounded-md border bg-black",
+                      isAudioPath(video.video_path) ? "h-16" : "aspect-video",
+                    )}
                     src={streamUrl}
                   />
-                )
+                  {pipSupported && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      className="absolute right-2 top-2 h-8 gap-1 px-2 text-xs shadow"
+                      onClick={() => void togglePiP()}
+                      title="Pop out — keep playing while you use other apps"
+                    >
+                      <PictureInPicture2 className="h-3.5 w-3.5" />
+                      Pop out
+                    </Button>
+                  )}
+                </div>
               ) : (
                 <div className="flex aspect-video items-center justify-center rounded-md border bg-muted text-sm text-muted-foreground">
                   No saved video file for this record.
