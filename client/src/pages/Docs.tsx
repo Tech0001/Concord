@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import { ChevronDown, ChevronRight, FileText, FolderOpen, FolderPlus, Loader2, NotebookPen, Pencil, RefreshCw, Search, Sparkles, Star, Trash2, User, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, FileText, FolderOpen, FolderPlus, Loader2, NotebookPen, Pencil, RefreshCw, Search, Sparkles, Star, Trash2, User, X } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import FolderInput from "@/components/FolderInput";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -425,9 +425,12 @@ export default function Docs() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-3 lg:grid-cols-[320px_1fr]">
-          <Card className="lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto">
-            <CardContent className="p-2 space-y-2">
+        <div className="grid gap-3 lg:grid-cols-[320px_1fr] min-w-0">
+          <Card className={cn(
+            "min-w-0 overflow-hidden lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto",
+            selected && "hidden lg:block",
+          )}>
+            <CardContent className="p-2 space-y-2 min-w-0">
               <div className="relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
@@ -475,8 +478,11 @@ export default function Docs() {
             </CardContent>
           </Card>
 
-          <Card className="lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto">
-            <CardContent className="p-6">
+          <Card className={cn(
+            "min-w-0 overflow-hidden lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto",
+            !selected && "hidden lg:block",
+          )}>
+            <CardContent className="p-3 lg:p-6 min-w-0">
               {!selected ? (
                 <div className="text-sm text-muted-foreground">Pick a file from the tree.</div>
               ) : loadingFile ? (
@@ -485,6 +491,15 @@ export default function Docs() {
                 </div>
               ) : (
                 <>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="lg:hidden -ml-2 mb-2 h-8 text-xs"
+                    onClick={() => { setSelected(null); setSelectedDoc(null); setContent(""); }}
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    Files
+                  </Button>
                   <div className="mb-3 flex flex-wrap items-center gap-2">
                     {selectedDoc && (
                       <>
@@ -647,12 +662,12 @@ function TreeNodeRow({
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1 w-full rounded px-1 py-0.5 hover:bg-secondary text-left"
+        className="flex items-center gap-1 w-full min-w-0 rounded px-1 py-0.5 hover:bg-secondary text-left"
         style={{ paddingLeft: depth * 12 + 4 }}
       >
-        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <FolderOpen className="h-3 w-3 text-muted-foreground" />
-        <span className="font-medium">{node.name}</span>
+        {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+        <FolderOpen className="h-3 w-3 shrink-0 text-muted-foreground" />
+        <span className="font-medium truncate min-w-0">{node.name}</span>
       </button>
       {open && node.children && (
         <TreeList nodes={node.children} rootId={rootId} selected={selected} onOpen={onOpen} depth={depth + 1} />
@@ -685,15 +700,15 @@ function FileRow({
         type="button"
         onClick={() => onOpen(rootId, node.path)}
         className={cn(
-          "flex items-center gap-1 w-full rounded px-1 py-0.5 text-left hover:bg-secondary",
+          "flex items-center gap-1 w-full min-w-0 rounded px-1 py-0.5 text-left hover:bg-secondary",
           active && "bg-secondary text-foreground",
         )}
         style={{ paddingLeft: depth * 12 + 4 }}
         title={node.path}
       >
-        <span className="w-3 inline-block" />
-        <FileText className="h-3 w-3 text-muted-foreground" />
-        <span className="truncate flex-1">
+        <span className="w-3 inline-block shrink-0" />
+        <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
+        <span className="truncate flex-1 min-w-0">
           {rootLabel && <span className="text-muted-foreground/70 mr-1">[{rootLabel}]</span>}
           {showFullPath ? node.path : node.name}
         </span>
