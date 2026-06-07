@@ -140,6 +140,22 @@ export default function Docs() {
   useEffect(() => { void loadConfig(); }, [loadConfig]);
   useEffect(() => { if (roots.length > 0) void loadTree(); }, [roots.length, loadTree]);
 
+  // popstate fires when the user swipes back (WKWebView edge-swipe) or
+  // hits the back button. If the popped state is no longer "viewing a
+  // file" — i.e. we've returned to the entry before the first openFile
+  // pushState — collapse back to the file list.
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      if (!e.state?.docsFile) {
+        setSelected(null);
+        setSelectedDoc(null);
+        setContent("");
+      }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   // Deep link: /docs?path=foo/bar.md&rootId=...&excerpt=... opens
   // that file once the trees have loaded. rootId optional for
   // back-compat. `excerpt` is consumed by the post-render scroll
@@ -233,7 +249,20 @@ export default function Docs() {
   };
 
   const openFile = useCallback(async (rootId: string, filePath: string) => {
-    setSelected({ rootId, path: filePath });
+    // First-time selection on this page pushes a history entry so the
+    // browser back button — and iOS's edge-swipe-to-go-back gesture in
+    // the WKWebView wrapper — returns us to the file list without
+    // leaving the route. Subsequent file switches don't push again
+    // (we only need one "back" step to escape the viewer).
+    setSelected(prev => {
+      if (!prev) {
+        const next = new URL(window.location.href);
+        next.searchParams.set("path", filePath);
+        next.searchParams.set("rootId", rootId);
+        window.history.pushState({ docsFile: true }, "", next);
+      }
+      return { rootId, path: filePath };
+    });
     setLoadingFile(true);
     try {
       const fileQs = new URLSearchParams({ path: filePath, rootId });
@@ -495,7 +524,7 @@ export default function Docs() {
                     size="sm"
                     variant="ghost"
                     className="lg:hidden -ml-2 mb-2 h-8 text-xs"
-                    onClick={() => { setSelected(null); setSelectedDoc(null); setContent(""); }}
+                    onClick={() => window.history.back()}
                   >
                     <ChevronLeft className="h-3.5 w-3.5" />
                     Files
