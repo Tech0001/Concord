@@ -274,6 +274,20 @@ export function getArchiveStatus(activeEmbedModel: string | null): ArchiveStatus
       `).get(activeEmbedModel) as { c: number } | undefined
     : undefined;
 
+  // Embeddable docs = those that actually chunk to something. Files
+  // with no embeddable text — Excalidraw-only diagrams (scene blob
+  // stripped) and empty .md — produce zero chunks, so they can never
+  // be embedded and shouldn't count toward coverage (else they read as
+  // permanently "missing" while Embed-all correctly reports nothing to
+  // do). A doc is embeddable iff it has at least one chunk in either
+  // derived index (docs_fts keyword rows or vec_docs vectors), both of
+  // which come from the same chunker.
+  const embeddableDocsRow = d.prepare(`
+    SELECT COUNT(*) AS c FROM documents dd
+    WHERE EXISTS (SELECT 1 FROM docs_fts f WHERE f.document_id = dd.id)
+       OR EXISTS (SELECT 1 FROM vec_docs v WHERE v.document_id = dd.id)
+  `).get() as { c: number };
+
   return {
     archive: {
       channelCount: channels.length,
@@ -315,7 +329,10 @@ export function getArchiveStatus(activeEmbedModel: string | null): ArchiveStatus
         activeModel: activeEmbedModel,
         models: docEmbedRows,
         activeModelCovered: activeDocEmbedRow?.c ?? 0,
-        activeModelTotal: totalDocsRow.c,
+        // Denominator is embeddable docs (≥1 chunk), not ALL docs —
+        // contentless files (Excalidraw-only, empty) can't be embedded
+        // and would otherwise sit as permanent "missing".
+        activeModelTotal: embeddableDocsRow.c,
       },
     },
     channels: channelRollups,

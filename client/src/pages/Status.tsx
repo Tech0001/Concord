@@ -427,9 +427,10 @@ export default function Status() {
           icon={Sparkles}
           covered={docs.embedding.activeModelCovered}
           total={docs.embedding.activeModelTotal}
+          totalLabel="of docs with text"
           hint={
             docs.embedding.activeModel
-              ? "Use the Embed-all button on the Docs page to backfill."
+              ? "Use the Embed-all button on the Docs page to backfill. (Diagram-only / empty docs aren't counted — nothing to embed.)"
               : "No embedding model configured — set one on the AI page."
           }
           cta={{ label: "Open Docs", href: "/docs" }}
