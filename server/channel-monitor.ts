@@ -204,6 +204,25 @@ async function fetchChannelVideos(
         console.log(`[monitor] ${scanUrl}: tab not present on this channel, skipping`);
         continue;
       }
+      // yt-dlp with --ignore-errors keeps going past entries it can't
+      // extract (e.g. a just-ended livestream in /streams: "This live
+      // event has ended") but still exits non-zero, which
+      // youtube-dl-exec rethrows — discarding the otherwise-valid
+      // playlist JSON it already wrote to stdout. Salvage the good
+      // entries so one unreadable item doesn't sink the whole tab (and
+      // miss newly-ended-live VODs that only show in /streams).
+      const salvaged = salvageEntriesFromError(error);
+      if (salvaged.length > 0) {
+        let added = 0;
+        for (const video of parseVideoEntries(salvaged, maxResults)) {
+          if (seen.has(video.id)) continue;
+          seen.add(video.id);
+          results.push(video);
+          added++;
+        }
+        console.log(`[monitor] ${scanUrl}: recovered ${added} entries despite a yt-dlp item error (skipped unreadable items)`);
+        continue;
+      }
       console.error(`[monitor] Error fetching ${scanUrl}:`, error);
       errors.push(error);
     }
@@ -223,6 +242,26 @@ function isMissingTabError(error: unknown): boolean {
   const stderr = String((error as { stderr?: unknown })?.stderr ?? "");
   const message = error instanceof Error ? error.message : String(error);
   return /does not have an? \w+ tab/i.test(stderr) || /does not have an? \w+ tab/i.test(message);
+}
+
+/** yt-dlp run with --ignore-errors still prints the full playlist JSON
+ *  to stdout even when it exits non-zero because one entry failed to
+ *  extract (e.g. an ended livestream). youtube-dl-exec attaches that
+ *  stdout to the thrown error. Pull the still-valid entries out of it
+ *  (dropping null/failed ones) so a single bad item doesn't cost us the
+ *  whole scan. Returns [] when there's no usable JSON. */
+function salvageEntriesFromError(error: unknown): any[] {
+  const stdout = (error as { stdout?: unknown })?.stdout;
+  if (typeof stdout !== "string" || !stdout.trim()) return [];
+  try {
+    const parsed = JSON.parse(stdout);
+    const entries = Array.isArray(parsed)
+      ? parsed
+      : (Array.isArray((parsed as any)?.entries) ? (parsed as any).entries : []);
+    return entries.filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 function normalizeChannelScanUrls(channelUrl: string): string[] {
