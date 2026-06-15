@@ -125,10 +125,21 @@ export default function Docs() {
     setEmbedding(true);
     try {
       const r = await apiRequest("POST", "/api/docs/embed-all", { overwrite });
-      const data = await r.json() as { total: number; embedded: number; skipped: number; failed: number };
+      const data = await r.json() as {
+        total: number; docsEmbedded: number; docsSkipped: number;
+        docsFailed: number; chunksEmbedded: number; sampleError?: string;
+      };
+      const parts = [
+        `${data.docsEmbedded} embedded (${data.chunksEmbedded} chunks)`,
+        `${data.docsSkipped} already done`,
+        `${data.docsFailed} failed`,
+      ].join(" · ");
       toast({
-        title: "Embedding complete",
-        description: `${data.embedded} chunks across ${data.total} docs (${data.skipped} skipped, ${data.failed} failed)`,
+        variant: data.docsFailed > 0 ? "destructive" : "default",
+        title: data.docsFailed > 0 ? "Embedding finished with errors" : "Embedding complete",
+        description: data.docsFailed > 0 && data.sampleError
+          ? `${parts}\n${data.sampleError}`
+          : parts,
       });
     } catch (err: any) {
       toast({ variant: "destructive", title: "Embed failed", description: err.message });
