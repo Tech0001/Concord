@@ -255,14 +255,23 @@ export function getArchiveStatus(activeEmbedModel: string | null): ArchiveStatus
   const docsByCategoryRows = d.prepare(
     "SELECT category, COUNT(*) AS count FROM documents GROUP BY category ORDER BY count DESC"
   ).all() as { category: string; count: number }[];
+  // JOIN documents so we only count embeddings whose doc still exists —
+  // otherwise orphaned vec_docs rows (from deleted docs or a removed/
+  // changed root) inflate the numerator and the coverage can read past
+  // 100%. With the JOIN, covered ≤ total always.
   const docEmbedRows = d.prepare(`
-    SELECT model, COUNT(DISTINCT document_id) AS docs, COUNT(*) AS chunks
-    FROM vec_docs GROUP BY model
+    SELECT v.model, COUNT(DISTINCT v.document_id) AS docs, COUNT(*) AS chunks
+    FROM vec_docs v
+    JOIN documents dd ON dd.id = v.document_id
+    GROUP BY v.model
   `).all() as { model: string; docs: number; chunks: number }[];
   const activeDocEmbedRow = activeEmbedModel
-    ? d.prepare(
-        "SELECT COUNT(DISTINCT document_id) AS c FROM vec_docs WHERE model = ?"
-      ).get(activeEmbedModel) as { c: number } | undefined
+    ? d.prepare(`
+        SELECT COUNT(DISTINCT v.document_id) AS c
+        FROM vec_docs v
+        JOIN documents dd ON dd.id = v.document_id
+        WHERE v.model = ?
+      `).get(activeEmbedModel) as { c: number } | undefined
     : undefined;
 
   return {

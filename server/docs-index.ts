@@ -378,6 +378,22 @@ export function indexDocs(options: IndexOptions = {}): IndexResult {
     console.log(`[docs-index] Backfilled keyword index for ${missingFts.length} doc(s)`);
   }
 
+  // Sweep orphaned index rows — embeddings + keyword chunks whose
+  // document no longer exists. These accumulate because removing a doc
+  // or a whole root deletes the `documents` row but leaves the derived
+  // vec_docs / docs_fts rows behind. Orphans inflate the Status-page
+  // embed coverage (it could read past 100%) and let deleted docs keep
+  // surfacing in search. Self-healing on every index; no-op once clean.
+  const orphanVec = db.prepare(
+    "DELETE FROM vec_docs WHERE document_id NOT IN (SELECT id FROM documents)"
+  ).run();
+  const orphanFts = db.prepare(
+    "DELETE FROM docs_fts WHERE document_id NOT IN (SELECT id FROM documents)"
+  ).run();
+  if (orphanVec.changes > 0 || orphanFts.changes > 0) {
+    console.log(`[docs-index] Swept orphans: ${orphanVec.changes} vec rows, ${orphanFts.changes} keyword rows`);
+  }
+
   // Re-resolve author → speaker links for ALL docs in one pass. This
   // is what makes "I labeled a Brandon Biggs speaker last week, now my
   // older Brandon docs should link to him" work on a plain Refresh
