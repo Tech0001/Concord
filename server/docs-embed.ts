@@ -244,19 +244,16 @@ export async function embedDocument(documentId: string, opts: EmbedDocOptions = 
     }
   }
 
-  // Replace existing chunks for this (doc, model). Vec0 doesn't
-  // support partial-row updates; full delete+insert keeps things
-  // simple and correct.
-  db.prepare("DELETE FROM vec_docs WHERE document_id = ? AND model = ?").run(documentId, model);
-
-  // Embed in modest batches so a huge doc doesn't blow up a single
-  // request. Most embedders cap at ~32-64 inputs per call.
+  // Embed ALL batches first, accumulating vectors in memory — do NOT
+  // touch the stored rows yet. Only after every chunk has embedded
+  // successfully do we swap (delete old + insert new) in one
+  // transaction. This way a mid-embed failure (LLM unreachable / 507
+  // out-of-memory — both of which we hit regularly) leaves the doc's
+  // existing embeddings intact instead of wiping them and then failing.
+  // Batched so a huge doc doesn't blow up a single request; most
+  // embedders cap at ~32-64 inputs per call.
   const BATCH = 16;
-  const insert = db.prepare(`
-    INSERT INTO vec_docs (embedding, document_id, chunk_index, model, text, heading_path, start_char, end_char)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  let embedded = 0;
+  const pending: Float32Array[] = [];
   for (let i = 0; i < chunks.length; i += BATCH) {
     const slice = chunks.slice(i, i + BATCH);
     // Prefix the author's name onto each chunk's embed INPUT (not the
@@ -270,29 +267,36 @@ export async function embedDocument(documentId: string, opts: EmbedDocOptions = 
     const authorPrefix = doc.author ? `${doc.author}: ` : "";
     const inputs = slice.map(c => `${authorPrefix}${c.text}`);
     const vectors = await embed({ texts: inputs, model });
-    db.transaction(() => {
-      for (let j = 0; j < slice.length; j++) {
-        const v = normalizeVector(vectors[j]);
-        const c = slice[j];
-        insert.run(
-          float32ToBuffer(v),
-          documentId,
-          // BigInt forces INTEGER binding — better-sqlite3 binds plain
-          // JS numbers as REAL/FLOAT by default, which vec0 strictly
-          // rejects for INTEGER aux columns ("type mismatch" error).
-          BigInt(c.index),
-          model,
-          c.text,
-          c.headingPath || null,
-          BigInt(c.startChar),
-          BigInt(c.endChar),
-        );
-        embedded += 1;
-      }
-    })();
+    for (const vec of vectors) pending.push(normalizeVector(vec));
   }
 
-  return { documentId, chunks: chunks.length, embedded, skipped: 0, ms: Date.now() - t0 };
+  const insert = db.prepare(`
+    INSERT INTO vec_docs (embedding, document_id, chunk_index, model, text, heading_path, start_char, end_char)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  db.transaction(() => {
+    // Replace existing chunks for this (doc, model). Vec0 has no
+    // partial update; delete+insert is the idiom — now safely after a
+    // complete, successful embed.
+    db.prepare("DELETE FROM vec_docs WHERE document_id = ? AND model = ?").run(documentId, model);
+    chunks.forEach((c, j) => {
+      insert.run(
+        float32ToBuffer(pending[j]),
+        documentId,
+        // BigInt forces INTEGER binding — better-sqlite3 binds plain JS
+        // numbers as REAL/FLOAT by default, which vec0 strictly rejects
+        // for INTEGER aux columns ("type mismatch" error).
+        BigInt(c.index),
+        model,
+        c.text,
+        c.headingPath || null,
+        BigInt(c.startChar),
+        BigInt(c.endChar),
+      );
+    });
+  })();
+
+  return { documentId, chunks: chunks.length, embedded: chunks.length, skipped: 0, ms: Date.now() - t0 };
 }
 
 function float32ToBuffer(v: Float32Array): Buffer {
