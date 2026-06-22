@@ -79,11 +79,27 @@ function exportVideoSegment(options: {
   duration: number;
   mode: ExportMode;
   quality: string;
+  /** Source has no video track (an audio-only file). Export an audio
+   *  clip instead of wrapping the audio in an mp4 — otherwise the
+   *  output is a video-container file with no picture, which some
+   *  players show as a black screen. */
+  audioOnly: boolean;
 }): Promise<void> {
   const start = String(Math.max(0, options.startSeconds));
   const duration = String(Math.max(0.1, options.duration));
-  const args =
-    options.mode === "fast"
+  const args = options.audioOnly
+    ? (options.mode === "fast"
+        ? [
+            "-ss", start, "-i", options.inputPath, "-t", duration,
+            "-vn", "-map", "0:a:0?", "-c:a", "copy",
+            "-avoid_negative_ts", "make_zero", "-y", options.outputPath,
+          ]
+        : [
+            "-ss", start, "-i", options.inputPath, "-t", duration,
+            "-vn", "-map", "0:a:0?", "-c:a", "aac", "-b:a", "160k",
+            "-movflags", "+faststart", "-y", options.outputPath,
+          ])
+    : options.mode === "fast"
       ? [
           "-ss", start,
           "-i", options.inputPath,
@@ -610,9 +626,14 @@ function registerLibraryMutators(app: Express, pipeline: Pipeline): void {
         const baseName = path.basename(entry.video_path, path.extname(entry.video_path));
         const startLabel = formatSecondsForFile(startSeconds);
         const endLabel = formatSecondsForFile(endSeconds);
-        const outputPath = uniquePath(path.join(outputDir, `${baseName} - ${startLabel}_to_${endLabel}.mp4`));
+        // Audio-only sources export as .m4a (a real audio clip) rather
+        // than an .mp4 with no picture — the latter plays as a black
+        // screen in many players.
+        const audioOnly = videoKind(entry.video_path) === "audio";
+        const ext = audioOnly ? "m4a" : "mp4";
+        const outputPath = uniquePath(path.join(outputDir, `${baseName} - ${startLabel}_to_${endLabel}.${ext}`));
 
-        await exportVideoSegment({ inputPath, outputPath, startSeconds, duration, mode, quality });
+        await exportVideoSegment({ inputPath, outputPath, startSeconds, duration, mode, quality, audioOnly });
 
         const stat = fs.statSync(outputPath);
         res.json({ ok: true, outputPath, sizeBytes: stat.size, durationSeconds: duration, mode });
