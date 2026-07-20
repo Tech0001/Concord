@@ -309,6 +309,19 @@ export function registerDocsRoutes(app: Express): void {
 
     res.setHeader("Content-Type", mime);
     res.setHeader("Cache-Control", "private, max-age=3600");
+    // Never let the browser sniff a different type than we declared.
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    // SVGs can embed <script>. Rendered via <img> (how docs load them)
+    // scripts never run, but a DIRECT navigation to this URL would
+    // execute them on the app origin (stored XSS). A restrictive CSP +
+    // sandbox neutralizes any embedded script while still rendering the
+    // vector, so inline images keep working.
+    if (ext === ".svg") {
+      res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+      );
+    }
     fs.createReadStream(resolved).pipe(res);
   });
 }
