@@ -267,6 +267,50 @@ export function registerDocsRoutes(app: Express): void {
       res.status(500).json({ error: err instanceof Error ? err.message : "Failed to read file" });
     }
   });
+
+  // Serve image assets referenced by markdown docs (e.g. a relative
+  // ![](./images/x.png)). Same root-scoping + path-escape protection as
+  // /file, but restricted to image extensions so this can't be used to
+  // read arbitrary files out of a root. The Markdown renderer resolves
+  // a doc-relative image path against the doc's location and points the
+  // <img> here.
+  const IMAGE_MIME: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
+    ".ico": "image/x-icon",
+  };
+  app.get("/api/docs/asset", (req: Request, res: Response) => {
+    const rel = String(req.query.path ?? "");
+    if (!rel) return res.status(400).json({ error: "path is required" });
+    const ext = path.extname(rel).toLowerCase();
+    const mime = IMAGE_MIME[ext];
+    if (!mime) return res.status(415).json({ error: "Only image assets are served here" });
+
+    const rootId = typeof req.query.rootId === "string" ? req.query.rootId : undefined;
+    const roots = listRoots();
+    if (roots.length === 0) return res.status(400).json({ error: "Docs folder not configured" });
+    const root = rootId !== undefined ? findRootById(rootId) : roots[0];
+    if (!root) return res.status(404).json({ error: "Unknown root" });
+
+    const resolved = path.resolve(root.path, rel);
+    const rootResolved = path.resolve(root.path);
+    if (resolved !== rootResolved && !resolved.startsWith(rootResolved + path.sep)) {
+      return res.status(403).json({ error: "Path escapes the docs folder" });
+    }
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      return res.status(404).json({ error: "Image not found" });
+    }
+
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    fs.createReadStream(resolved).pipe(res);
+  });
 }
 
 export interface DocsTreeNode {

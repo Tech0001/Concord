@@ -9,7 +9,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { ExternalLink, FileText, Loader2 } from "lucide-react";
-import { Markdown } from "@/components/Markdown";
+import { Markdown, makeDocImageResolver } from "@/components/Markdown";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -162,7 +162,10 @@ export function DocDrawer({
               ) : error ? (
                 <div className="text-sm text-destructive">{error}</div>
               ) : (
-                <Markdown source={content} />
+                <Markdown
+                  source={content}
+                  resolveImageSrc={makeDocImageResolver(doc.rootId, doc.relPath)}
+                />
               )}
             </div>
           </>

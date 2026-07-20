@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronLeft, ChevronRight, FileText, FolderOpen, FolderPlus, Loader2, NotebookPen, Pencil, RefreshCw, Search, Sparkles, Star, Trash2, User, X } from "lucide-react";
-import { Markdown } from "@/components/Markdown";
+import { Markdown, makeDocImageResolver } from "@/components/Markdown";
 import FolderInput from "@/components/FolderInput";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCategory } from "@/hooks/use-category";
@@ -598,7 +598,10 @@ export default function Docs() {
                       {selected.path}
                     </span>
                   </div>
-                  <Markdown source={content} />
+                  <Markdown
+                    source={content}
+                    resolveImageSrc={makeDocImageResolver(selected.rootId, selected.path)}
+                  />
                 </>
               )}
             </CardContent>

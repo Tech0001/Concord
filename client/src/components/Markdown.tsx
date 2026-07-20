@@ -1,29 +1,86 @@
-import { type ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 
 /**
  * Minimal CommonMark-ish renderer. Handles the markdown features that
  * show up in planning / research docs (headings, paragraphs, lists,
- * code, links, emphasis, blockquotes, horizontal rules) without pulling
- * in a markdown library — keeps the dependency surface small per the
- * project's supply-chain caution.
+ * code, links, emphasis, blockquotes, horizontal rules, images) without
+ * pulling in a markdown library — keeps the dependency surface small
+ * per the project's supply-chain caution.
  *
  * Intentionally NOT supported (out of scope for v1):
  *   - Tables (rare in planning docs)
  *   - Footnotes / definition lists
  *   - Embedded HTML
- *   - Image rendering (links rendered as a clickable text)
  *   - Syntax highlighting inside code blocks
  *
  * Files saved by the Excalidraw VS Code plugin embed a large base64
  * scene blob between `%%` markers — those don't read as text. We strip
  * that section and surface a small notice in its place instead.
  */
-export function Markdown({ source }: { source: string }) {
+
+/** How to turn a markdown image `src` into a loadable URL. The viewer
+ *  supplies this so a doc-relative path (`./images/x.png`) resolves to
+ *  the /api/docs/asset endpoint for the right root; absolute and data:
+ *  URLs pass straight through. Defaults to identity (raw src). */
+const ResolveImageSrc = createContext<(src: string) => string>((s) => s);
+
+export function Markdown({
+  source,
+  resolveImageSrc,
+}: {
+  source: string;
+  resolveImageSrc?: (src: string) => string;
+}) {
   const blocks = parseBlocks(stripExcalidrawScene(source));
   return (
-    <div className="markdown-body space-y-3 text-sm leading-6 break-words">
-      {blocks.map((block, i) => renderBlock(block, i))}
-    </div>
+    <ResolveImageSrc.Provider value={resolveImageSrc ?? ((s) => s)}>
+      <div className="markdown-body space-y-3 text-sm leading-6 break-words">
+        {blocks.map((block, i) => renderBlock(block, i))}
+      </div>
+    </ResolveImageSrc.Provider>
+  );
+}
+
+/** Build a resolver that turns a markdown image `src` into a URL the
+ *  browser can load. Doc-relative paths (`./images/x.png`, `../a.png`,
+ *  `img/x.png`) resolve against the doc's own directory and point at
+ *  the /api/docs/asset endpoint for the doc's root; absolute (http/
+ *  data/blob) URLs pass through untouched. */
+export function makeDocImageResolver(
+  rootId: string | null | undefined,
+  docRelPath: string,
+): (src: string) => string {
+  const baseDir = docRelPath.includes("/")
+    ? docRelPath.slice(0, docRelPath.lastIndexOf("/"))
+    : "";
+  return (src: string) => {
+    const raw = src.trim();
+    if (!raw || /^(https?:|data:|blob:|#)/i.test(raw)) return raw;
+    let rel = raw.replace(/^\/+/, ""); // leading slash → treat as root-relative
+    try { rel = decodeURIComponent(rel); } catch { /* keep raw */ }
+    const parts = baseDir ? baseDir.split("/") : [];
+    for (const seg of rel.split("/")) {
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") { if (parts.length) parts.pop(); }
+      else parts.push(seg);
+    }
+    const qs = new URLSearchParams({ path: parts.join("/") });
+    if (rootId != null) qs.set("rootId", String(rootId));
+    return `/api/docs/asset?${qs.toString()}`;
+  };
+}
+
+/** Image node — a real component so it can read the resolver from
+ *  context (renderInline is a plain function and can't call hooks). */
+function DocImage({ src, alt }: { src: string; alt: string }) {
+  const resolve = useContext(ResolveImageSrc);
+  return (
+    <img
+      src={resolve(src)}
+      alt={alt}
+      loading="lazy"
+      className="my-2 max-w-full rounded border"
+    />
   );
 }
 
@@ -241,6 +298,24 @@ function renderInline(text: string): ReactNode[] {
         out.push(<em key={`i-${key++}`}>{renderInline(text.slice(i + 1, end))}</em>);
         i = end + 1;
         continue;
+      }
+    }
+
+    // Image: ![alt](src) or ![alt](src "title"). Must be checked before
+    // the link branch since it's a `!` immediately followed by `[...]`.
+    if (ch === "!" && text[i + 1] === "[") {
+      const close = text.indexOf("]", i + 2);
+      if (close > i && text[close + 1] === "(") {
+        const urlEnd = text.indexOf(")", close + 2);
+        if (urlEnd > close) {
+          flushText();
+          const alt = text.slice(i + 2, close);
+          // Strip an optional `"title"` after the URL, keep the URL.
+          const src = text.slice(close + 2, urlEnd).trim().split(/\s+/)[0];
+          out.push(<DocImage key={`img-${key++}`} src={src} alt={alt} />);
+          i = urlEnd + 1;
+          continue;
+        }
       }
     }
 
