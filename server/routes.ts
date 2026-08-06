@@ -9,6 +9,7 @@ import { registerNotesRoutes } from "./routes-notes";
 import { registerPipelineRoutes } from "./routes-pipeline";
 import { registerSpeakerRoutes } from "./routes-speakers";
 import { registerSystemRoutes } from "./routes-system";
+import { registerToolsRoutes } from "./routes-tools";
 import { registerTranscriptionSetupRoutes } from "./routes-transcription-setup";
 import { registerVoiceNoteRoutes } from "./routes-voice-notes";
 import { registerYouTubeRoutes } from "./routes-youtube";
@@ -60,6 +61,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ---- Transcription setup wizard ----
   // /api/transcription/* — first-launch venv install, engine select, etc.
   registerTranscriptionSetupRoutes(app);
+
+  // ---- Standalone media tools ----
+  // /api/tools/extract-audio (+ /download) — pull the audio track out
+  // of an arbitrary video file on disk. Registered in routes-tools.ts.
+  registerToolsRoutes(app);
 
   // ---- Library / transcripts / search / stream / orphans / export ----
   // /api/transcripts/search*, /api/videos/library/* (transcript, rename,

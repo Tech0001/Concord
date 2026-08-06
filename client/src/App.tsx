@@ -32,6 +32,7 @@ import TranscriptionSetup from "@/pages/TranscriptionSetup";
 import Discover from "@/pages/Discover";
 import Watchers from "@/pages/Watchers";
 import Docs from "@/pages/Docs";
+import Extract from "@/pages/Extract";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
@@ -39,6 +40,7 @@ import {
   Binoculars,
   Compass,
   Database,
+  FileAudio,
   FileText,
   Gauge,
   Map as MapIcon,
@@ -90,6 +92,7 @@ const NAV_GROUPS = [
     items: [
       { href: "/pipeline",    label: "Pipeline",    icon: Activity },
       { href: "/status",      label: "Status",      icon: Gauge },
+      { href: "/extract",     label: "Extract",     icon: FileAudio },
     ],
   },
 ] as const;
@@ -351,6 +354,7 @@ function Router() {
       <Route path="/notes" component={Clips} />
       <Route path="/clips" component={Clips} />
       <Route path="/speakers" component={Speakers} />
+      <Route path="/extract" component={Extract} />
       <Route path="/ai" component={AI} />
       <Route path="/settings" component={Settings} />
       <Route path="/setup/transcription" component={TranscriptionSetup} />
