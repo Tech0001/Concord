@@ -77,6 +77,12 @@ function inferModelEngine(model: string): "parakeet" | "whisper" | "fluid" | nul
   return null;
 }
 
+/** YouTube player clients to fall back to when the default ones hand
+ *  back media URLs that 403 (YouTube's PO-token experiment). Verified
+ *  against a gated video: both still serve plain, downloadable URLs,
+ *  though only the legacy progressive format. */
+const POT_FALLBACK_CLIENTS = "tv_simply,mweb";
+
 // ---- Pipeline ----
 
 export class Pipeline extends EventEmitter {
@@ -1120,6 +1126,7 @@ export class Pipeline extends EventEmitter {
     // video fragment URLs are bad — so a different codec usually succeeds.
     const chain = this.codecFallbackChain();
     let lastErr: Error | null = null;
+    let potBlocked = false;
     for (let i = 0; i < chain.length; i++) {
       const codec = chain[i];
       if (i > 0) {
@@ -1133,19 +1140,42 @@ export class Pipeline extends EventEmitter {
         return;
       } catch (err) {
         lastErr = err as Error;
-        const cdn5xx = (err as { cdn5xx?: boolean }).cdn5xx === true;
-        if (!cdn5xx || i === chain.length - 1) throw err;
+        const flags = err as { cdn5xx?: boolean; potBlocked?: boolean };
+        if (flags.potBlocked === true) { potBlocked = true; break; }
+        if (flags.cdn5xx !== true || i === chain.length - 1) break;
       }
     }
+
+    // YouTube is rolling out an experiment that binds a "PO token" to the
+    // video for the default player clients. Without a token provider their
+    // formats either carry no URL at all (SABR) or 403 partway through the
+    // media fetch, so yt-dlp silently falls back to android_vr — whose URLs
+    // 403 too. These clients still hand out plain, downloadable URLs. The
+    // catch is they only expose the legacy progressive stream (format 18,
+    // 360p H.264), so this is a deliberate quality-for-success trade and we
+    // only take it after the normal path has already failed.
+    if (potBlocked) {
+      this.cleanPartialFiles(outputPath);
+      console.log(
+        `[pipeline] ${videoId}: HTTP 403 on media (YouTube wants a PO token) — `
+        + `retrying with player_client=${POT_FALLBACK_CLIENTS}. Expect reduced quality.`,
+      );
+      await this.runYtdlp(videoId, outputPath, onProgress, chain[0], POT_FALLBACK_CLIENTS);
+      return;
+    }
+
     if (lastErr) throw lastErr;
   }
 
-  /** Single yt-dlp invocation with one specific codec preference. */
+  /** Single yt-dlp invocation with one specific codec preference.
+   *  `playerClient` overrides yt-dlp's default YouTube client list —
+   *  only set by the PO-token fallback in downloadVideo(). */
   private runYtdlp(
     videoId: string,
     outputPath: string,
     onProgress: (pct: number) => void,
     codec: string,
+    playerClient?: string,
   ): Promise<void> {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     const cookiesBrowser = (this.config.youtubeCookiesFromBrowser || "").trim();
@@ -1163,6 +1193,7 @@ export class Pipeline extends EventEmitter {
         noWarnings: true,
         // See youtube-dl.ts — unlocks AV1/VP9 streams via Node JS runtime.
         jsRuntimes: "node",
+        ...(playerClient ? { extractorArgs: `youtube:player_client=${playerClient}` } : {}),
         // Auth cookies: prefer a Netscape cookies.txt file when set
         // (skips Keychain prompts and works while the browser is open);
         // fall back to --cookies-from-browser otherwise. Either defeats
@@ -1214,8 +1245,17 @@ export class Pipeline extends EventEmitter {
           // retry loop knows whether a different codec is worth trying.
           const cdn5xx = /HTTP Error 5\d\d/.test(combinedOutput)
             || /Giving up after \d+ retries/.test(combinedOutput);
-          const err = new Error(`Download failed (exit ${code})`) as Error & { cdn5xx?: boolean };
+          // A 403 on the media fetch means the format's URL was rejected —
+          // in practice YouTube demanding a PO token we can't mint. Worth
+          // retrying with clients that still serve plain URLs. Skipped when
+          // we already are one of those, so we don't loop.
+          const potBlocked = !playerClient && /HTTP Error 403/.test(combinedOutput);
+          const err = new Error(`Download failed (exit ${code})`) as Error & {
+            cdn5xx?: boolean;
+            potBlocked?: boolean;
+          };
           err.cdn5xx = cdn5xx;
+          err.potBlocked = potBlocked;
           reject(err);
         }
       });
