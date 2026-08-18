@@ -22,7 +22,7 @@
 import fs from "fs";
 import path from "path";
 import { embed } from "./llm";
-import { getDb, getConfigValues } from "./db";
+import { getDb, getConfigValues, EMBEDDING_DIM } from "./db";
 import { normalizeVector } from "./db-embeddings";
 import { listRoots } from "./docs-index";
 
@@ -266,7 +266,11 @@ export async function embedDocument(documentId: string, opts: EmbedDocOptions = 
     // embed raw — same convention as transcript segments.
     const authorPrefix = doc.author ? `${doc.author}: ` : "";
     const inputs = slice.map(c => `${authorPrefix}${c.text}`);
-    const vectors = await embed({ texts: inputs, model });
+    const vectors = await embed({
+      texts: inputs,
+      model,
+      expectedDimensions: EMBEDDING_DIM,
+    });
     for (const vec of vectors) pending.push(normalizeVector(vec));
   }
 

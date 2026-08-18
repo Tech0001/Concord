@@ -9,16 +9,14 @@ import {
   LlmUnreachableError,
 } from "./llm";
 import { searchSemantic } from "./semantic-search";
-import { embedSegmentsForVideo } from "./embed-segments";
 import { summarizeVideo } from "./summarize-video";
 import {
   getEmbeddingStats,
-  clearAllEmbeddings,
   setVideoAiSummary,
-  getCoveredVideoKeysForModel,
-  getQueueList,
+  EMBEDDING_DIM,
 } from "./db";
 import type { Pipeline } from "./pipeline";
+import { backgroundJobs } from "./background-jobs";
 
 /**
  * /api/llm/* and the semantic-search endpoint — LLM config CRUD, model
@@ -85,7 +83,7 @@ export function registerLlmRoutes(app: Express, pipeline: Pipeline): void {
     const embeddingModel = typeof body.embeddingModel === "string" ? body.embeddingModel.trim() : "";
     const [chat, embedding] = await Promise.all([
       chatModel ? validateChatModel(chatModel) : Promise.resolve({ ok: true as const }),
-      embeddingModel ? validateEmbeddingModel(embeddingModel) : Promise.resolve({ ok: true as const }),
+      embeddingModel ? validateEmbeddingModel(embeddingModel, EMBEDDING_DIM) : Promise.resolve({ ok: true as const }),
     ]);
     res.json({ chat, embedding });
   });
@@ -100,7 +98,7 @@ export function registerLlmRoutes(app: Express, pipeline: Pipeline): void {
   // Slow for big libraries (hundreds of API calls of 50 segments each),
   // so it streams progress over SSE rather than holding a long HTTP
   // request.
-  app.post("/api/llm/embeddings/reindex", async (req, res) => {
+  app.post("/api/llm/embeddings/reindex", (req, res) => {
     const cfg = pipeline.getConfig().llm;
     const model = (req.body?.model as string | undefined) || cfg.embeddingModel;
     if (!model) {
@@ -108,68 +106,8 @@ export function registerLlmRoutes(app: Express, pipeline: Pipeline): void {
     }
 
     const wipe = req.body?.wipe === true;
-    if (wipe) clearAllEmbeddings(model);
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
-
-    const sse = (event: string, data: unknown) => {
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
-
-    // Fire a "preparing" event immediately so the UI knows the request
-    // is alive while we compute the work list. Without this, the user
-    // sees nothing happen for a few seconds and assumes the connection
-    // died.
-    sse("preparing", { model });
-
-    // Default behavior: catch-up only — skip videos that already have
-    // embeddings for this model. Wipe forces a full re-embed (used when
-    // changing models or rebuilding from scratch). Single SQL query for
-    // the covered set instead of N round-trips through hasVideoEmbeddings.
-    const allVideos = getQueueList({ status: "complete", limit: 100000 }).rows;
-    let videos = allVideos;
-    if (!wipe) {
-      const covered = new Set(
-        getCoveredVideoKeysForModel(model).map(({ videoId, channelId }) => `${videoId}|${channelId}`),
-      );
-      videos = allVideos.filter((v) => !covered.has(`${v.video_id}|${v.channel_id}`));
-    }
-    const alreadyCovered = allVideos.length - videos.length;
-
-    sse("start", { total: videos.length, model, alreadyCovered });
-
-    let done = 0;
-    let totalSegments = 0;
-    let skipped = 0;
-    for (const v of videos) {
-      try {
-        const r = await embedSegmentsForVideo(v.video_id, v.channel_id, model);
-        if (r.skipped) {
-          skipped++;
-          // Server log echo for debuggability — the SSE event also
-          // carries the reason, but having it in the dev log makes
-          // "why was THIS video skipped?" answerable without diffing
-          // the browser.
-          console.log(`[reindex] skipped ${v.video_id}: ${r.skipped}`);
-        } else {
-          totalSegments += r.segmentCount;
-        }
-        sse("video", { ...r, done: ++done, total: videos.length });
-      } catch (err) {
-        sse("video", {
-          videoId: v.video_id, channelId: v.channel_id, model, segmentCount: 0,
-          error: err instanceof Error ? err.message : String(err),
-          done: ++done, total: videos.length,
-        });
-      }
-    }
-
-    sse("done", { total: videos.length, totalSegments, skipped, model });
-    res.end();
+    const job = backgroundJobs.enqueue("segment_embeddings", { model, wipe });
+    res.status(202).json({ job });
   });
 
   // Regenerate the AI summary for a single video. Used by the per-video
@@ -208,7 +146,7 @@ export function registerLlmRoutes(app: Express, pipeline: Pipeline): void {
   // call). By default, skips videos whose notes are already populated;
   // pass `overwrite: true` to regenerate everything (used when the model
   // changes or the prompt is tweaked).
-  app.post("/api/llm/summaries/regenerate", async (req, res) => {
+  app.post("/api/llm/summaries/regenerate", (req, res) => {
     const cfg = pipeline.getConfig().llm;
     const model = (req.body?.model as string | undefined) || cfg.chatModel;
     if (!model) {
@@ -216,45 +154,8 @@ export function registerLlmRoutes(app: Express, pipeline: Pipeline): void {
     }
 
     const overwrite = req.body?.overwrite === true;
-    const videos = getQueueList({ status: "complete", limit: 100000 }).rows;
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
-
-    const sse = (event: string, data: unknown) => {
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
-    sse("start", { total: videos.length, model, overwrite });
-
-    let done = 0;
-    let written = 0;
-    let skipped = 0;
-    for (const v of videos) {
-      try {
-        if (overwrite) {
-          // Clear so summarizeVideo doesn't short-circuit on the
-          // "already populated by this model" idempotency guard.
-          setVideoAiSummary(v.video_id, v.channel_id, null, null);
-        }
-        const r = await summarizeVideo(v.video_id, v.channel_id, model);
-        if (r.skipped) skipped++;
-        else written++;
-        sse("video", { ...r, done: ++done, total: videos.length });
-      } catch (err) {
-        sse("video", {
-          videoId: v.video_id, channelId: v.channel_id, model,
-          charsIn: 0, charsOut: 0,
-          error: err instanceof Error ? err.message : String(err),
-          done: ++done, total: videos.length,
-        });
-      }
-    }
-
-    sse("done", { total: videos.length, written, skipped, model });
-    res.end();
+    const job = backgroundJobs.enqueue("video_summaries", { model, overwrite });
+    res.status(202).json({ job });
   });
 
   // Semantic search — embeds the query, cosines vs all stored vectors.

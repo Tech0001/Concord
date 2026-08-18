@@ -20,6 +20,7 @@ import {
   getClipMapLayout,
   type GraphEdgeType,
   getClipLinks,
+  getTranscriptClip,
   getQueueEntry,
   listAllClipTags,
   listRelatedTranscriptClips,
@@ -32,6 +33,7 @@ import {
   syncLegacyAnchorColumns,
   updateTranscriptClip,
 } from "./db";
+import { removeNoteEmbedding, scheduleNoteEmbedding } from "./note-embeddings";
 
 /**
  * All /api/clips/* routes — note (transcript_clips) CRUD, anchors, tags
@@ -291,6 +293,8 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
             }),
       });
 
+      scheduleNoteEmbedding(clip.id);
+
       res.json({ success: true, clip });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed to save clip" });
@@ -308,6 +312,7 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
       if (note !== undefined)  fields.note  = note === null ? null : String(note);
       const updated = updateTranscriptClip(req.params.clipId, fields);
       if (!updated) return res.status(404).json({ error: "Note not found" });
+      scheduleNoteEmbedding(req.params.clipId);
       res.json({ note: updated });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : "Failed to update note" });
@@ -335,6 +340,7 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
         docStartChar: docStartChar != null ? Number(docStartChar) : null,
         docEndChar:   docEndChar   != null ? Number(docEndChar)   : null,
       });
+      scheduleNoteEmbedding(req.params.clipId);
       res.json({ success: true, ordinal });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed to add anchor" });
@@ -352,6 +358,7 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
       if (!removed) return res.status(404).json({ error: "Anchor not found" });
       // Keep legacy single-anchor columns in sync with the new first anchor.
       syncLegacyAnchorColumns(req.params.clipId);
+      scheduleNoteEmbedding(req.params.clipId);
       res.json({ success: true });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : "Failed to remove anchor" });
@@ -365,6 +372,7 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
         return res.status(400).json({ error: "tags array is required" });
       }
       const stored = setClipTags(req.params.clipId, tags.map(String));
+      scheduleNoteEmbedding(req.params.clipId);
       res.json({ success: true, tags: stored });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Failed to update tags" });
@@ -385,8 +393,16 @@ export function registerNotesRoutes(app: Express, pipeline: Pipeline): void {
     }
   });
 
+  app.get("/api/clips/:clipId", (req: Request<{ clipId: string }>, res: Response) => {
+    const note = getTranscriptClip(req.params.clipId);
+    if (!note) return res.status(404).json({ error: "Note not found" });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ note });
+  });
+
   app.delete("/api/clips/:clipId", (req: Request<{ clipId: string }>, res: Response) => {
     try {
+      removeNoteEmbedding(req.params.clipId);
       const deleted = deleteTranscriptClip(req.params.clipId);
       if (!deleted) return res.status(404).json({ error: "Clip not found" });
       res.json({ success: true });

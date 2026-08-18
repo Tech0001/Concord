@@ -137,6 +137,7 @@ export function registerYouTubeRoutes(app: Express): void {
         url: `https://www.youtube.com/watch?v=${entry.video_id}`,
         uploadDate: entry.published_at?.slice(0, 10).replace(/-/g, "") ?? null,
         category: watcher.category,
+        thumbnailUrl: entry.thumbnail_url,
       });
       setInboxStatus(watcherId, videoId, "queued");
       res.json({ queued: enqueued });

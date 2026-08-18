@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { BackgroundJobs } from "@/components/BackgroundJobs";
 import { cn } from "@/lib/utils";
 import {
   Activity,
@@ -368,6 +369,8 @@ export default function Status() {
           </CardContent>
         </Card>
       )}
+
+      <BackgroundJobs />
 
       {/* Coverage cards */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">

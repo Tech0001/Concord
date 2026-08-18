@@ -17,6 +17,8 @@ import { registerDocsRoutes } from "./routes-docs";
 import { indexDocs } from "./docs-index";
 import { backfillChannelUcIds } from "./db";
 import { resolveChannelUcId } from "./channel-monitor";
+import { registerBackgroundJobRoutes } from "./routes-background-jobs";
+import { backgroundJobs } from "./background-jobs";
 
 /**
  * Top-level HTTP wire-up. Every actual endpoint lives in a sibling
@@ -41,6 +43,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // /api/pipeline/ytdlp-health, /api/system/*, /api/dialog/pick-folder
   // — all registered in routes-system.ts.
   registerSystemRoutes(app, pipeline, httpServer);
+
+  // Durable AI/index work survives page navigation and process restarts.
+  registerBackgroundJobRoutes(app, pipeline);
 
   // ---- LLM (config, status, embeddings reindex, summaries, semantic
   // search, models proxy) ---- registered in routes-llm.ts.
@@ -104,6 +109,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.warn("[docs] Initial index failed:", err instanceof Error ? err.message : err);
   }
 
+  backgroundJobs.start();
+
   // Background backfill: resolve YouTube UC ids for any configured
   // channels that don't have one cached yet. Lets manual downloads
   // attach to the right configured channel via direct id equality
@@ -131,6 +138,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   httpServer.on("close", () => {
     console.log("Server shutting down, stopping background timers");
     downloads.shutdown();
+    backgroundJobs.stop();
     pipeline.stop();
   });
 

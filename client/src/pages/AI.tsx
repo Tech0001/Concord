@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -12,6 +12,13 @@ import { TagPicker } from "@/components/TagPicker";
 import { useToast } from "@/hooks/use-toast";
 import { useCategory } from "@/hooks/use-category";
 import { cn } from "@/lib/utils";
+import {
+  deleteChatDraft,
+  loadActiveConversationId,
+  loadChatDraft,
+  saveActiveConversationId,
+  saveChatDraft,
+} from "@/lib/ai-chat-persistence";
 import {
   ArrowUp,
   BookmarkPlus,
@@ -29,6 +36,7 @@ import {
   Square,
   Star,
   Trash2,
+  X,
 } from "lucide-react";
 
 interface ChatSource {
@@ -36,7 +44,7 @@ interface ChatSource {
   /** "video" (default) or "doc". Streaming context uses lowercase; the
    *  persisted shape uses snake_case but the discriminator is the
    *  same. Doc sources have empty video_id/channel_id placeholders. */
-  source?: "video" | "doc";
+  source?: "video" | "doc" | "note";
   video_id: string;
   channel_id: string;
   segment_index: number | null;
@@ -80,6 +88,14 @@ interface ChatSource {
   docHeadingPath?: string;
   docStartChar?: number;
   docEndChar?: number;
+  // Note-source fields.
+  note_id?: string;
+  note_title?: string;
+  note_body?: string;
+  note_tags?: string;
+  noteId?: string;
+  noteTitle?: string;
+  noteTags?: string[];
 }
 
 interface ChatMessage {
@@ -153,9 +169,9 @@ function parseCitations(text: string): Array<{ type: "text"; text: string } | { 
   return out;
 }
 
-function newConversationStub(): ConversationDetail {
+function newConversationStub(id = ""): ConversationDetail {
   return {
-    id: "",
+    id,
     title: null,
     pinned: false,
     message_count: 0,
@@ -166,15 +182,49 @@ function newConversationStub(): ConversationDetail {
   };
 }
 
+type AiSourceScope =
+  | { kind: "video"; videoId: string; channelId: string; title: string }
+  | { kind: "doc"; documentId: string; title: string }
+  | { kind: "note"; noteId: string; title: string };
+
+function readAiSourceScope(): AiSourceScope | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const kind = params.get("scope");
+  const title = params.get("title") || "Selected source";
+  if (kind === "video") {
+    const videoId = params.get("videoId") || "";
+    const channelId = params.get("channelId") || "";
+    return videoId && channelId ? { kind, videoId, channelId, title } : null;
+  }
+  if (kind === "doc") {
+    const documentId = params.get("documentId") || "";
+    return documentId ? { kind, documentId, title } : null;
+  }
+  if (kind === "note") {
+    const noteId = params.get("noteId") || "";
+    return noteId ? { kind, noteId, title } : null;
+  }
+  return null;
+}
+
 export default function AI() {
   const { toast } = useToast();
   const { serverCategory } = useCategory();
+  const [location, navigate] = useLocation();
+  const sourceScope = useMemo(() => readAiSourceScope(), [location]);
+  const [initialActiveId] = useState(() => loadActiveConversationId(
+    typeof window === "undefined" ? null : window.localStorage,
+  ));
 
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
-  const [active, setActive] = useState<ConversationDetail>(newConversationStub());
+  const [active, setActive] = useState<ConversationDetail>(() => newConversationStub(initialActiveId));
   const [loadingConv, setLoadingConv] = useState(false);
 
-  const [composer, setComposer] = useState("");
+  const [composer, setComposer] = useState(() => loadChatDraft(
+    typeof window === "undefined" ? null : window.localStorage,
+    initialActiveId,
+  ));
   // Streaming state lives in a module-level singleton (see
   // hooks/use-chat-stream.tsx) so navigating away from this page
   // doesn't kill the in-flight fetch. The hook re-subscribes on
@@ -185,6 +235,11 @@ export default function AI() {
   const streamingText = streamSnap.streamingText;
   const streamingSources = streamSnap.streamingSources;
   const weakRetrieval = streamSnap.weakRetrieval;
+  const streamingForActive = streaming && (
+    streamSnap.conversationId
+      ? streamSnap.conversationId === active.id
+      : active.id === ""
+  );
 
   const [channels, setChannels] = useState<ChannelOption[]>([]);
   const [channelFilter, setChannelFilter] = useState<string>("all");
@@ -192,15 +247,15 @@ export default function AI() {
   // Source-kind scope for AI retrieval. Persisted in localStorage so
   // the user's last preference sticks across reloads. All three on by
   // default = search everything (same as omitting the filter).
-  type ChatSourceKind = "video" | "audio" | "doc";
+  type ChatSourceKind = "video" | "audio" | "doc" | "note";
   const SOURCE_STORAGE_KEY = "concord-ai-sources-v1";
   const [enabledSources, setEnabledSources] = useState<Set<ChatSourceKind>>(() => {
-    const all = new Set<ChatSourceKind>(["video", "audio", "doc"]);
+    const all = new Set<ChatSourceKind>(["video", "audio", "doc", "note"]);
     if (typeof window === "undefined") return all;
     try {
       const stored = JSON.parse(window.localStorage.getItem(SOURCE_STORAGE_KEY) ?? "null");
       if (Array.isArray(stored) && stored.length > 0) {
-        const valid = stored.filter((s: string) => s === "video" || s === "audio" || s === "doc");
+        const valid = stored.filter((s: string) => s === "video" || s === "audio" || s === "doc" || s === "note");
         if (valid.length > 0) return new Set<ChatSourceKind>(valid as ChatSourceKind[]);
       }
     } catch { /* fall through */ }
@@ -209,6 +264,16 @@ export default function AI() {
   useEffect(() => {
     window.localStorage.setItem(SOURCE_STORAGE_KEY, JSON.stringify(Array.from(enabledSources)));
   }, [enabledSources]);
+
+  // The server owns sent messages; local storage only remembers which saved
+  // conversation was open and unsent composer text. Drafts are keyed per
+  // conversation so switching threads and returning does not overwrite them.
+  useEffect(() => {
+    saveActiveConversationId(window.localStorage, active.id);
+  }, [active.id]);
+  useEffect(() => {
+    saveChatDraft(window.localStorage, active.id, composer);
+  }, [active.id, composer]);
   const toggleSource = (kind: ChatSourceKind) => {
     setEnabledSources((prev) => {
       const next = new Set(prev);
@@ -254,7 +319,12 @@ export default function AI() {
       const r = await fetch(`/api/chat/conversations/${id}`);
       if (!r.ok) {
         toast({ title: "Failed to load conversation", variant: "destructive" });
-        setActive(newConversationStub());
+        if (r.status === 404) {
+          deleteChatDraft(window.localStorage, id);
+          saveActiveConversationId(window.localStorage, "");
+          setActive(newConversationStub());
+          setComposer(loadChatDraft(window.localStorage, ""));
+        }
         return;
       }
       setActive(await r.json());
@@ -281,7 +351,8 @@ export default function AI() {
   useEffect(() => {
     loadConversations();
     loadChannels();
-  }, [loadConversations, loadChannels]);
+    if (initialActiveId) void loadConversation(initialActiveId);
+  }, [initialActiveId, loadConversation, loadConversations, loadChannels]);
 
   const ask = useCallback(async () => {
     const question = composer.trim();
@@ -315,17 +386,18 @@ export default function AI() {
       conversationId: active.id || undefined,
       channelIds: channelFilter === "all" ? undefined : [channelFilter],
       category: serverCategory || undefined,
-      sources: enabledSources.size === 3 ? undefined : Array.from(enabledSources),
+      sources: enabledSources.size === 4 ? undefined : Array.from(enabledSources),
+      videoKeys: sourceScope?.kind === "video" ? [{ videoId: sourceScope.videoId, channelId: sourceScope.channelId }] : undefined,
+      documentIds: sourceScope?.kind === "doc" ? [sourceScope.documentId] : undefined,
+      noteIds: sourceScope?.kind === "note" ? [sourceScope.noteId] : undefined,
     });
-  }, [composer, streaming, active.id, channelFilter, serverCategory, enabledSources, scrollToBottom]);
+  }, [composer, streaming, active.id, channelFilter, serverCategory, enabledSources, sourceScope, scrollToBottom]);
 
   // When the singleton finishes (success / abort / error), reload the
   // active conversation so persisted messages replace the optimistic
   // user bubble + streaming preview. Also reloads the conversation
-  // list so titles update. This is what makes "navigate away while
-  // streaming, come back" work — on remount the snapshot's
-  // completionTick may already be ahead of our local tracker, in
-  // which case we reload immediately.
+  // list so titles update. Conversation-id persistence separately handles
+  // navigating away and returning after a stream has already completed.
   const lastTickRef = useRef(streamSnap.completionTick);
   useEffect(() => {
     if (streamSnap.completionTick === lastTickRef.current) return;
@@ -350,10 +422,14 @@ export default function AI() {
   // surface it on the local `active` record so navigation / titles /
   // child queries can use it.
   useEffect(() => {
-    if (streamSnap.conversationId && streamSnap.conversationId !== active.id && streamSnap.isStreaming) {
+    if (streamSnap.conversationId && !active.id && streamSnap.isStreaming) {
+      // Covers navigating away immediately after sending a brand-new chat,
+      // before the page had time to receive and remember its server id.
+      saveActiveConversationId(window.localStorage, streamSnap.conversationId);
       setActive((prev) => ({ ...prev, id: streamSnap.conversationId! }));
+      void loadConversation(streamSnap.conversationId);
     }
-  }, [streamSnap.conversationId, streamSnap.isStreaming, active.id]);
+  }, [streamSnap.conversationId, streamSnap.isStreaming, active.id, loadConversation]);
 
   const stop = useCallback(() => {
     chatStream.abort();
@@ -361,9 +437,20 @@ export default function AI() {
 
   const newChat = useCallback(() => {
     if (streaming) return;
+    deleteChatDraft(window.localStorage, "");
+    saveActiveConversationId(window.localStorage, "");
     setActive(newConversationStub());
     setComposer("");
   }, [streaming]);
+
+  const selectConversation = useCallback((id: string) => {
+    // Switch the id and its draft in the same render, then hydrate messages.
+    // This prevents the target draft from briefly being saved under the
+    // conversation the user just left.
+    setActive(newConversationStub(id));
+    setComposer(loadChatDraft(window.localStorage, id));
+    void loadConversation(id);
+  }, [loadConversation]);
 
   const deleteConversation = useCallback(async (id: string) => {
     if (!confirm("Delete this conversation? This cannot be undone.")) return;
@@ -372,7 +459,12 @@ export default function AI() {
       toast({ title: "Failed to delete", variant: "destructive" });
       return;
     }
-    if (active.id === id) setActive(newConversationStub());
+    deleteChatDraft(window.localStorage, id);
+    if (active.id === id) {
+      saveActiveConversationId(window.localStorage, "");
+      setActive(newConversationStub());
+      setComposer("");
+    }
     loadConversations();
   }, [active.id, loadConversations, toast]);
 
@@ -415,6 +507,11 @@ export default function AI() {
   }, []);
 
   const openSource = useCallback((src: ChatSource) => {
+    if (src.source === "note") {
+      const noteId = src.note_id ?? src.noteId;
+      if (noteId) navigate(`/notes?noteId=${encodeURIComponent(noteId)}`);
+      return;
+    }
     // Doc sources open in a side drawer so the chat stays visible —
     // mirrors the VideoDrawer pattern for video citations. The drawer
     // does its own scroll-to-excerpt + highlight after the markdown
@@ -459,7 +556,7 @@ export default function AI() {
       duration: src.duration ?? null,
     });
     setDrawerSeconds(src.start_seconds ?? undefined);
-  }, []);
+  }, [navigate]);
 
   const saveSourceAsNote = useCallback((src: ChatSource, messageId: string) => {
     const message = active.messages.find((m) => m.id === messageId);
@@ -482,8 +579,8 @@ export default function AI() {
   // right — wrap the conversation actions so each one auto-dismisses.
   const handleSelectFromSheet = useCallback((id: string) => {
     setConversationsSheetOpen(false);
-    void loadConversation(id);
-  }, [loadConversation]);
+    selectConversation(id);
+  }, [selectConversation]);
 
   const newChatFromSheet = useCallback(() => {
     setConversationsSheetOpen(false);
@@ -538,7 +635,7 @@ export default function AI() {
   return (
     <div className="mx-auto flex max-w-7xl gap-3 px-3 py-3" style={{ height: "calc(100vh - 48px)" }}>
       <aside className="hidden w-64 shrink-0 flex-col gap-2 md:flex">
-        {renderSidebar(loadConversation, newChat)}
+        {renderSidebar(selectConversation, newChat)}
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col gap-2">
@@ -580,9 +677,9 @@ export default function AI() {
              *  Last one can't be deselected so the chat always has
              *  something to retrieve from. */}
             <div className="hidden items-center gap-1 rounded-md border bg-card p-0.5 text-xs sm:flex" role="group" aria-label="Source scope">
-              {(["audio", "video", "doc"] as const).map((kind) => {
+              {(["audio", "video", "doc", "note"] as const).map((kind) => {
                 const on = enabledSources.has(kind);
-                const label = kind === "doc" ? "Docs" : kind === "audio" ? "Audio" : "Video";
+                const label = kind === "doc" ? "Docs" : kind === "note" ? "Notes" : kind === "audio" ? "Audio" : "Video";
                 return (
                   <button
                     key={kind}
@@ -618,6 +715,18 @@ export default function AI() {
           </div>
         </header>
 
+        {sourceScope && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-3 py-2 text-xs">
+            <div className="min-w-0">
+              <span className="font-medium">Scoped to {sourceScope.kind === "doc" ? "document" : sourceScope.kind}: </span>
+              <span className="truncate text-muted-foreground">{sourceScope.title}</span>
+            </div>
+            <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={() => navigate("/ai")} title="Search the full archive instead">
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
+
         <div ref={threadRef} className="flex-1 space-y-3 overflow-y-auto pr-1">
           {loadingConv && (
             <div className="flex items-center justify-center py-6 text-xs text-muted-foreground">
@@ -625,7 +734,7 @@ export default function AI() {
             </div>
           )}
 
-          {!loadingConv && active.messages.length === 0 && !streaming && (
+          {!loadingConv && active.messages.length === 0 && !streamingForActive && (
             <EmptyState />
           )}
 
@@ -639,7 +748,7 @@ export default function AI() {
             />
           ))}
 
-          {streaming && (
+          {streamingForActive && (
             <StreamingBubble
               text={streamingText}
               sources={streamingSources}
@@ -755,7 +864,7 @@ function EmptyState() {
         <Sparkles className="mx-auto h-8 w-8 text-muted-foreground" />
         <h2 className="text-sm font-semibold">Ask the archive</h2>
         <p className="text-xs text-muted-foreground">
-          Questions get answered from your transcribed videos. Citations link back to the source video at the exact moment.
+          Questions get answered from your video/audio transcripts, documents, and research notes. Citations link back to the original source.
         </p>
         <div className="space-y-1 pt-2 text-left text-[11px] text-muted-foreground">
           <div className="rounded-md border bg-muted/30 px-2 py-1.5">
@@ -899,12 +1008,16 @@ function RichText({
                 <span key={n} className="group/cite inline-flex items-center gap-0.5">
                   <button
                     onClick={() => onCitationClick(src)}
-                    title={`${src.video_title ?? "Source"} · ${fmtTimestamp(src.start_seconds)}`}
+                    title={src.source === "note"
+                      ? (src.note_title ?? src.noteTitle ?? "Research note")
+                      : src.source === "doc"
+                        ? (src.doc_title ?? src.docTitle ?? "Document")
+                        : `${src.video_title ?? "Source"} · ${fmtTimestamp(src.start_seconds)}`}
                     className="inline-flex items-center rounded bg-secondary px-1 py-0.5 font-mono text-[10px] text-foreground hover:bg-foreground hover:text-background"
                   >
                     [{n}]
                   </button>
-                  {!inStream && (
+                  {!inStream && src.source !== "note" && (
                     <button
                       onClick={() => onSaveCitation(src)}
                       className="inline-flex items-center rounded bg-secondary px-1 py-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-foreground hover:text-background group-hover/cite:opacity-100"
@@ -934,9 +1047,14 @@ function SourcesList({
     <ul className="mt-1 space-y-1">
       {sources.map((s) => {
         const isDoc = s.source === "doc";
+        const isNote = s.source === "note";
         const docPath = s.doc_rel_path ?? s.docRelPath ?? null;
         const docTitle = s.doc_title ?? s.docTitle ?? null;
         const headingPath = s.doc_heading_path ?? s.docHeadingPath ?? null;
+        const noteTitle = s.note_title ?? s.noteTitle ?? null;
+        const noteTags = s.note_tags
+          ? s.note_tags.split(",").map(tag => tag.trim()).filter(Boolean)
+          : (s.noteTags ?? []);
         return (
           <li key={s.source_index} className="group rounded border bg-muted/30 px-2 py-1.5">
             <div className="flex items-baseline gap-1.5">
@@ -951,22 +1069,31 @@ function SourcesList({
                   doc
                 </span>
               )}
-              <span className="min-w-0 flex-1 truncate font-medium text-foreground" title={isDoc ? (docPath ?? "") : (s.video_title ?? "")}>
-                {isDoc ? (docTitle || docPath || "(unknown doc)") : (s.video_title ?? "(unknown video)")}
+              {isNote && (
+                <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-400">
+                  note
+                </span>
+              )}
+              <span className="min-w-0 flex-1 truncate font-medium text-foreground" title={isNote ? (noteTitle ?? "") : isDoc ? (docPath ?? "") : (s.video_title ?? "")}>
+                {isNote ? (noteTitle || "(untitled note)") : isDoc ? (docTitle || docPath || "(unknown doc)") : (s.video_title ?? "(unknown video)")}
               </span>
-              {!isDoc && (
+              {!isDoc && !isNote && (
                 <span className="text-[10px] font-mono text-muted-foreground">{fmtTimestamp(s.start_seconds)}</span>
               )}
-              <button
-                onClick={() => onSaveCitation(s)}
-                className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                title="Save as note"
-              >
-                <BookmarkPlus className="h-3 w-3" />
-              </button>
+              {!isNote && (
+                <button
+                  onClick={() => onSaveCitation(s)}
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  title="Save as note"
+                >
+                  <BookmarkPlus className="h-3 w-3" />
+                </button>
+              )}
             </div>
             <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-              {isDoc ? (
+              {isNote ? (
+                noteTags.length > 0 ? <span>{noteTags.join(" · ")}</span> : null
+              ) : isDoc ? (
                 headingPath ? <span>{headingPath}</span> : null
               ) : (
                 <>

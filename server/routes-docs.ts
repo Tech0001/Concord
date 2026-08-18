@@ -19,6 +19,7 @@ import {
 } from "./docs-index";
 import { embedDocument } from "./docs-embed";
 import { getDb } from "./db";
+import { backgroundJobs } from "./background-jobs";
 
 /**
  * Markdown file viewer + roots-management endpoints. Multi-root:
@@ -186,37 +187,14 @@ export function registerDocsRoutes(app: Express): void {
     res.json({ ok: true });
   });
 
-  app.post("/api/docs/embed-all", async (req, res) => {
-    const skipIfPresent = req.body?.overwrite ? false : true;
-    const all = listDocuments();
-    const results: { id: string; embedded: number; chunks: number; skipped: number; error?: string }[] = [];
-    // Doc-level tallies (one increment per document) so the UI numbers
-    // are consistent — the old code mixed chunk counts (skipped) with
-    // doc counts (failed), e.g. "14326 skipped, 61 failed".
-    let docsEmbedded = 0;
-    let docsSkipped = 0;
-    let docsFailed = 0;
-    let chunksEmbedded = 0;
-    let sampleError = ""; // first failure reason, surfaced to the user
-    for (const d of all) {
-      try {
-        const r = await embedDocument(d.id, { skipIfPresent });
-        results.push({ id: r.documentId, embedded: r.embedded, chunks: r.chunks, skipped: r.skipped, error: r.error });
-        if (r.error) { docsFailed += 1; if (!sampleError) sampleError = r.error; }
-        else if (r.embedded > 0) { docsEmbedded += 1; chunksEmbedded += r.embedded; }
-        else docsSkipped += 1; // already present, or 0-chunk / contentless
-      } catch (err) {
-        docsFailed += 1;
-        const msg = err instanceof Error ? err.message : "embed failed";
-        if (!sampleError) sampleError = msg;
-        results.push({ id: d.id, embedded: 0, chunks: 0, skipped: 0, error: msg });
-      }
+  app.post("/api/docs/embed-all", (req, res) => {
+    const model = String(req.body?.model || "").trim()
+      || String(getDb().prepare("SELECT value FROM app_config WHERE key = 'llm.embeddingModel'").pluck().get() || "").trim();
+    if (!model) {
+      return res.status(400).json({ error: "No embedding model configured (set one in Settings first)" });
     }
-    res.json({
-      total: all.length,
-      docsEmbedded, docsSkipped, docsFailed, chunksEmbedded, sampleError,
-      results,
-    });
+    const job = backgroundJobs.enqueue("doc_embeddings", { model, overwrite: req.body?.overwrite === true });
+    res.status(202).json({ job });
   });
 
   app.post("/api/docs/:id/embed", async (req: Request<{ id: string }>, res) => {

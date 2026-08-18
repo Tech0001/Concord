@@ -78,6 +78,11 @@ export interface ChatMessageSource {
    *  otherwise. Joined from documents.root_id on read — chat_
    *  message_sources doesn't store it. */
   doc_root_id: string | null;
+  /** Note-source fields — populated when source === "note". */
+  note_id: string | null;
+  note_title: string | null;
+  note_body: string | null;
+  note_tags: string | null;
 }
 
 export interface ChatConversationDetail extends ChatConversationMeta {
@@ -171,7 +176,9 @@ export function getChatConversation(id: string): ChatConversationDetail | undefi
       s.document_id, s.doc_chunk_index, s.doc_start_char, s.doc_end_char,
       s.doc_heading_path,
       d.rel_path AS doc_rel_path, d.title AS doc_title,
-      COALESCE(d.root_id, '') AS doc_root_id
+      COALESCE(d.root_id, '') AS doc_root_id,
+      s.note_id, n.title AS note_title, n.note AS note_body,
+      (SELECT group_concat(tag, ', ') FROM clip_tags WHERE clip_id = n.id) AS note_tags
     FROM chat_message_sources s
     LEFT JOIN video_queue q ON q.video_id = s.video_id AND q.channel_id = s.channel_id
     LEFT JOIN channels    c ON c.id       = s.channel_id
@@ -181,6 +188,7 @@ export function getChatConversation(id: string): ChatConversationDetail | undefi
           AND vsa.local_speaker = s.speaker
     LEFT JOIN speakers sp ON sp.id = vsa.speaker_id
     LEFT JOIN documents d  ON d.id        = s.document_id
+    LEFT JOIN transcript_clips n ON n.id   = s.note_id
     WHERE s.message_id IN (${placeholders})
     ORDER BY s.message_id, s.source_index ASC
   `).all(...ids) as Array<ChatMessageSource & { message_id: string }>;
@@ -226,7 +234,7 @@ export function appendChatMessage(args: {
   model?: string | null;
   sources?: Array<{
     sourceIndex: number;
-    source?: "video" | "doc";
+    source?: "video" | "doc" | "note";
     videoId: string;
     channelId: string;
     segmentIndex?: number | null;
@@ -239,6 +247,7 @@ export function appendChatMessage(args: {
     docStartChar?: number | null;
     docEndChar?: number | null;
     docHeadingPath?: string | null;
+    noteId?: string | null;
   }>;
 }): void {
   const db = getDb();
@@ -254,8 +263,8 @@ export function appendChatMessage(args: {
           (message_id, source_index, video_id, channel_id, segment_index,
            start_seconds, end_seconds, speaker, excerpt, score,
            source, document_id, doc_chunk_index, doc_start_char, doc_end_char,
-           doc_heading_path)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           doc_heading_path, note_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const s of args.sources) {
         insert.run(
@@ -270,6 +279,7 @@ export function appendChatMessage(args: {
           s.source === "doc" ? (s.segmentIndex ?? null) : null,
           s.docStartChar ?? null, s.docEndChar ?? null,
           s.docHeadingPath ?? null,
+          s.noteId ?? null,
         );
       }
     }
@@ -305,7 +315,9 @@ export function getChatMessage(id: string): ChatMessage | undefined {
       s.document_id, s.doc_chunk_index, s.doc_start_char, s.doc_end_char,
       s.doc_heading_path,
       d.rel_path AS doc_rel_path, d.title AS doc_title,
-      COALESCE(d.root_id, '') AS doc_root_id
+      COALESCE(d.root_id, '') AS doc_root_id,
+      s.note_id, n.title AS note_title, n.note AS note_body,
+      (SELECT group_concat(tag, ', ') FROM clip_tags WHERE clip_id = n.id) AS note_tags
     FROM chat_message_sources s
     LEFT JOIN video_queue q ON q.video_id = s.video_id AND q.channel_id = s.channel_id
     LEFT JOIN channels    c ON c.id       = s.channel_id
@@ -315,6 +327,7 @@ export function getChatMessage(id: string): ChatMessage | undefined {
           AND vsa.local_speaker = s.speaker
     LEFT JOIN speakers sp ON sp.id = vsa.speaker_id
     LEFT JOIN documents d  ON d.id        = s.document_id
+    LEFT JOIN transcript_clips n ON n.id   = s.note_id
     WHERE s.message_id = ?
     ORDER BY s.source_index ASC
   `).all(id) as ChatMessageSource[];

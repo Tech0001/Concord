@@ -1,4 +1,5 @@
 import { getDb, EMBEDDING_DIM } from "./db";
+import { assertEmbeddingVectorDimensions } from "./embedding-dimensions";
 
 // ---------------------------------------------------------------
 // Segment embeddings — semantic search via sqlite-vec
@@ -53,16 +54,13 @@ export function replaceVideoEmbeddings(args: {
   rows: EmbeddingInput[];
 }): void {
   const { videoId, channelId, model, rows } = args;
-  // Dim sanity check — fail loudly before touching the DB.
-  for (const row of rows) {
-    if (row.embedding.length !== EMBEDDING_DIM) {
-      throw new Error(
-        `Embedding dim mismatch: model produced ${row.embedding.length}-dim vector, `
-        + `vec_segments expects ${EMBEDDING_DIM}. Wipe + reindex required `
-        + `(use the AI page Reindex button).`,
-      );
-    }
-  }
+  // Last-line dim check — fail loudly before touching the DB even when a
+  // caller did not use llm.embed's expectedDimensions validation.
+  assertEmbeddingVectorDimensions(
+    rows.map((row) => row.embedding),
+    model,
+    EMBEDDING_DIM,
+  );
   const d = getDb();
   const clear = d.prepare(
     "DELETE FROM vec_segments WHERE video_id = ? AND channel_id = ? AND model = ?",

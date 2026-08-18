@@ -1,6 +1,6 @@
 import { searchSemantic, type SemanticSearchResult } from "./semantic-search";
 import { chat, chatStream } from "./llm";
-import { getDb, searchTranscriptSegments, videoKind, type ChatMessage as PersistedChatMessage } from "./db";
+import { getDb, searchDocsFts, searchTranscriptSegments, videoKind, type ChatMessage as PersistedChatMessage } from "./db";
 
 /**
  * RAG chat orchestrator. Pipeline per turn:
@@ -31,7 +31,11 @@ export interface AskArchiveArgs {
   /** Source-kind scope. Selects any combination of audio (file ext
    *  .wav/.m4a/.mp3/...), video (.mp4/.mkv/...), and doc (markdown
    *  chunks). Missing/empty means "all kinds". */
-  sources?: ("video" | "audio" | "doc")[];
+  sources?: ("video" | "audio" | "doc" | "note")[];
+  /** Exact-source scope supplied by Ask AI actions in source drawers. */
+  videoKeys?: { videoId: string; channelId: string }[];
+  documentIds?: string[];
+  noteIds?: string[];
   /** How many segments to retrieve. Default 18, capped at 50. */
   topK?: number;
   /** Cap segments per video so one source doesn't dominate the context. */
@@ -49,7 +53,7 @@ export interface ContextSource {
   sourceIndex: number;
   /** Source discriminator. Defaults to "video" for back-compat with
    *  persisted rows that predate doc sources. */
-  source?: "video" | "doc";
+  source?: "video" | "doc" | "note";
   videoId: string;
   channelId: string;
   segmentIndex: number;
@@ -89,6 +93,9 @@ export interface ContextSource {
   docHeadingPath?: string;
   docStartChar?: number;
   docEndChar?: number;
+  noteId?: string;
+  noteTitle?: string;
+  noteTags?: string[];
 }
 
 export type AskEvent =
@@ -142,6 +149,7 @@ function matchSpeakerNamesInQuestion(
  *  use video/channel/segment. */
 function speakerHitKey(r: SemanticSearchResult): string {
   if (r.source === "doc") return `doc:${r.document_id ?? ""}:${r.segment_index}`;
+  if (r.source === "note") return `note:${r.note_id ?? ""}`;
   return `vid:${r.video_id}:${r.channel_id}:${r.segment_index}`;
 }
 
@@ -154,7 +162,9 @@ function applyPerVideoCap(rows: SemanticSearchResult[], perVideoCap: number): Se
     // empty (videoId, channelId) sentinel and only one would survive.
     const key = r.source === "doc"
       ? `doc:${r.document_id ?? ""}`
-      : `video:${r.video_id}|${r.channel_id}`;
+      : r.source === "note"
+        ? `note:${r.note_id ?? ""}`
+        : `video:${r.video_id}|${r.channel_id}`;
     const seen = counts.get(key) ?? 0;
     if (seen >= perVideoCap) continue;
     counts.set(key, seen + 1);
@@ -168,6 +178,10 @@ function formatSourceBlock(sources: ContextSource[]): string {
     if (s.source === "doc") {
       const heading = s.docHeadingPath ? ` · ${s.docHeadingPath}` : "";
       return `[${s.sourceIndex}] DOC: ${s.docTitle || s.docRelPath}${heading}\n${s.excerpt}`;
+    }
+    if (s.source === "note") {
+      const tags = s.noteTags?.length ? ` · Tags: ${s.noteTags.join(", ")}` : "";
+      return `[${s.sourceIndex}] NOTE: ${s.noteTitle || "Untitled note"}${tags}\n${s.excerpt}`;
     }
     // Prefer the global speaker name when the user has labeled it —
     // the local "S0" / "S1" labels are meaningless to the model and
@@ -192,13 +206,14 @@ function formatTimestamp(seconds: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-const SYSTEM_PROMPT = `You are an assistant for a personal research archive of YouTube video transcripts. You will be given relevant excerpts from videos in the archive, then a question.
+const SYSTEM_PROMPT = `You are an assistant for a personal research archive. You will be given relevant excerpts from video/audio transcripts, markdown documents, and the user's research notes, then a question.
 
 Rules:
 - Answer based ONLY on the provided excerpts. Do not bring in outside knowledge.
 - Cite supporting excerpts with [N] markers where N is the source number. Combine multiple cites like [1, 3].
 - If the excerpts don't actually answer the question, say "The archive doesn't have content that addresses this directly." Do not invent.
 - Be concise. Lead with the answer; expand only if useful.
+- Treat NOTE sources as the user's own analysis, not as independent evidence; say so when that distinction matters.
 - When attributing claims to a person, use the speaker name shown for that excerpt when available; otherwise refer to the channel name.`;
 
 const REWRITE_SYSTEM_PROMPT = `You convert a follow-up question into a complete, standalone question that captures the conversational context. The output is used as a search query against a video archive.
@@ -249,7 +264,7 @@ function rankFuse(
   const score = new Map<string, { row: SemanticSearchResult; score: number }>();
   const add = (rows: SemanticSearchResult[]) => {
     rows.forEach((r, idx) => {
-      const key = `${r.video_id}|${r.channel_id}|${r.segment_index}`;
+      const key = speakerHitKey(r);
       const existing = score.get(key);
       const add = 1 / (K + idx + 1);
       if (existing) existing.score += add;
@@ -284,6 +299,114 @@ function ftsCandidates(
     }));
 }
 
+function docKeywordCandidates(
+  query: string,
+  limit: number,
+  category?: string,
+  documentIds?: string[],
+): SemanticSearchResult[] {
+  let rows = searchDocsFts(query, { category, limit: limit * 2 });
+  if (documentIds?.length) {
+    const allowed = new Set(documentIds);
+    rows = rows.filter(row => allowed.has(row.document_id));
+    // “Summarize this” contains no terms from the document. For an exact
+    // drawer scope, include its leading chunks directly so the source works
+    // even before semantic embeddings exist.
+    if (rows.length === 0) {
+      const direct = getDb().prepare(`
+        SELECT d.id AS document_id, COALESCE(d.root_id, '') AS doc_root_id,
+               d.rel_path AS doc_rel_path, d.title AS doc_title,
+               f.heading_path AS doc_heading_path,
+               CAST(f.chunk_index AS INTEGER) AS doc_chunk_index,
+               CAST(f.start_char AS INTEGER) AS doc_start_char,
+               CAST(f.end_char AS INTEGER) AS doc_end_char, f.text
+        FROM docs_fts f JOIN documents d ON d.id = f.document_id
+        WHERE d.id IN (${documentIds.map(() => "?").join(",")})
+        ORDER BY d.id, CAST(f.chunk_index AS INTEGER)
+        LIMIT ?
+      `).all(...documentIds, limit) as Array<{
+        document_id: string; doc_root_id: string; doc_rel_path: string; doc_title: string;
+        doc_heading_path: string | null; doc_chunk_index: number; doc_start_char: number;
+        doc_end_char: number; text: string;
+      }>;
+      return direct.map((row, index) => ({
+        source: "doc", video_id: "", channel_id: "", channel_name: null,
+        title: row.doc_title, url: "", upload_date: null, status: "doc",
+        is_live: 0, video_path: null, md_path: null, word_count: 0,
+        segment_index: row.doc_chunk_index, start_seconds: 0, end_seconds: 0,
+        speaker: null, text: row.text, rank: index, score: 0.65,
+        document_id: row.document_id, doc_root_id: row.doc_root_id,
+        doc_rel_path: row.doc_rel_path, doc_title: row.doc_title,
+        doc_heading_path: row.doc_heading_path ?? "", doc_start_char: row.doc_start_char,
+        doc_end_char: row.doc_end_char, doc_chunk_index: row.doc_chunk_index,
+      }));
+    }
+  }
+  return rows.slice(0, limit).map(row => ({
+    ...row,
+    score: 1 / (1 + Math.max(0, row.rank)),
+  }));
+}
+
+/** Lightweight live keyword retrieval for notes. It deliberately reads the
+ * authored tables instead of depending on vec_notes, so pre-existing notes
+ * become AI sources immediately while their semantic backfill job catches up. */
+function noteKeywordCandidates(
+  query: string,
+  limit: number,
+  noteIds?: string[],
+): SemanticSearchResult[] {
+  const stop = new Set(["about", "archive", "does", "from", "have", "into", "notes", "that", "the", "their", "this", "what", "when", "where", "which", "with", "would"]);
+  const terms = Array.from(new Set(
+    query.toLowerCase().match(/[a-z0-9_-]{3,}/g)?.filter(term => !stop.has(term)) ?? [],
+  ));
+  if (terms.length === 0 && !noteIds?.length) return [];
+
+  const rows = getDb().prepare(`
+    SELECT
+      c.id, c.title, COALESCE(c.note, '') AS body,
+      COALESCE((SELECT group_concat(tag, ', ') FROM clip_tags WHERE clip_id = c.id), '') AS tags,
+      COALESCE((SELECT group_concat(excerpt, '\n') FROM note_anchors WHERE clip_id = c.id), '') AS anchors
+    FROM transcript_clips c
+    ${noteIds && noteIds.length > 0 ? `WHERE c.id IN (${noteIds.map(() => "?").join(",")})` : ""}
+  `).all(...(noteIds ?? [])) as { id: string; title: string; body: string; tags: string; anchors: string }[];
+
+  return rows.map(row => {
+    const title = row.title.toLowerCase();
+    const body = row.body.toLowerCase();
+    const tags = row.tags.toLowerCase();
+    const anchors = row.anchors.toLowerCase();
+    let matchScore = 0;
+    for (const term of terms) {
+      if (title.includes(term)) matchScore += 4;
+      if (tags.includes(term)) matchScore += 3;
+      if (body.includes(term)) matchScore += 2;
+      if (anchors.includes(term)) matchScore += 1;
+    }
+    const text = [
+      `Note: ${row.title}`,
+      row.body ? `Body:\n${row.body}` : "",
+      row.tags ? `Tags: ${row.tags}` : "",
+      row.anchors ? `Evidence excerpts:\n${row.anchors}` : "",
+    ].filter(Boolean).join("\n\n").slice(0, 12_000);
+    return {
+      source: "note" as const,
+      video_id: "", channel_id: "", channel_name: null,
+      title: row.title, url: "", upload_date: null, status: "note",
+      is_live: 0, video_path: null, md_path: null, word_count: 0,
+      segment_index: 0, start_seconds: 0, end_seconds: 0, speaker: null,
+      text, rank: -matchScore, score: noteIds?.length ? Math.max(0.65, Math.min(0.85, 0.4 + matchScore * 0.04)) : Math.min(0.85, 0.4 + matchScore * 0.04),
+      note_id: row.id,
+      note_title: row.title,
+      note_tags: row.tags.split(",").map(tag => tag.trim()).filter(Boolean),
+      _matchScore: matchScore,
+    } as SemanticSearchResult & { _matchScore: number };
+  })
+    .filter(row => !!noteIds?.length || row._matchScore > 0)
+    .sort((a, b) => b._matchScore - a._matchScore)
+    .slice(0, limit);
+}
+
 export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent, void, void> {
   const topK = hardCap(args.topK ?? 18, 50);
   const perVideoCap = hardCap(args.perVideoCap ?? 3, 10);
@@ -305,6 +428,9 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
       ...(args.channelIds && args.channelIds.length === 1 ? { channelId: args.channelIds[0] } : {}),
       ...(args.category ? { category: args.category } : {}),
       ...(args.sources && args.sources.length > 0 ? { sources: args.sources } : {}),
+      ...(args.videoKeys?.length ? { videoKeys: args.videoKeys } : {}),
+      ...(args.documentIds?.length ? { documentIds: args.documentIds } : {}),
+      ...(args.noteIds?.length ? { noteIds: args.noteIds } : {}),
     };
 
     // Pass 1: the original (or rewritten-for-retrieval) query.
@@ -360,7 +486,7 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
 
   if (args.channelIds && args.channelIds.length > 1) {
     const allowed = new Set(args.channelIds);
-    semanticCandidates = semanticCandidates.filter((r) => allowed.has(r.channel_id));
+    semanticCandidates = semanticCandidates.filter((r) => r.source !== "video" || allowed.has(r.channel_id));
   }
 
   // Hybrid: blend in FTS5 keyword hits via Reciprocal Rank Fusion. Catches
@@ -376,6 +502,30 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
   if (wantsAnyTranscript) {
     try {
       ftsRows = ftsCandidates(retrievalQuery, args.channelIds, topK * 2, args.category);
+      if (args.videoKeys?.length) {
+        const allowedVideos = new Set(args.videoKeys.map(key => `${key.videoId}|${key.channelId}`));
+        ftsRows = ftsRows.filter(row => allowedVideos.has(`${row.video_id}|${row.channel_id}`));
+        if (ftsRows.length === 0) {
+          const scoped = getDb().prepare(`
+            SELECT q.video_id, q.channel_id, c.name AS channel_name, q.title, q.url,
+                   q.upload_date, q.status, q.is_live, q.video_path, q.md_path, q.word_count,
+                   CAST(s.segment_index AS INTEGER) AS segment_index,
+                   CAST(s.start_seconds AS REAL) AS start_seconds,
+                   CAST(s.end_seconds AS REAL) AS end_seconds,
+                   s.speaker, s.text
+            FROM transcript_segments_fts s
+            JOIN video_queue q ON q.video_id = s.video_id AND q.channel_id = s.channel_id
+            LEFT JOIN channels c ON c.id = q.channel_id
+            WHERE ${args.videoKeys.map(() => "(q.video_id = ? AND q.channel_id = ?)").join(" OR ")}
+            ORDER BY q.video_id, CAST(s.segment_index AS INTEGER)
+            LIMIT ?
+          `).all(
+            ...args.videoKeys.flatMap(key => [key.videoId, key.channelId]),
+            topK * 2,
+          ) as SemanticSearchResult[];
+          ftsRows = scoped.map((row, index) => ({ ...row, source: "video", rank: index, score: 0.65 }));
+        }
+      }
       // Filter by kind when only one of video/audio is selected.
       if (sourceSet && !(sourceSet.has("video") && sourceSet.has("audio"))) {
         ftsRows = ftsRows.filter((r) => {
@@ -390,8 +540,23 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
     }
   }
 
-  const fused = ftsRows.length > 0
-    ? rankFuse(semanticCandidates, ftsRows, topK * 2)
+  const wantsNotes = !sourceSet || sourceSet.has("note");
+  const noteRows = wantsNotes
+    ? noteKeywordCandidates(retrievalQuery, topK * 2, args.noteIds)
+    : [];
+  const wantsDocs = !sourceSet || sourceSet.has("doc");
+  let docRows: SemanticSearchResult[] = [];
+  if (wantsDocs) {
+    try {
+      docRows = docKeywordCandidates(retrievalQuery, topK * 2, args.category, args.documentIds);
+    } catch {
+      docRows = [];
+    }
+  }
+
+  const keywordRows = [...ftsRows, ...docRows, ...noteRows];
+  const fused = keywordRows.length > 0
+    ? rankFuse(semanticCandidates, keywordRows, topK * 2)
     : semanticCandidates;
 
   const capped = applyPerVideoCap(fused, perVideoCap).slice(0, topK);
@@ -423,7 +588,7 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
     ORDER BY segment_index
   `);
   for (const hit of capped) {
-    if (hit.source === "doc" || !hit.video_id || !hit.channel_id) continue;
+    if (hit.source !== "video" || !hit.video_id || !hit.channel_id) continue;
     const lo = Math.max(0, hit.segment_index - NEIGHBOR_WINDOW);
     const hi = hit.segment_index + NEIGHBOR_WINDOW;
     const rows = neighborStmt.all(
@@ -459,9 +624,10 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
   // the front since the model usually wants written docs to anchor
   // the answer.
   expanded.sort((a, b) => {
-    if (a.source === "doc" && b.source !== "doc") return -1;
-    if (a.source !== "doc" && b.source === "doc") return 1;
-    if (a.source === "doc" && b.source === "doc") return a.rank - b.rank;
+    const sourcePriority = (source: SemanticSearchResult["source"]) => source === "doc" ? 0 : source === "note" ? 1 : 2;
+    const priorityDelta = sourcePriority(a.source) - sourcePriority(b.source);
+    if (priorityDelta !== 0) return priorityDelta;
+    if (a.source !== "video" && b.source !== "video") return a.rank - b.rank;
     // video-source: same video → segment order; different videos →
     // rank order (best-scoring video first).
     const sameVideo = a.video_id === b.video_id && a.channel_id === b.channel_id;
@@ -478,7 +644,7 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
     `${videoId}|${channelId}|${local}`;
   const speakerNames = new Map<string, string>();
   const triples = expanded
-    .filter((r) => r.source !== "doc" && r.video_id && r.channel_id && r.speaker)
+    .filter((r) => r.source === "video" && r.video_id && r.channel_id && r.speaker)
     .map((r) => ({ video_id: r.video_id, channel_id: r.channel_id, local_speaker: r.speaker! }));
   if (triples.length > 0) {
     // Dedupe before the SELECT.
@@ -533,9 +699,12 @@ export async function* askArchive(args: AskArchiveArgs): AsyncGenerator<AskEvent
     docHeadingPath: r.doc_heading_path,
     docStartChar: r.doc_start_char,
     docEndChar: r.doc_end_char,
+    noteId: r.note_id,
+    noteTitle: r.note_title,
+    noteTags: r.note_tags,
   }));
 
-  const topScore = sources[0]?.score ?? 0;
+  const topScore = sources.reduce((best, source) => Math.max(best, source.score), 0);
   const weakRetrieval = sources.length === 0 || topScore < RELEVANT_SCORE_FLOOR;
 
   yield { type: "context", sources, weakRetrieval };

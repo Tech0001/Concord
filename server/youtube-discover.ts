@@ -433,6 +433,7 @@ export async function pollWatcher(watcher: Watcher): Promise<{ inserted: number;
           url: `https://www.youtube.com/watch?v=${hit.videoId}`,
           uploadDate: hit.publishedAt?.slice(0, 10).replace(/-/g, "") ?? null,
           category: watcher.category,
+          thumbnailUrl: hit.thumbnailUrl,
         });
         if (enqueued) queued += 1;
       }

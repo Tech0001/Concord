@@ -2,6 +2,7 @@ import {
   getDb,
   getTranscriptSegmentsForVideo,
   replaceVideoEmbeddings,
+  EMBEDDING_DIM,
   type EmbeddingInput,
 } from "./db";
 import {
@@ -106,13 +107,7 @@ export async function embedSegmentsForVideo(
         const name = s.speaker ? speakerNames.get(s.speaker) : null;
         return name ? `${name}: ${s.text}` : s.text;
       });
-      const vectors = await embed({ texts, model });
-
-      if (vectors.length !== batch.length) {
-        throw new Error(
-          `Embedding response had ${vectors.length} vectors for ${batch.length} inputs`,
-        );
-      }
+      const vectors = await embed({ texts, model, expectedDimensions: EMBEDDING_DIM });
 
       batch.forEach((seg, j) => {
         rows.push({

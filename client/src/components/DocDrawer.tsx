@@ -8,7 +8,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { ExternalLink, FileText, Loader2 } from "lucide-react";
+import { ExternalLink, FileText, Loader2, Sparkles } from "lucide-react";
 import { Markdown, makeDocImageResolver } from "@/components/Markdown";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -142,16 +142,28 @@ export function DocDrawer({
                     </p>
                   </SheetDescription>
                 </div>
-                <Link
-                  href={`/docs?${buildOpenInDocsQs(doc)}`}
-                  onClick={() => onOpenChange(false)}
-                  className="shrink-0"
-                >
-                  <Button size="sm" variant="ghost" className="h-7 text-xs" title="Open in the full Docs page">
-                    <ExternalLink className="h-3.5 w-3.5" />
-                    Open
-                  </Button>
-                </Link>
+                <div className="flex shrink-0 items-center gap-1">
+                  {doc.documentId && (
+                    <Link
+                      href={`/ai?scope=doc&documentId=${encodeURIComponent(doc.documentId)}&title=${encodeURIComponent(doc.title)}`}
+                      onClick={() => onOpenChange(false)}
+                    >
+                      <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" title="Ask AI about this document">
+                        <Sparkles className="h-3.5 w-3.5" />
+                        Ask AI
+                      </Button>
+                    </Link>
+                  )}
+                  <Link
+                    href={`/docs?${buildOpenInDocsQs(doc)}`}
+                    onClick={() => onOpenChange(false)}
+                  >
+                    <Button size="sm" variant="ghost" className="h-7 text-xs" title="Open in the full Docs page">
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Open
+                    </Button>
+                  </Link>
+                </div>
               </div>
             </SheetHeader>
             <div className="px-6 py-4">

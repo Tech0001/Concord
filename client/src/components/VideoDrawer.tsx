@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Link } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -168,6 +169,8 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
   const [regeneratingSummary, setRegeneratingSummary] = useState(false);
   const [notesStatus, setNotesStatus] = useState<"idle" | "saving" | "saved">("idle");
   const notesTimerRef = useRef<number | null>(null);
+  const currentSecondsRef = useRef(initialSeconds);
+  const lastSavedSecondsRef = useRef(-1);
   const [videoDuration, setVideoDuration] = useState(0);
   const [exportStartInput, setExportStartInput] = useState(formatTimestamp(initialSeconds));
   const [exportEndInput, setExportEndInput] = useState(formatTimestamp(initialSeconds + 60));
@@ -176,6 +179,22 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
   const [exportOpen, setExportOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const { toast } = useToast();
+
+  const persistPlayback = useCallback((seconds: number, force = false) => {
+    if (!video || !Number.isFinite(seconds)) return;
+    const safeSeconds = Math.max(0, seconds);
+    if (!force && Math.abs(safeSeconds - lastSavedSecondsRef.current) < 10) return;
+    lastSavedSecondsRef.current = safeSeconds;
+    void fetch(
+      `/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/playback`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seconds: safeSeconds }),
+        keepalive: true,
+      },
+    ).catch(() => { /* best-effort progress save */ });
+  }, [video?.channel_id, video?.video_id]);
 
   const loadTagOptions = async () => {
     try {
@@ -194,6 +213,8 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
 
   useEffect(() => {
     setActiveSeconds(initialSeconds);
+    currentSecondsRef.current = initialSeconds;
+    lastSavedSecondsRef.current = -1;
     setClipSegmentIndex(null);
     setClipNote("");
     setSegClipTags([]);
@@ -207,6 +228,12 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     setExportEndInput(formatTimestamp(initialSeconds + 60));
     setExportOpen(false);
   }, [initialSeconds, initialSegmentIndex, videoKey(video)]);
+
+  useEffect(() => {
+    if (!open || !video) return;
+    persistPlayback(initialSeconds, true);
+    return () => persistPlayback(currentSecondsRef.current, true);
+  }, [open, videoKey(video), persistPlayback]);
 
   // Per-video speaker mapping. Refreshes on drawer open and after each
   // assign/unassign so the chip labels update in place.
@@ -316,6 +343,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
 
   const seekTo = (seconds: number, autoplay = true) => {
     setActiveSeconds(seconds);
+    currentSecondsRef.current = seconds;
     const player = videoRef.current;
     if (!player) return;
     player.currentTime = Math.max(0, seconds);
@@ -707,7 +735,18 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
         {video ? (
           <>
             <SheetHeader className="border-b pr-12">
-              <SheetTitle className="line-clamp-2 text-base">{video.title}</SheetTitle>
+              <div className="flex items-start justify-between gap-3">
+                <SheetTitle className="line-clamp-2 min-w-0 flex-1 text-base">{video.title}</SheetTitle>
+                <Link
+                  href={`/ai?scope=video&videoId=${encodeURIComponent(video.video_id)}&channelId=${encodeURIComponent(video.channel_id)}&title=${encodeURIComponent(video.title)}`}
+                  onClick={() => onOpenChange(false)}
+                >
+                  <Button size="sm" variant="outline" className="h-7 shrink-0 gap-1 text-xs">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Ask AI
+                  </Button>
+                </Link>
+              </div>
               <SheetDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span>{video.channel_name || video.channel_id}</span>
                 <span className="inline-flex items-center gap-1">
@@ -744,7 +783,17 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                     playsInline
                     preload="metadata"
                     onLoadedMetadata={onLoadedMetadata}
-                    onTimeUpdate={event => setActiveSeconds(event.currentTarget.currentTime)}
+                    onTimeUpdate={event => {
+                      const seconds = event.currentTarget.currentTime;
+                      setActiveSeconds(seconds);
+                      currentSecondsRef.current = seconds;
+                      persistPlayback(seconds);
+                    }}
+                    onPause={event => persistPlayback(event.currentTarget.currentTime, true)}
+                    onEnded={() => {
+                      currentSecondsRef.current = 0;
+                      persistPlayback(0, true);
+                    }}
                     className={cn(
                       "w-full rounded-md border bg-black",
                       isAudioPath(video.video_path) ? "h-16" : "aspect-video",
@@ -1695,4 +1744,3 @@ function AddAnchorToNotePopover({
     </Popover>
   );
 }
-

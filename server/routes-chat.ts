@@ -83,12 +83,27 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
     // or empty array = no filter (search everything). Named
     // sourceKinds (not "sources") to avoid shadowing the
     // ContextSource[] yielded by askArchive below.
-    const allowedSources = new Set(["video", "audio", "doc"]);
-    const sourceKinds: ("video" | "audio" | "doc")[] | undefined = Array.isArray(req.body?.sources)
+    const allowedSources = new Set(["video", "audio", "doc", "note"]);
+    let sourceKinds: ("video" | "audio" | "doc" | "note")[] | undefined = Array.isArray(req.body?.sources)
       ? (req.body.sources
           .map(String)
-          .filter((s: string) => allowedSources.has(s)) as ("video" | "audio" | "doc")[])
+          .filter((s: string) => allowedSources.has(s)) as ("video" | "audio" | "doc" | "note")[])
       : undefined;
+    const videoKeys = Array.isArray(req.body?.videoKeys)
+      ? req.body.videoKeys.slice(0, 20).map((key: any) => ({ videoId: String(key?.videoId || ""), channelId: String(key?.channelId || "") })).filter((key: any) => key.videoId && key.channelId)
+      : undefined;
+    const documentIds = Array.isArray(req.body?.documentIds)
+      ? req.body.documentIds.slice(0, 20).map(String).filter(Boolean)
+      : undefined;
+    const noteIds = Array.isArray(req.body?.noteIds)
+      ? req.body.noteIds.slice(0, 20).map(String).filter(Boolean)
+      : undefined;
+    // An exact drawer scope takes precedence over the page's broad source
+    // chips. This prevents “Ask about this document” from silently citing a
+    // similarly named video or note instead.
+    if (videoKeys?.length) sourceKinds = ["video", "audio"];
+    else if (documentIds?.length) sourceKinds = ["doc"];
+    else if (noteIds?.length) sourceKinds = ["note"];
 
     // History for multi-turn — pass last 4 turns (2 exchanges) verbatim.
     let history: { role: "user" | "assistant"; content: string }[] = [];
@@ -145,6 +160,9 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
         perVideoCap,
         category,
         sources: sourceKinds && sourceKinds.length > 0 ? sourceKinds : undefined,
+        videoKeys,
+        documentIds,
+        noteIds,
         chatModel: cfg.chatModel,
         embeddingModel: cfg.embeddingModel,
         signal: abortCtl.signal,
@@ -198,6 +216,7 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
             docStartChar: s.docStartChar ?? null,
             docEndChar: s.docEndChar ?? null,
             docHeadingPath: s.docHeadingPath ?? null,
+            noteId: s.noteId ?? null,
           })),
         });
         sse("persisted", { assistantMessageId });

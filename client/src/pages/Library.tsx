@@ -21,6 +21,9 @@ import {
   Download,
   FileText,
   Filter,
+  Headphones,
+  LayoutGrid,
+  List,
   Loader2,
   Mic,
   MoreVertical,
@@ -29,6 +32,7 @@ import {
   Radio,
   RefreshCw,
   RotateCcw,
+  Save,
   Search,
   Star,
   Trash2,
@@ -62,6 +66,10 @@ interface QueueEntry {
   error: string | null;
   retries: number;
   starred?: number;
+  thumbnail_url: string | null;
+  last_position_seconds: number;
+  last_opened_at: string | null;
+  review_state: "unreviewed" | "in_review" | "reviewed";
   updated_at: string;
 }
 
@@ -80,6 +88,7 @@ interface ConfigResponse {
 
 const LIBRARY_SETTINGS_KEY = "concord-library-settings-v1";
 const LEGACY_LIBRARY_SETTINGS_KEY = "youtube-ripper-library-settings-v1";
+const LIBRARY_SAVED_VIEWS_KEY = "concord-library-saved-views-v1";
 
 interface LibrarySettings {
   model?: string;
@@ -90,8 +99,33 @@ interface LibrarySettings {
   hasTranscript?: string;
   starred?: string;
   sort?: string;
+  reviewState?: string;
+  viewMode?: "grid" | "list";
   page?: number;
   pageSize?: number;
+}
+
+interface SavedLibraryView {
+  id: string;
+  name: string;
+  query: string;
+  status: string;
+  channelId: string;
+  type: string;
+  hasTranscript: string;
+  starred: boolean;
+  sort: string;
+  reviewState: string;
+}
+
+function loadSavedViews(): SavedLibraryView[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LIBRARY_SAVED_VIEWS_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function loadLibrarySettings(): LibrarySettings {
@@ -131,11 +165,14 @@ function formatDuration(seconds: number | null): string {
   return `${minutes}m`;
 }
 
-function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
-  if (status === "complete") return "default";
-  if (status === "failed") return "destructive";
-  if (status === "pending") return "secondary";
-  return "outline";
+function formatResume(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds || 0));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const secs = safe % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`
+    : `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
 function statusBadge(status: string) {
@@ -180,6 +217,7 @@ function modelSelector(
 
 export default function Library() {
   const savedSettings = useMemo(() => loadLibrarySettings(), []);
+  const initialSavedViews = useMemo(() => loadSavedViews(), []);
   const [entries, setEntries] = useState<QueueEntry[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -192,6 +230,11 @@ export default function Library() {
   const [hasTranscript, setHasTranscript] = useState(savedSettings.hasTranscript || "all");
   const [starredOnly, setStarredOnly] = useState(savedSettings.starred === "yes");
   const [sort, setSort] = useState(savedSettings.sort || "upload_desc");
+  const [reviewState, setReviewState] = useState(savedSettings.reviewState || "all");
+  const [viewMode, setViewMode] = useState<"grid" | "list">(savedSettings.viewMode || "grid");
+  const [savedViews, setSavedViews] = useState<SavedLibraryView[]>(initialSavedViews);
+  const [selectedSavedView, setSelectedSavedView] = useState("none");
+  const [thumbnailRefreshToken, setThumbnailRefreshToken] = useState(0);
   const [page, setPage] = useState(savedSettings.page || 0);
   const [pageSize, setPageSize] = useState(savedSettings.pageSize || 50);
   const [total, setTotal] = useState(0);
@@ -238,7 +281,7 @@ export default function Library() {
 
   useEffect(() => {
     setPage(0);
-  }, [channelId, hasTranscript, starredOnly, pageSize, query, sort, status, type]);
+  }, [channelId, hasTranscript, starredOnly, pageSize, query, reviewState, sort, status, type]);
 
   useEffect(() => {
     window.localStorage.setItem(LIBRARY_SETTINGS_KEY, JSON.stringify({
@@ -250,10 +293,12 @@ export default function Library() {
       hasTranscript,
       starred: starredOnly ? "yes" : "all",
       sort,
+      reviewState,
+      viewMode,
       page,
       pageSize,
     }));
-  }, [channelId, hasTranscript, starredOnly, model, page, pageSize, query, sort, status, type]);
+  }, [channelId, hasTranscript, starredOnly, model, page, pageSize, query, reviewState, sort, status, type, viewMode]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -267,6 +312,7 @@ export default function Library() {
         hasTranscript,
         starred: starredOnly ? "yes" : "all",
         sort,
+        reviewState,
         q: query.trim(),
         t: String(Date.now()),
       });
@@ -303,7 +349,7 @@ export default function Library() {
 
   useEffect(() => {
     fetchData();
-  }, [page, pageSize, status, channelId, type, hasTranscript, starredOnly, sort, query, serverCategory]);
+  }, [page, pageSize, status, channelId, type, hasTranscript, starredOnly, sort, reviewState, query, serverCategory]);
 
   // While any entry on this page is queued / extracting / transcribing,
   // re-poll the queue every 4s so the spinner buttons reflect the live
@@ -341,6 +387,69 @@ export default function Library() {
       toast({ variant: "destructive", title: "Star toggle failed", description: error.message });
       fetchData();
     }
+  };
+
+  const setReview = async (entry: QueueEntry, next: QueueEntry["review_state"]) => {
+    setEntries(previous => previous.map(item =>
+      item.video_id === entry.video_id && item.channel_id === entry.channel_id
+        ? { ...item, review_state: next }
+        : item,
+    ));
+    try {
+      await apiRequest(
+        "PATCH",
+        `/api/videos/library/${encodeURIComponent(entry.channel_id)}/${encodeURIComponent(entry.video_id)}/review-state`,
+        { reviewState: next },
+      );
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Review state failed", description: error.message });
+      fetchData();
+    }
+  };
+
+  const saveCurrentView = () => {
+    const name = window.prompt("Name this Library view:")?.trim();
+    if (!name) return;
+    const view: SavedLibraryView = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      query,
+      status,
+      channelId,
+      type,
+      hasTranscript,
+      starred: starredOnly,
+      sort,
+      reviewState,
+    };
+    const next = [...savedViews, view];
+    setSavedViews(next);
+    setSelectedSavedView(view.id);
+    window.localStorage.setItem(LIBRARY_SAVED_VIEWS_KEY, JSON.stringify(next));
+    toast({ title: "View saved", description: name });
+  };
+
+  const applySavedView = (id: string) => {
+    setSelectedSavedView(id);
+    if (id === "none") return;
+    const view = savedViews.find(item => item.id === id);
+    if (!view) return;
+    setQuery(view.query);
+    setStatus(view.status);
+    setChannelId(view.channelId);
+    setType(view.type);
+    setHasTranscript(view.hasTranscript);
+    setStarredOnly(view.starred);
+    setSort(view.sort);
+    setReviewState(view.reviewState || "all");
+  };
+
+  const deleteSavedView = () => {
+    if (selectedSavedView === "none") return;
+    const next = savedViews.filter(item => item.id !== selectedSavedView);
+    setSavedViews(next);
+    setSelectedSavedView("none");
+    window.localStorage.setItem(LIBRARY_SAVED_VIEWS_KEY, JSON.stringify(next));
   };
 
   const retranscribe = async (entry: QueueEntry) => {
@@ -396,8 +505,13 @@ export default function Library() {
       md_path: entry.md_path,
       word_count: entry.word_count,
     });
-    setDrawerSeconds(0);
+    setDrawerSeconds(entry.last_position_seconds || 0);
     setDrawerOpen(true);
+  };
+
+  const handleDrawerOpenChange = (open: boolean) => {
+    setDrawerOpen(open);
+    if (!open) fetchData();
   };
 
   return (
@@ -410,7 +524,7 @@ export default function Library() {
               Library
             </CardTitle>
             <div className="text-xs text-muted-foreground" title={Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join("  ·  ")}>
-              {total.toLocaleString()} {total === 1 ? "video" : "videos"}
+              {total.toLocaleString()} {total === 1 ? "media item" : "media items"}
               {counts.complete !== undefined && <> · <span className="text-foreground">{(counts.complete || 0).toLocaleString()}</span> complete</>}
               {(counts.failed ?? 0) > 0 && <> · <span className="text-amber-600 dark:text-amber-400">{counts.failed} failed</span></>}
               {(counts.pending ?? 0) > 0 && <> · {counts.pending} pending</>}
@@ -418,6 +532,23 @@ export default function Library() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <Select value={selectedSavedView} onValueChange={applySavedView}>
+              <SelectTrigger className="h-9 w-[165px]">
+                <SelectValue placeholder="Saved views" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Saved views</SelectItem>
+                {savedViews.map(view => <SelectItem key={view.id} value={view.id}>{view.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button size="icon" variant="outline" className="h-9 w-9" onClick={saveCurrentView} title="Save current filters as a view">
+              <Save className="h-4 w-4" />
+            </Button>
+            {selectedSavedView !== "none" && (
+              <Button size="icon" variant="ghost" className="h-9 w-9" onClick={deleteSavedView} title="Delete selected saved view">
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
             <div className="relative flex-1 min-w-[260px]">
               <Search className="h-4 w-4 absolute left-2 top-2.5 text-muted-foreground" />
               <Input
@@ -454,6 +585,7 @@ export default function Library() {
                 (status !== "all" ? 1 : 0) +
                 (type !== "all" ? 1 : 0) +
                 (hasTranscript !== "all" ? 1 : 0) +
+                (reviewState !== "all" ? 1 : 0) +
                 (sort !== "upload_desc" ? 1 : 0);
               return (
                 <Popover>
@@ -490,7 +622,20 @@ export default function Library() {
                         <SelectContent>
                           <SelectItem value="all">All types</SelectItem>
                           <SelectItem value="video">Videos</SelectItem>
+                          <SelectItem value="audio">Audio</SelectItem>
                           <SelectItem value="live">Lives</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Review</label>
+                      <Select value={reviewState} onValueChange={setReviewState}>
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Any review state</SelectItem>
+                          <SelectItem value="unreviewed">Unreviewed</SelectItem>
+                          <SelectItem value="in_review">In review</SelectItem>
+                          <SelectItem value="reviewed">Reviewed</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -513,6 +658,7 @@ export default function Library() {
                           <SelectItem value="upload_desc">Newest upload</SelectItem>
                           <SelectItem value="upload_asc">Oldest upload</SelectItem>
                           <SelectItem value="updated_desc">Recently updated</SelectItem>
+                          <SelectItem value="recently_viewed">Recently viewed</SelectItem>
                           <SelectItem value="words_desc">Most words</SelectItem>
                           <SelectItem value="title">Title</SelectItem>
                         </SelectContent>
@@ -525,7 +671,7 @@ export default function Library() {
                           variant="ghost"
                           className="h-7 text-xs"
                           onClick={() => {
-                            setStatus("all"); setType("all"); setHasTranscript("all"); setSort("upload_desc");
+                            setStatus("all"); setType("all"); setHasTranscript("all"); setReviewState("all"); setSort("upload_desc");
                           }}
                         >
                           Reset
@@ -537,10 +683,40 @@ export default function Library() {
               );
             })()}
 
-            <Button size="sm" variant="outline" onClick={fetchData} disabled={loading} className="h-9">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setThumbnailRefreshToken(value => value + 1);
+                void fetchData();
+              }}
+              disabled={loading}
+              className="h-9"
+              title="Refresh the Library and retry missing thumbnails"
+            >
               <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
               Refresh
             </Button>
+            <div className="flex h-9 items-center rounded-md border p-0.5">
+              <Button
+                size="icon"
+                variant={viewMode === "grid" ? "secondary" : "ghost"}
+                className="h-7 w-7"
+                onClick={() => setViewMode("grid")}
+                title="Tile view"
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </Button>
+              <Button
+                size="icon"
+                variant={viewMode === "list" ? "secondary" : "ghost"}
+                className="h-7 w-7"
+                onClick={() => setViewMode("list")}
+                title="List view"
+              >
+                <List className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -556,6 +732,17 @@ export default function Library() {
             </div>
           </div>
 
+          {viewMode === "grid" ? (
+            <LibraryGrid
+              entries={entries}
+              channelNames={channelNames}
+              speakerBadges={speakerBadges}
+              thumbnailRefreshToken={thumbnailRefreshToken}
+              onOpen={openDrawer}
+              onToggleStar={toggleStar}
+              onSetReview={setReview}
+            />
+          ) : (
           <div className="overflow-x-auto rounded-md border">
             <Table>
               <TableHeader>
@@ -565,6 +752,7 @@ export default function Library() {
                   <TableHead>Title</TableHead>
                   <TableHead className="w-[130px]">Channel</TableHead>
                   <TableHead className="w-[110px]">Status</TableHead>
+                  <TableHead className="w-[110px]">Review</TableHead>
                   <TableHead className="w-[64px]">Words</TableHead>
                   <TableHead className="w-[90px]">Files</TableHead>
                   <TableHead className="w-[110px] text-right">Actions</TableHead>
@@ -625,6 +813,16 @@ export default function Library() {
                         {!!entry.is_live && <Badge variant="outline" className="mt-1 gap-1"><Radio className="h-3 w-3" />Live</Badge>}
                       </TableCell>
                       <TableCell className="py-2">{statusBadge(entry.status)}</TableCell>
+                      <TableCell className="py-2">
+                        <Select value={entry.review_state || "unreviewed"} onValueChange={(value) => setReview(entry, value as QueueEntry["review_state"])}>
+                          <SelectTrigger className="h-7 w-[108px] border-0 bg-transparent px-1 text-[11px]"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="unreviewed">Unreviewed</SelectItem>
+                            <SelectItem value="in_review">In review</SelectItem>
+                            <SelectItem value="reviewed">Reviewed</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
                       <TableCell className="py-2 text-sm">{entry.word_count || ""}</TableCell>
                       <TableCell className="py-2">
                         <div className="flex flex-wrap gap-1">
@@ -737,14 +935,15 @@ export default function Library() {
                 })}
                 {!entries.length && (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
-                      No videos match these filters.
+                    <TableCell colSpan={9} className="py-6 text-center text-sm text-muted-foreground">
+                      No media matches these filters.
                     </TableCell>
                   </TableRow>
                 )}
               </TableBody>
             </Table>
           </div>
+          )}
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-xs text-muted-foreground">
               Page {Math.min(page + 1, pageCount)} of {pageCount}
@@ -786,7 +985,7 @@ export default function Library() {
         open={drawerOpen}
         video={drawerVideo}
         initialSeconds={drawerSeconds}
-        onOpenChange={setDrawerOpen}
+        onOpenChange={handleDrawerOpenChange}
       />
       {renameTarget && (
         <RenameFileDialog
@@ -803,6 +1002,193 @@ export default function Library() {
         />
       )}
     </div>
+  );
+}
+
+interface LibraryGridProps {
+  entries: QueueEntry[];
+  channelNames: Record<string, string>;
+  speakerBadges: Record<string, { speaker_id: string; name: string; display_color: string | null; airtime_seconds: number; local_speaker: string }[]>;
+  thumbnailRefreshToken: number;
+  onOpen: (entry: QueueEntry) => void;
+  onToggleStar: (entry: QueueEntry) => void;
+  onSetReview: (entry: QueueEntry, value: QueueEntry["review_state"]) => void;
+}
+
+function LibraryGrid({
+  entries,
+  channelNames,
+  speakerBadges,
+  thumbnailRefreshToken,
+  onOpen,
+  onToggleStar,
+  onSetReview,
+}: LibraryGridProps) {
+  if (entries.length === 0) {
+    return <div className="rounded-md border py-12 text-center text-sm text-muted-foreground">No media match these filters.</div>;
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {entries.map(entry => {
+        const key = `${entry.channel_id}:${entry.video_id}`;
+        const audio = isAudioPath(entry.video_path);
+        const progress = entry.duration && entry.last_position_seconds
+          ? Math.min(100, Math.max(0, (entry.last_position_seconds / entry.duration) * 100))
+          : 0;
+        const thumbnailUrl = `/api/videos/library/${encodeURIComponent(entry.channel_id)}/${encodeURIComponent(entry.video_id)}/thumbnail`;
+        const people = speakerBadges[`${entry.video_id}|${entry.channel_id}`] || [];
+        return (
+          <article key={key} className="group overflow-hidden rounded-lg border bg-card shadow-sm transition-shadow hover:shadow-md">
+            <button
+              type="button"
+              className="relative block aspect-video w-full overflow-hidden bg-muted text-left disabled:cursor-default"
+              onClick={() => onOpen(entry)}
+              disabled={!entry.video_path}
+              aria-label={`Open ${entry.title}`}
+            >
+              {audio ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-primary/15 via-muted to-secondary/70 text-primary">
+                  <Headphones className="h-12 w-12" />
+                  <span className="mt-2 text-xs font-medium uppercase tracking-widest">Audio</span>
+                </div>
+              ) : (
+                <RetryingLibraryThumbnail
+                  key={`${key}:${thumbnailRefreshToken}`}
+                  src={`${thumbnailUrl}?refresh=${thumbnailRefreshToken}`}
+                />
+              )}
+              {!audio && entry.video_path && (
+                <span className="absolute left-2 top-2 rounded-full bg-black/65 p-2 text-white opacity-0 transition-opacity group-hover:opacity-100">
+                  <Play className="h-4 w-4 fill-current" />
+                </span>
+              )}
+              {entry.duration ? (
+                <span className="absolute bottom-2 right-2 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                  {formatDuration(entry.duration)}
+                </span>
+              ) : null}
+              {!!entry.is_live && (
+                <Badge variant="destructive" className="absolute left-2 bottom-2 gap-1"><Radio className="h-3 w-3" />Live</Badge>
+              )}
+              {progress > 0 && (
+                <div className="absolute inset-x-0 bottom-0 h-1 bg-black/30">
+                  <div className="h-full bg-primary" style={{ width: `${progress}%` }} />
+                </div>
+              )}
+            </button>
+
+            <div className="space-y-2 p-3">
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    className="line-clamp-2 text-left text-sm font-semibold leading-snug hover:underline disabled:no-underline"
+                    onClick={() => onOpen(entry)}
+                    disabled={!entry.video_path}
+                  >
+                    {entry.title}
+                  </button>
+                  <div className="mt-1 truncate text-xs text-muted-foreground">
+                    {channelNames[entry.channel_id] || entry.channel_id}
+                    {entry.upload_date ? ` · ${formatDate(entry.upload_date)}` : ""}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-label={entry.starred ? "Unstar" : "Star"}
+                  className={cn("shrink-0 rounded p-1 hover:bg-secondary", entry.starred ? "text-amber-500" : "text-muted-foreground")}
+                  onClick={() => onToggleStar(entry)}
+                >
+                  <Star className={cn("h-4 w-4", entry.starred && "fill-current")} />
+                </button>
+              </div>
+
+              {people.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {people.slice(0, 3).map(person => (
+                    <span
+                      key={person.speaker_id}
+                      className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                      style={person.display_color ? { background: person.display_color, color: "white" } : { background: "var(--secondary, #e5e7eb)" }}
+                    >
+                      {person.name}
+                    </span>
+                  ))}
+                  {people.length > 3 && <span className="self-center text-[10px] text-muted-foreground">+{people.length - 3}</span>}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-2">
+                {statusBadge(entry.status)}
+                <Select value={entry.review_state || "unreviewed"} onValueChange={(value) => onSetReview(entry, value as QueueEntry["review_state"])}>
+                  <SelectTrigger className="h-7 w-[108px] px-2 text-[11px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unreviewed">Unreviewed</SelectItem>
+                    <SelectItem value="in_review">In review</SelectItem>
+                    <SelectItem value="reviewed">Reviewed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {entry.last_position_seconds > 0 && (
+                <button type="button" onClick={() => onOpen(entry)} className="text-[11px] text-primary hover:underline">
+                  Resume at {formatResume(entry.last_position_seconds)}
+                </button>
+              )}
+              {entry.error && <p className="line-clamp-2 text-[11px] text-destructive">{entry.error}</p>}
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A thumbnail miss may only mean that generation was still queued or the
+ * server restarted mid-request. Retry with a cache-busting URL before showing
+ * the permanent fallback; remounting via Library Refresh resets the attempts. */
+function RetryingLibraryThumbnail({ src }: { src: string }) {
+  const [attempt, setAttempt] = useState(0);
+  const [retryPending, setRetryPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!retryPending) return;
+    const timer = window.setTimeout(() => {
+      setAttempt(value => value + 1);
+      setRetryPending(false);
+    }, 2_500);
+    return () => window.clearTimeout(timer);
+  }, [retryPending]);
+
+  if (failed) {
+    return (
+      <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-muted to-secondary">
+        <Play className="h-12 w-12 text-muted-foreground/70" />
+      </div>
+    );
+  }
+
+  if (retryPending) {
+    return (
+      <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-muted to-secondary">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground/70" />
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={`${src}&attempt=${attempt}`}
+      alt=""
+      loading="lazy"
+      className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+      onError={() => {
+        if (attempt < 2) setRetryPending(true);
+        else setFailed(true);
+      }}
+    />
   );
 }
 

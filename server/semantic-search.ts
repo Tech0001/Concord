@@ -1,6 +1,7 @@
 import { embed, formatEmbeddingQuery } from "./llm";
 import {
   getDb,
+  EMBEDDING_DIM,
   normalizeVector,
   videoKind,
   type TranscriptSearchResult,
@@ -39,10 +40,10 @@ export interface SemanticSearchResult extends TranscriptSearchResult {
    *  0.4-0.5 = weak. Below minScore is filtered server-side. */
   score: number;
   /** Source discriminator. "video" = video transcript segment;
-   *  "doc" = markdown doc chunk (with the doc-specific fields below
+   *  "doc" = markdown doc chunk and "note" = a user research note
    *  populated). Default "video" for back-compat with existing
    *  callers that ignore the field. */
-  source?: "video" | "doc";
+  source?: "video" | "doc" | "note";
   /** Doc-source fields — populated when source === "doc". */
   document_id?: string;
   doc_rel_path?: string;
@@ -57,6 +58,10 @@ export interface SemanticSearchResult extends TranscriptSearchResult {
    *  the server falls back to the first root and a doc that lives
    *  in another root 404s. Empty string for the legacy root. */
   doc_root_id?: string;
+  /** Note-source fields — populated when source === "note". */
+  note_id?: string;
+  note_title?: string;
+  note_tags?: string[];
 }
 
 export interface SemanticSearchResponse {
@@ -77,6 +82,15 @@ interface VecKnnRow {
   start_seconds: number;
   end_seconds: number;
   speaker: string | null;
+  distance: number;
+}
+
+interface VecNoteKnnRow {
+  note_id: string;
+  model: string;
+  text: string;
+  title: string;
+  tags: string;
   distance: number;
 }
 
@@ -153,7 +167,11 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
   const minScore = args.minScore ?? 0.4;
 
   const t0 = Date.now();
-  const [queryVecRaw] = await embed({ texts: [formatEmbeddingQuery(query, model)], model });
+  const [queryVecRaw] = await embed({
+    texts: [formatEmbeddingQuery(query, model)],
+    model,
+    expectedDimensions: EMBEDDING_DIM,
+  });
   // Normalize to match the unit-norm storage so L2 ranking == cosine ranking.
   const queryVec = normalizeVector(queryVecRaw);
   const queryEmbedDurationMs = Date.now() - t0;
@@ -183,21 +201,39 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
     : null;
   const wantsVideoPool = !sources || sources.has("video") || sources.has("audio");
   const wantsDocPool = !sources || sources.has("doc");
+  const wantsNotePool = !sources || sources.has("note");
+
+  const scopedVideoKeys = filters.videoKeys?.filter(key => key.videoId && key.channelId) ?? [];
+  const scopedDocumentIds = filters.documentIds?.filter(Boolean) ?? [];
+  const scopedNoteIds = filters.noteIds?.filter(Boolean) ?? [];
 
   // STAGE 1: pure KNN against vec_segments. vec0's WHERE during MATCH is
   // strict — even straightforward shapes like `WITH top_k AS (...) SELECT
   // ... WHERE t.distance <= ?` trip its query planner ("illegal WHERE"
   // error). Keep this query exactly to vec0's blessed shape and apply
   // every other filter in JS.
-  const knnRows = wantsVideoPool
+  const knnRows = !wantsVideoPool ? [] : scopedVideoKeys.length > 0
     ? getDb().prepare(`
+        SELECT video_id, channel_id, segment_index, model, text,
+               start_seconds, end_seconds, speaker,
+               vec_distance_L2(embedding, ?) AS distance
+        FROM vec_segments
+        WHERE model = ?
+          AND (${scopedVideoKeys.map(() => "(video_id = ? AND channel_id = ?)").join(" OR ")})
+        ORDER BY distance
+        LIMIT ?
+      `).all(
+        float32ToBuffer(queryVec), model,
+        ...scopedVideoKeys.flatMap(key => [key.videoId, key.channelId]),
+        k,
+      ) as VecKnnRow[]
+    : getDb().prepare(`
         SELECT video_id, channel_id, segment_index, model, text,
                start_seconds, end_seconds, speaker, distance
         FROM vec_segments
         WHERE embedding MATCH ?
           AND k = ?
-      `).all(float32ToBuffer(queryVec), k) as VecKnnRow[]
-    : [];
+      `).all(float32ToBuffer(queryVec), k) as VecKnnRow[];
 
   // Parallel KNN against doc chunks. Same dim, same model gate. Both
   // pools are merged below by distance — vec0's distance is metric so
@@ -212,15 +248,41 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
     end_char: number;
     distance: number;
   }
-  const docKnnRows = wantsDocPool
+  const docKnnRows = !wantsDocPool ? [] : scopedDocumentIds.length > 0
     ? getDb().prepare(`
+        SELECT document_id, chunk_index, model, text, heading_path,
+               start_char, end_char,
+               vec_distance_L2(embedding, ?) AS distance
+        FROM vec_docs
+        WHERE model = ?
+          AND document_id IN (${scopedDocumentIds.map(() => "?").join(",")})
+        ORDER BY distance
+        LIMIT ?
+      `).all(float32ToBuffer(queryVec), model, ...scopedDocumentIds, k) as VecDocKnnRow[]
+    : getDb().prepare(`
         SELECT document_id, chunk_index, model, text, heading_path,
                start_char, end_char, distance
         FROM vec_docs
         WHERE embedding MATCH ?
           AND k = ?
-      `).all(float32ToBuffer(queryVec), k) as VecDocKnnRow[]
-    : [];
+      `).all(float32ToBuffer(queryVec), k) as VecDocKnnRow[];
+
+  const noteKnnRows = !wantsNotePool ? [] : scopedNoteIds.length > 0
+    ? getDb().prepare(`
+        SELECT note_id, model, text, title, tags,
+               vec_distance_L2(embedding, ?) AS distance
+        FROM vec_notes
+        WHERE model = ?
+          AND note_id IN (${scopedNoteIds.map(() => "?").join(",")})
+        ORDER BY distance
+        LIMIT ?
+      `).all(float32ToBuffer(queryVec), model, ...scopedNoteIds, k) as VecNoteKnnRow[]
+    : getDb().prepare(`
+        SELECT note_id, model, text, title, tags, distance
+        FROM vec_notes
+        WHERE embedding MATCH ?
+          AND k = ?
+      `).all(float32ToBuffer(queryVec), k) as VecNoteKnnRow[];
 
   // Filter to the requested model + distance threshold, then sort.
   const candidates = knnRows
@@ -228,6 +290,10 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
     .sort((a, b) => a.distance - b.distance);
 
   const docCandidates = docKnnRows
+    .filter((r) => r.model === model && r.distance <= maxDistance)
+    .sort((a, b) => a.distance - b.distance);
+
+  const noteCandidates = noteKnnRows
     .filter((r) => r.model === model && r.distance <= maxDistance)
     .sort((a, b) => a.distance - b.distance);
 
@@ -334,10 +400,39 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
     });
   }
 
+  const noteResults: SemanticSearchResult[] = [];
+  for (const row of noteCandidates) {
+    const score = 1 - (row.distance * row.distance) / 2;
+    noteResults.push({
+      source: "note",
+      video_id: "",
+      channel_id: "",
+      channel_name: null,
+      title: row.title,
+      url: "",
+      upload_date: null,
+      status: "note",
+      is_live: 0,
+      video_path: null,
+      md_path: null,
+      word_count: 0,
+      segment_index: 0,
+      start_seconds: 0,
+      end_seconds: 0,
+      speaker: null,
+      text: row.text,
+      rank: row.distance,
+      score,
+      note_id: row.note_id,
+      note_title: row.title,
+      note_tags: row.tags ? row.tags.split(",").map(tag => tag.trim()).filter(Boolean) : [],
+    });
+  }
+
   // Merge + interleave by ascending distance (lower = better). Cap at
   // the caller's requested limit so one source can't crowd the other
   // out entirely.
-  const results = [...videoResults, ...docResults]
+  const results = [...videoResults, ...docResults, ...noteResults]
     .sort((a, b) => a.rank - b.rank)
     .slice(0, limit);
 
@@ -345,7 +440,7 @@ export async function searchSemantic(args: SemanticSearchArgs): Promise<Semantic
     results,
     queryEmbedDurationMs,
     searchDurationMs,
-    vectorsScanned: knnRows.length + docKnnRows.length,
+    vectorsScanned: knnRows.length + docKnnRows.length + noteKnnRows.length,
     minScore,
     model,
   };

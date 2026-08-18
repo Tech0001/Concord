@@ -1,4 +1,8 @@
 import { getPipeline } from "./pipeline";
+import {
+  assertEmbeddingVectorDimensions,
+  EmbeddingDimensionMismatchError,
+} from "./embedding-dimensions";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -17,6 +21,9 @@ export interface EmbedOptions {
   texts: string[];
   model?: string;
   signal?: AbortSignal;
+  /** Validate response vectors against the fixed width of the destination
+   *  index. This is a local check; it is not sent as an API truncation hint. */
+  expectedDimensions?: number;
 }
 
 export interface ProviderModel {
@@ -226,7 +233,7 @@ export async function embed(opts: EmbedOptions): Promise<Float32Array[]> {
   const json = await res.json() as {
     data?: { embedding: number[] | string }[];
   };
-  return (json.data || []).map((row) => {
+  const vectors = (json.data || []).map((row) => {
     if (typeof row.embedding === "string") {
       // Some servers return base64-encoded float32; oMLX/Ollama return number[].
       // Decode just in case.
@@ -234,6 +241,34 @@ export async function embed(opts: EmbedOptions): Promise<Float32Array[]> {
       return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
     }
     return new Float32Array(row.embedding);
+  });
+  if (vectors.length !== opts.texts.length) {
+    throw new Error(
+      `Embedding response had ${vectors.length} vectors for ${opts.texts.length} inputs`,
+    );
+  }
+  if (opts.expectedDimensions !== undefined) {
+    assertEmbeddingVectorDimensions(vectors, model, opts.expectedDimensions);
+  }
+  return vectors;
+}
+
+/**
+ * One-input preflight for a bulk indexing job. This deliberately asks for a
+ * real embedding instead of trusting model names or provider metadata: local
+ * servers do not consistently advertise output dimensions, and some support
+ * configurable truncation. The caller supplies the actual index width.
+ */
+export async function assertEmbeddingModelDimensions(
+  model: string,
+  expectedDimensions: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  await embed({
+    texts: ["Concord embedding compatibility check."],
+    model,
+    signal,
+    expectedDimensions,
   });
 }
 
@@ -299,13 +334,17 @@ export async function probeStatus(timeoutMs = 3000): Promise<LlmStatus> {
 
 export interface ModelValidation {
   ok: boolean;
-  /** "kind-mismatch" = wrong type of model picked; "unreachable" = server down;
-   *  "http" = some other server-side rejection; "other" = unknown. */
-  errorKind?: "kind-mismatch" | "unreachable" | "http" | "other";
+  /** "kind-mismatch" = wrong type of model picked; "dimension-mismatch" =
+   *  valid embedder with the wrong vector width; "unreachable" = server
+   *  down; "http" = another server-side rejection; "other" = unknown. */
+  errorKind?: "kind-mismatch" | "dimension-mismatch" | "unreachable" | "http" | "other";
   error?: string;
 }
 
 function classifyKindError(err: unknown, expected: "chat" | "embedding"): ModelValidation {
+  if (err instanceof EmbeddingDimensionMismatchError) {
+    return { ok: false, errorKind: "dimension-mismatch", error: err.message };
+  }
   if (err instanceof LlmUnreachableError) {
     return { ok: false, errorKind: "unreachable", error: err.message };
   }
@@ -350,14 +389,16 @@ export async function validateChatModel(model: string): Promise<ModelValidation>
   }
 }
 
-/** Probe `model` as an embedding model — sends one trivial input. */
-export async function validateEmbeddingModel(model: string): Promise<ModelValidation> {
+/** Probe `model` as an embedding model — sends one trivial input. When an
+ * expected width is supplied, the same cheap call also validates that the
+ * model can write to Concord's vector indexes. */
+export async function validateEmbeddingModel(
+  model: string,
+  expectedDimensions?: number,
+): Promise<ModelValidation> {
   if (!model) return { ok: false, errorKind: "other", error: "no model specified" };
   try {
-    await llmFetch("/embeddings", {
-      method: "POST",
-      body: JSON.stringify({ model, input: "." }),
-    });
+    await embed({ texts: ["."], model, expectedDimensions });
     return { ok: true };
   } catch (err) {
     return classifyKindError(err, "embedding");

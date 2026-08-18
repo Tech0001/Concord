@@ -6,10 +6,9 @@ import path from "path";
 
 // Embedding dimension is hardcoded to match Qwen3-Embedding-0.6B (the
 // recommended embedding model for Concord). If the user switches to a
-// different-dim model (e.g. EmbeddingGemma at 768), the insert path
-// throws with a clear "wipe + reindex required" message and they re-run
-// the AI page reindex with the new model. We intentionally don't try
-// to support mixed dimensions in one table — that gets complicated fast.
+// different-dim model (e.g. EmbeddingGemma at 768), preflight and insert
+// guards reject it before stored vectors are touched. We intentionally don't
+// support mixed dimensions in one table — that gets complicated fast.
 export const EMBEDDING_DIM = 1024;
 
 let db: Database.Database | null = null;
@@ -86,6 +85,28 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_queue_status  ON video_queue(channel_id, status);
   CREATE INDEX IF NOT EXISTS idx_queue_date    ON video_queue(channel_id, upload_date);
   CREATE INDEX IF NOT EXISTS idx_channels_enabled ON channels(enabled);
+
+  -- Durable, user-visible work that can resume after the app restarts.
+  -- payload is type-specific JSON; progress/error columns stay generic so
+  -- the UI can render every operation in one jobs panel.
+  CREATE TABLE IF NOT EXISTS background_jobs (
+    id             TEXT PRIMARY KEY,
+    type           TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'queued',
+    label          TEXT NOT NULL,
+    payload        TEXT NOT NULL DEFAULT '{}',
+    progress_done  INTEGER NOT NULL DEFAULT 0,
+    progress_total INTEGER NOT NULL DEFAULT 0,
+    result         TEXT,
+    error          TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at     TEXT,
+    completed_at   TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_background_jobs_status
+    ON background_jobs(status, created_at);
 
   CREATE TABLE IF NOT EXISTS transcript_index (
     video_id       TEXT NOT NULL,
@@ -406,6 +427,20 @@ export function getDb(dbPath?: string): Database.Database {
       )
     `);
 
+    // User-authored research notes are first-class RAG sources. One vector
+    // per (note, model) is enough: notes are concise, and their title/body,
+    // tags, and anchor excerpts are combined into the indexed text.
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS vec_notes USING vec0(
+        embedding float[${EMBEDDING_DIM}],
+        +note_id TEXT,
+        +model TEXT,
+        +text TEXT,
+        +title TEXT,
+        +tags TEXT
+      )
+    `);
+
     runMigrations(db);
     console.log(`[db] SQLite ready: ${resolvedPath} (sqlite-vec loaded, dim=${EMBEDDING_DIM})`);
   }
@@ -453,6 +488,16 @@ function runMigrations(database: Database.Database) {
   // independent of system status — surfaces in the Library with a
   // dedicated filter chip.
   ensureColumn("video_queue", "starred", "INTEGER NOT NULL DEFAULT 0");
+
+  // Library browsing metadata. Thumbnails are cached lazily beside the DB;
+  // the URL is retained as a source hint. Playback/review fields turn the
+  // archive into a resumable research queue rather than a flat file list.
+  ensureColumn("video_queue", "thumbnail_url", "TEXT");
+  ensureColumn("video_queue", "last_position_seconds", "REAL NOT NULL DEFAULT 0");
+  ensureColumn("video_queue", "last_opened_at", "TEXT");
+  ensureColumn("video_queue", "review_state", "TEXT NOT NULL DEFAULT 'unreviewed'");
+  database.exec("CREATE INDEX IF NOT EXISTS idx_queue_last_opened ON video_queue(last_opened_at)");
+  database.exec("CREATE INDEX IF NOT EXISTS idx_queue_review_state ON video_queue(review_state)");
 
   // Personal / work category. A viewing toggle in the header filters
   // every list (Library, Watchers, Inbox, ...) by category, so the
@@ -547,6 +592,7 @@ function runMigrations(database: Database.Database) {
   ensureColumn("chat_message_sources", "doc_start_char", "INTEGER");
   ensureColumn("chat_message_sources", "doc_end_char", "INTEGER");
   ensureColumn("chat_message_sources", "doc_heading_path", "TEXT");
+  ensureColumn("chat_message_sources", "note_id", "TEXT");
 
   // Recreate note_anchors with nullable video_id/channel_id if the
   // original NOT NULL is still in place. Detect by reading

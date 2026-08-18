@@ -48,6 +48,10 @@ export interface QueueEntry {
    *  so filter queries don't need to JOIN. Updated in lockstep when
    *  the channel's category changes (see updateChannelCategory). */
   category: string;
+  thumbnail_url: string | null;
+  last_position_seconds: number;
+  last_opened_at: string | null;
+  review_state: "unreviewed" | "in_review" | "reviewed";
   created_at: string;
   updated_at: string;
 }
@@ -66,6 +70,7 @@ export interface QueueListFilters {
   category?: string;
   q?: string;
   sort?: string;
+  reviewState?: string;
 }
 
 export interface QueueListResult {
@@ -93,7 +98,11 @@ export interface TranscriptSearchFilters {
    *  result pool: "video" = video files, "audio" = audio-only files
    *  (.wav / .m4a / .mp3 / .flac / .ogg), "doc" = markdown chunks.
    *  Missing/empty means "all kinds". */
-  sources?: ("video" | "audio" | "doc")[];
+  sources?: ("video" | "audio" | "doc" | "note")[];
+  /** Exact source scope used by “Ask AI” from an open drawer. */
+  videoKeys?: { videoId: string; channelId: string }[];
+  documentIds?: string[];
+  noteIds?: string[];
   limit?: number;
 }
 
@@ -180,6 +189,7 @@ export function enqueueVideo(v: {
   /** Personal / work category. Falls back to the parent channel's
    *  category, then to 'personal'. */
   category?: string;
+  thumbnailUrl?: string | null;
 }): boolean {
   const d = getDb();
   const existing = d.prepare("SELECT 1 FROM video_queue WHERE video_id = ? LIMIT 1").get(v.videoId);
@@ -187,8 +197,10 @@ export function enqueueVideo(v: {
 
   const category = resolveCategoryForChannel(v.category, v.channelId);
   d.prepare(`
-    INSERT INTO video_queue (video_id, channel_id, title, url, duration, is_live, is_shorts, upload_date, status, category)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+    INSERT INTO video_queue
+      (video_id, channel_id, title, url, duration, is_live, is_shorts,
+       upload_date, status, category, thumbnail_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
   `).run(
     v.videoId,
     v.channelId,
@@ -199,6 +211,7 @@ export function enqueueVideo(v: {
     v.isShorts ? 1 : 0,
     v.uploadDate ?? null,
     category,
+    v.thumbnailUrl ?? null,
   );
   return true;
 }
@@ -216,13 +229,15 @@ function resolveCategoryForChannel(explicit: string | undefined, channelId: stri
 
 /** Bulk enqueue many videos. Returns count of newly inserted. */
 export function enqueueVideos(
-  videos: { videoId: string; channelId: string; title: string; url: string; duration?: number | null; isLive?: boolean; isShorts?: boolean; uploadDate?: string | null; category?: string }[]
+  videos: { videoId: string; channelId: string; title: string; url: string; duration?: number | null; isLive?: boolean; isShorts?: boolean; uploadDate?: string | null; category?: string; thumbnailUrl?: string | null }[]
 ): number {
   let count = 0;
   const exists = getDb().prepare("SELECT 1 FROM video_queue WHERE video_id = ? LIMIT 1");
   const insert = getDb().prepare(`
-    INSERT OR IGNORE INTO video_queue (video_id, channel_id, title, url, duration, is_live, is_shorts, upload_date, status, category)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+    INSERT OR IGNORE INTO video_queue
+      (video_id, channel_id, title, url, duration, is_live, is_shorts,
+       upload_date, status, category, thumbnail_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
   `);
 
   const tx = getDb().transaction(() => {
@@ -233,6 +248,7 @@ export function enqueueVideos(
         v.videoId, v.channelId, v.title, v.url,
         v.duration ?? null, v.isLive ? 1 : 0, v.isShorts ? 1 : 0, v.uploadDate ?? null,
         category,
+        v.thumbnailUrl ?? null,
       );
       if (result.changes > 0) count++;
     }
@@ -301,6 +317,31 @@ export function updateQueueStatus(
   getDb().prepare(`UPDATE video_queue SET ${sets.join(", ")} WHERE video_id = ? AND channel_id = ?`).run(...params);
 }
 
+export function setVideoPlaybackProgress(
+  videoId: string,
+  channelId: string,
+  seconds: number,
+): void {
+  getDb().prepare(`
+    UPDATE video_queue
+    SET last_position_seconds = ?,
+        last_opened_at = datetime('now')
+    WHERE video_id = ? AND channel_id = ?
+  `).run(Math.max(0, seconds), videoId, channelId);
+}
+
+export function setVideoReviewState(
+  videoId: string,
+  channelId: string,
+  reviewState: "unreviewed" | "in_review" | "reviewed",
+): void {
+  getDb().prepare(`
+    UPDATE video_queue
+    SET review_state = ?, updated_at = datetime('now')
+    WHERE video_id = ? AND channel_id = ?
+  `).run(reviewState, videoId, channelId);
+}
+
 /** Count by status for a channel (or all). Optionally restrict to a
  *  single category so the Library status chips match the header
  *  toggle. */
@@ -356,8 +397,27 @@ export function getQueueList(filters: QueueListFilters = {}): QueueListResult {
   }
   if (filters.type === "live") {
     where.push("q.is_live = 1");
+  } else if (filters.type === "audio") {
+    where.push(`(
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.mp3' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.m4a' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.wav' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.flac' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.aac' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.opus' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.ogg'
+    )`);
   } else if (filters.type === "video") {
     where.push("q.is_live = 0");
+    where.push(`NOT (
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.mp3' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.m4a' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.wav' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.flac' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.aac' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.opus' OR
+      LOWER(COALESCE(q.video_path, '')) LIKE '%.ogg'
+    )`);
   }
   if (filters.hasTranscript === "yes") {
     where.push("q.md_path IS NOT NULL AND q.md_path != ''");
@@ -366,6 +426,10 @@ export function getQueueList(filters: QueueListFilters = {}): QueueListResult {
   }
   if (filters.starred === "yes") {
     where.push("q.starred = 1");
+  }
+  if (filters.reviewState === "unreviewed" || filters.reviewState === "in_review" || filters.reviewState === "reviewed") {
+    where.push("q.review_state = ?");
+    params.push(filters.reviewState);
   }
   if (filters.category === "personal" || filters.category === "work") {
     where.push("q.category = ?");
@@ -410,6 +474,8 @@ function queueOrderSql(sort?: string): string {
       return "ORDER BY q.upload_date ASC NULLS LAST, q.created_at ASC";
     case "updated_desc":
       return "ORDER BY q.updated_at DESC, q.upload_date DESC NULLS LAST";
+    case "recently_viewed":
+      return "ORDER BY q.last_opened_at DESC NULLS LAST, q.upload_date DESC NULLS LAST";
     case "words_desc":
       return "ORDER BY q.word_count DESC, q.upload_date DESC NULLS LAST";
     case "title":

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +26,7 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -138,6 +140,10 @@ function formatTimestamp(seconds: number): string {
 const POPULAR_LIMIT = 12;
 
 export default function Clips() {
+  const targetNoteId = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("noteId") || "";
+  }, []);
   const [clips, setClips] = useState<ClipEntry[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [allTags, setAllTags] = useState<TagCount[]>([]);
@@ -222,6 +228,13 @@ export default function Clips() {
       const clipsData = await clipsRes.json() as { rows?: ClipEntry[] };
       const configData = await configRes.json() as { channels?: Channel[] };
       const rows = clipsData.rows || [];
+      if (targetNoteId && !rows.some(row => row.id === targetNoteId)) {
+        try {
+          const targetRes = await apiRequest("GET", `/api/clips/${encodeURIComponent(targetNoteId)}?t=${Date.now()}`);
+          const targetData = await targetRes.json() as { note?: ClipEntry };
+          if (targetData.note) rows.unshift(targetData.note);
+        } catch { /* a deleted citation simply falls back to the normal list */ }
+      }
       setClips(rows);
       setChannels(configData.channels || []);
       await Promise.all([loadTags(), loadLinksFor(rows.map(r => r.id))]);
@@ -429,7 +442,7 @@ export default function Clips() {
 
   // 2-pane state — which note is currently selected in the sidebar.
   // Auto-select first note when list loads; null = empty detail pane.
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(targetNoteId || null);
   type SortMode = "recent" | "created" | "title" | "anchors";
   const [sortMode, setSortMode] = useState<SortMode>("recent");
   type AnchorFilter = "all" | "standalone" | "anchored";
@@ -1358,6 +1371,12 @@ function NoteDetailPane({
             placeholder="Note title"
             className="border-transparent bg-transparent px-2 text-base font-semibold focus-visible:border-input"
           />
+          <Link href={`/ai?scope=note&noteId=${encodeURIComponent(clip.id)}&title=${encodeURIComponent(clip.title)}`}>
+            <Button size="sm" variant="outline" className="gap-1" title="Ask AI about this note">
+              <Sparkles className="h-3.5 w-3.5" />
+              Ask AI
+            </Button>
+          </Link>
           <Button size="sm" variant="ghost" onClick={onDelete} title="Delete note">
             <Trash2 className="h-3.5 w-3.5 text-destructive" />
           </Button>

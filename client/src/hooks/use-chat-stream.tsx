@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { saveActiveConversationId } from "@/lib/ai-chat-persistence";
 
 /**
  * Module-level singleton that owns the in-flight AI chat stream.
@@ -22,7 +23,7 @@ import { useSyncExternalStore } from "react";
 
 export interface ChatSource {
   source_index: number;
-  source?: "video" | "doc";
+  source?: "video" | "doc" | "note";
   video_id: string;
   channel_id: string;
   segment_index: number | null;
@@ -60,6 +61,13 @@ export interface ChatSource {
   docHeadingPath?: string;
   docStartChar?: number;
   docEndChar?: number;
+  note_id?: string;
+  note_title?: string;
+  note_body?: string;
+  note_tags?: string;
+  noteId?: string;
+  noteTitle?: string;
+  noteTags?: string[];
 }
 
 export type AskEvent =
@@ -78,7 +86,10 @@ export interface AskArgs {
   conversationId?: string | null;
   channelIds?: string[];
   category?: string;
-  sources?: ("video" | "audio" | "doc")[];
+  sources?: ("video" | "audio" | "doc" | "note")[];
+  videoKeys?: { videoId: string; channelId: string }[];
+  documentIds?: string[];
+  noteIds?: string[];
 }
 
 export interface ChatStreamSnapshot {
@@ -166,6 +177,9 @@ class ChatStream {
           channelIds: args.channelIds,
           category: args.category,
           sources: args.sources && args.sources.length > 0 ? args.sources : undefined,
+          videoKeys: args.videoKeys,
+          documentIds: args.documentIds,
+          noteIds: args.noteIds,
         }),
       });
 
@@ -195,6 +209,10 @@ class ChatStream {
 
           if (evt.type === "conversation") {
             serverConvId = evt.conversationId;
+            // The AI page may already be unmounted because the user followed
+            // a citation or opened another section. Remember the server id at
+            // the stream owner so returning still restores this new chat.
+            saveActiveConversationId(window.localStorage, serverConvId);
             this.setState({ conversationId: serverConvId });
           } else if (evt.type === "context") {
             this.setState({ streamingSources: evt.sources, weakRetrieval: evt.weakRetrieval });

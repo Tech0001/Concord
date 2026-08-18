@@ -46,6 +46,7 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
      *  download finalizes. Defaults to the matched configured
      *  channel's category (or 'personal' if no match). */
     category?: "personal" | "work";
+    thumbnailUrl?: string | null;
     isComplete: boolean;
   }>();
 
@@ -192,6 +193,7 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
         channelId: channelId || videoInfo.channelId || null,
         channelName: channelName || videoInfo.channelName || null,
         category: category === "work" ? "work" : category === "personal" ? "personal" : undefined,
+        thumbnailUrl: videoInfo.thumbnail || null,
         isComplete: false,
       });
 
@@ -310,6 +312,7 @@ export function registerDownloadRoutes(app: Express, pipeline: Pipeline): { shut
                 isShorts: false,
                 uploadDate: download.uploadDate || null,
                 category: download.category,
+                thumbnailUrl: download.thumbnailUrl,
               });
               updateQueueStatus(download.videoId, dbChannelId, {
                 status: "complete",

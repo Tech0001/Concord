@@ -12,6 +12,7 @@ import { Link as RouterLink } from "wouter";
 import FolderInput from "@/components/FolderInput";
 import FileInput from "@/components/FileInput";
 import { visibleModels } from "@/lib/transcription-models";
+import { BackgroundJobs } from "@/components/BackgroundJobs";
 
 interface LlmConfig {
   baseUrl: string;
@@ -153,9 +154,12 @@ export default function Settings() {
           if (embeddingModel && !verdict.embedding.ok && verdict.embedding.errorKind === "kind-mismatch") {
             problems.push(`Embedding model "${embeddingModel}" is not an embedding model — it looks like a chat/LLM model. Swap the slots?`);
           }
+          if (embeddingModel && !verdict.embedding.ok && verdict.embedding.errorKind === "dimension-mismatch") {
+            problems.push(verdict.embedding.error || `Embedding model "${embeddingModel}" is incompatible with Concord's vector index.`);
+          }
           if (problems.length > 0) {
             toast({
-              title: "Model slot mismatch",
+              title: "Model configuration incompatible",
               description: problems.join("\n\n"),
               variant: "destructive",
             });
@@ -347,6 +351,8 @@ export default function Settings() {
 
       <SummariesCard hasChatModel={Boolean(chatModel || config?.chatModel)} />
 
+      <BackgroundJobs limit={8} />
+
       <PipelineSettingsCard />
 
       <YouTubeApiKeyCard />
@@ -439,53 +445,21 @@ function SummariesCard({ hasChatModel }: { hasChatModel: boolean }) {
       return;
     }
     setRunning(true);
-    setProgress({ done: 0, total: 0, written: 0, skipped: 0 });
     try {
       const res = await fetch("/api/llm/summaries/regenerate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ overwrite }),
       });
-      if (!res.ok || !res.body) {
+      if (!res.ok) {
         const err = await res.text().catch(() => `HTTP ${res.status}`);
         throw new Error(err);
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      let written = 0;
-      let skipped = 0;
-      let total = 0;
-      let done = 0;
-      while (true) {
-        const { value, done: streamDone } = await reader.read();
-        if (streamDone) break;
-        buf += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buf.indexOf("\n\n")) !== -1) {
-          const chunk = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const eventMatch = chunk.match(/^event: (.+)$/m);
-          const dataMatch = chunk.match(/^data: (.+)$/m);
-          if (!eventMatch || !dataMatch) continue;
-          const event = eventMatch[1];
-          const data = JSON.parse(dataMatch[1]);
-          if (event === "start") {
-            total = data.total;
-            setProgress({ done: 0, total, written: 0, skipped: 0 });
-          } else if (event === "video") {
-            done = data.done;
-            if (data.skipped) skipped++;
-            else if (data.charsOut > 0) written++;
-            setProgress({ done, total, written, skipped, current: data.videoId });
-          } else if (event === "done") {
-            setProgress({ done: data.total, total: data.total, written: data.written, skipped: data.skipped });
-          }
-        }
-      }
+      const data = await res.json() as { job?: { progress_total: number } };
+      setProgress(null);
       toast({
-        title: "Summaries done",
-        description: `${written} written, ${skipped} skipped`,
+        title: "Summary backfill queued",
+        description: `${data.job?.progress_total ?? 0} videos · progress is on the Status page. You can close Settings safely.`,
       });
     } catch (err) {
       toast({ title: "Summary generation failed", description: String(err), variant: "destructive" });
@@ -575,6 +549,7 @@ function EmbeddingsCard({ hasEmbeddingModel }: { hasEmbeddingModel: boolean }) {
   const [progress, setProgress] = useState<ReindexProgress | null>(null);
   const [running, setRunning] = useState(false);
   const [wipe, setWipe] = useState(false);
+  const [notesRunning, setNotesRunning] = useState(false);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -593,84 +568,43 @@ function EmbeddingsCard({ hasEmbeddingModel }: { hasEmbeddingModel: boolean }) {
       return;
     }
     setRunning(true);
-    setProgress({ done: 0, total: 0, totalSegments: 0, skipped: 0 });
     try {
       const res = await fetch("/api/llm/embeddings/reindex", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ wipe }),
       });
-      if (!res.ok || !res.body) {
+      if (!res.ok) {
         const err = await res.text().catch(() => `HTTP ${res.status}`);
         throw new Error(err);
       }
-      // Parse SSE stream by hand — saves a dependency for one-off use.
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      let totalSegments = 0;
-      let skipped = 0;
-      let total = 0;
-      let done = 0;
-      const skipReasons = new Map<string, number>();
-      const skipExamples: Array<{ videoId: string; reason: string }> = [];
-      let alreadyCovered = 0;
-      while (true) {
-        const { value, done: streamDone } = await reader.read();
-        if (streamDone) break;
-        buf += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buf.indexOf("\n\n")) !== -1) {
-          const chunk = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const eventMatch = chunk.match(/^event: (.+)$/m);
-          const dataMatch = chunk.match(/^data: (.+)$/m);
-          if (!eventMatch || !dataMatch) continue;
-          const event = eventMatch[1];
-          const data = JSON.parse(dataMatch[1]);
-          if (event === "preparing") {
-            // Server is filtering "which videos need embedding". Surface
-            // an immediate placeholder so the UI doesn't look frozen.
-            setProgress({ done: 0, total: 0, totalSegments: 0, skipped: 0, alreadyCovered: 0 });
-          } else if (event === "start") {
-            total = data.total;
-            alreadyCovered = data.alreadyCovered || 0;
-            setProgress({ done: 0, total, totalSegments: 0, skipped: 0, alreadyCovered });
-          } else if (event === "video") {
-            done = data.done;
-            if (data.skipped) {
-              skipped++;
-              // Collect skip reasons so the user can see WHY a video was
-              // skipped (e.g. "no meaningful segments to embed" = transcript
-              // is too short or all segments fail the min-words / min-duration
-              // filter, often a missing-on-disk md file).
-              skipReasons.set(data.skipped, (skipReasons.get(data.skipped) ?? 0) + 1);
-              skipExamples.push({ videoId: data.videoId, reason: data.skipped });
-            }
-            else totalSegments += (data.segmentCount || 0);
-            setProgress({ done, total, totalSegments, skipped, alreadyCovered, current: data.videoId });
-          } else if (event === "done") {
-            setProgress({ done: data.total, total: data.total, totalSegments: data.totalSegments, skipped: data.skipped, alreadyCovered });
-          }
-        }
-      }
-      const skipBreakdown = skipReasons.size > 0
-        ? Array.from(skipReasons.entries()).map(([reason, n]) => `${n}× "${reason}"`).join(", ")
-        : "";
-      const description = total === 0
-        ? `Nothing to do — all ${alreadyCovered} videos already indexed for this model.`
-        : `${totalSegments} segments embedded across ${done - skipped} videos${
-            skipped > 0 ? ` (skipped: ${skipBreakdown})` : ""
-          }${alreadyCovered ? `, ${alreadyCovered} already covered` : ""}`;
-      if (skipExamples.length > 0) {
-        console.log("[reindex] skipped videos:", skipExamples);
-      }
-      toast({ title: "Reindex complete", description });
-      fetchStats();
+      const data = await res.json() as { job?: { progress_total: number } };
+      setProgress(null);
+      toast({
+        title: "Semantic reindex queued",
+        description: `${data.job?.progress_total ?? 0} videos · a dimension preflight runs before any wipe or bulk model calls. Progress is on Status.`,
+      });
     } catch (err) {
       toast({ title: "Reindex failed", description: String(err), variant: "destructive" });
     } finally {
       setRunning(false);
+    }
+  };
+
+  const indexNotes = async () => {
+    if (!hasEmbeddingModel) return;
+    setNotesRunning(true);
+    try {
+      const response = await apiRequest("POST", "/api/background-jobs", { type: "note_embeddings" });
+      const data = await response.json() as { job?: { progress_total: number } };
+      toast({
+        title: "Note indexing queued",
+        description: `${data.job?.progress_total ?? 0} research notes · existing vectors are skipped.`,
+      });
+    } catch (error) {
+      toast({ title: "Note indexing failed", description: String(error), variant: "destructive" });
+    } finally {
+      setNotesRunning(false);
     }
   };
 
@@ -739,7 +673,11 @@ function EmbeddingsCard({ hasEmbeddingModel }: { hasEmbeddingModel: boolean }) {
             <input type="checkbox" checked={wipe} onChange={(e) => setWipe(e.target.checked)} disabled={running} />
             Wipe existing first
           </label>
-          <div className="ml-auto">
+          <div className="ml-auto flex gap-2">
+            <Button size="sm" variant="outline" onClick={indexNotes} disabled={notesRunning || !hasEmbeddingModel}>
+              {notesRunning ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <FileText className="mr-2 h-3 w-3" />}
+              Index notes
+            </Button>
             <Button size="sm" onClick={reindex} disabled={running || !hasEmbeddingModel}>
               {running
                 ? <Loader2 className="mr-2 h-3 w-3 animate-spin" />

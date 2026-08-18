@@ -551,6 +551,7 @@ export class Pipeline extends EventEmitter {
           if (enqueueVideo({
             videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
             duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
+            thumbnailUrl: v.thumbnail,
           })) added++;
         }
         if (added > 0) {
@@ -572,6 +573,7 @@ export class Pipeline extends EventEmitter {
         const toEnqueue = filtered.map(v => ({
           videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
           duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
+          thumbnailUrl: v.thumbnail,
         }));
         const added = enqueueVideos(toEnqueue);
 
@@ -611,6 +613,7 @@ export class Pipeline extends EventEmitter {
           const inserted = enqueueVideo({
             videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
             duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
+            thumbnailUrl: v.thumbnail,
           });
           if (inserted) {
             added++;
@@ -654,6 +657,7 @@ export class Pipeline extends EventEmitter {
     const toEnqueue = filtered.map(v => ({
       videoId: v.id, channelId: channel.id, title: v.title, url: v.url,
       duration: v.duration, isLive: v.isLive, isShorts: v.isShorts, uploadDate: v.uploadDate,
+      thumbnailUrl: v.thumbnail,
     }));
 
     const newVideos = enqueueVideos(toEnqueue);
@@ -1875,6 +1879,7 @@ export class Pipeline extends EventEmitter {
     const inserted = enqueueVideo({
       videoId: video.id, channelId: channel.id, title: video.title, url: video.url,
       duration: video.duration, isLive: false, isShorts: video.isShorts, uploadDate: video.uploadDate,
+      thumbnailUrl: video.thumbnail,
     });
 
     const existing = getQueueEntryByVideoId(video.id);
@@ -1919,6 +1924,10 @@ export class Pipeline extends EventEmitter {
       ai_summary: null,
       ai_summary_model: null,
       starred: 0,
+      thumbnail_url: video.thumbnail || null,
+      last_position_seconds: 0,
+      last_opened_at: null,
+      review_state: "unreviewed",
       category: channel.category ?? "personal",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
