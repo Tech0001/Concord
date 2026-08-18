@@ -1066,9 +1066,13 @@ export class Pipeline extends EventEmitter {
    *  other codecs/containers so we always get something even if the chosen
    *  codec isn't published for a given video. */
   private buildFormatString(codecOverride?: string): string {
-    const q = this.config.videoQuality;
     const codec = codecOverride || this.config.videoCodec || "any";
-    const heightCap = q === "best" ? "" : `[height<=${parseInt(q) || 1080}]`;
+
+    // No [height<=N] filter here on purpose — the quality cap rides on
+    // --format-sort instead (see qualitySort()). Height is the wrong axis
+    // for vertical videos: YouTube's "720p" rung on a portrait clip is
+    // 720x1280, so a height filter rejects it and silently settles for the
+    // 360-wide rung below it.
 
     // Audio selector — when audioLanguage is set, prefer that
     // language's track; fall back to any audio. Solves the
@@ -1080,11 +1084,11 @@ export class Pipeline extends EventEmitter {
     const audioLangAny = lang ? `bestaudio[language=${lang}]` : "bestaudio";
 
     // Per-codec selectors. AV1/VP9 ship in WebM, H.264 in MP4.
-    const av1   = `bestvideo${heightCap}[vcodec^=av01]+${audioLangM4a}/bestvideo${heightCap}[vcodec^=av01]+${audioLangAny}/bestvideo${heightCap}[vcodec^=av01]+bestaudio`;
-    const vp9   = `bestvideo${heightCap}[vcodec^=vp9]+${audioLangM4a}/bestvideo${heightCap}[vcodec^=vp9]+${audioLangAny}/bestvideo${heightCap}[vcodec^=vp9]+bestaudio`;
-    const avc1  = `bestvideo${heightCap}[ext=mp4][vcodec^=avc1]+${audioLangM4a}/bestvideo${heightCap}[ext=mp4][vcodec^=avc1]+${audioLangAny}/best${heightCap}[ext=mp4][vcodec^=avc1]`;
-    const anyMp4 = `bestvideo${heightCap}[ext=mp4]+${audioLangM4a}/bestvideo${heightCap}[ext=mp4]+${audioLangAny}`;
-    const anyAny = `best${heightCap}/best`;
+    const av1   = `bestvideo[vcodec^=av01]+${audioLangM4a}/bestvideo[vcodec^=av01]+${audioLangAny}/bestvideo[vcodec^=av01]+bestaudio`;
+    const vp9   = `bestvideo[vcodec^=vp9]+${audioLangM4a}/bestvideo[vcodec^=vp9]+${audioLangAny}/bestvideo[vcodec^=vp9]+bestaudio`;
+    const avc1  = `bestvideo[ext=mp4][vcodec^=avc1]+${audioLangM4a}/bestvideo[ext=mp4][vcodec^=avc1]+${audioLangAny}/best[ext=mp4][vcodec^=avc1]`;
+    const anyMp4 = `bestvideo[ext=mp4]+${audioLangM4a}/bestvideo[ext=mp4]+${audioLangAny}`;
+    const anyAny = `best`;
 
     let order: string[];
     switch (codec) {
@@ -1103,7 +1107,7 @@ export class Pipeline extends EventEmitter {
         break;
       default: // "any" — let yt-dlp pick the best by size/bitrate
         order = [
-          `bestvideo${heightCap}+${audioLangM4a}/bestvideo${heightCap}+${audioLangAny}/bestvideo${heightCap}+bestaudio`,
+          `bestvideo+${audioLangM4a}/bestvideo+${audioLangAny}/bestvideo+bestaudio`,
           anyMp4,
           anyAny,
         ];
@@ -1186,6 +1190,7 @@ export class Pipeline extends EventEmitter {
       const dl = youtubedl.exec(url, {
         output: outputPath,
         format: this.buildFormatString(codec),
+        ...(this.qualitySort() ? { formatSort: this.qualitySort() } : {}),
         mergeOutputFormat: "mp4",
         cacheDir: "./youtube-dl-cache",
         limitRate: "3M",
@@ -1262,6 +1267,19 @@ export class Pipeline extends EventEmitter {
 
       dl.on("error", reject);
     });
+  }
+
+  /** `--format-sort` expression that caps download quality at the user's
+   *  videoQuality setting. Uses yt-dlp's `res` field, which is the
+   *  *smallest* dimension of a stream, so it tracks YouTube's own quality
+   *  label in both orientations: a 1280x720 landscape rung and a 720x1280
+   *  vertical rung both read as res=720. Verified not to overshoot — on a
+   *  video offering 1080p, `res:720` still selects the 720p rung.
+   *  Undefined when the user asked for "best" (no cap). */
+  private qualitySort(): string | undefined {
+    const q = this.config.videoQuality;
+    if (!q || q === "best") return undefined;
+    return `res:${parseInt(q) || 1080}`;
   }
 
   /** Order of codecs to try when the user's choice fails with HTTP 5xx.
