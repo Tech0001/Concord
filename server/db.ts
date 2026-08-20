@@ -75,6 +75,7 @@ const SCHEMA = `
     video_path  TEXT,
     md_path     TEXT,
     word_count  INTEGER DEFAULT 0,
+    overview_note_id TEXT,
     error       TEXT,
     retries     INTEGER DEFAULT 0,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -473,6 +474,9 @@ function runMigrations(database: Database.Database) {
     }
   };
   ensureColumn("video_queue", "notes", "TEXT");
+  // Whole-video observations now live as first-class research notes. Keep the
+  // link on the queue row so the drawer can edit the same note every time.
+  ensureColumn("video_queue", "overview_note_id", "TEXT");
   ensureColumn("video_queue", "ai_summary", "TEXT");
   ensureColumn("video_queue", "ai_summary_model", "TEXT");
   ensureColumn("channels", "diarize", "INTEGER NOT NULL DEFAULT 1");

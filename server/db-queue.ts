@@ -36,6 +36,7 @@ export interface QueueEntry {
   error: string | null;
   retries: number;
   notes: string | null;
+  overview_note_id: string | null;
   /** Auto-generated 2-3 sentence summary. Distinct from `notes` so the
    *  user's own observations and the AI's derived summary never overwrite
    *  each other. Regenerable from any chat model — the model id is

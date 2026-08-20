@@ -15,7 +15,8 @@ import {
   searchTranscriptSegments,
   searchDocsFts,
   videoKind,
-  setVideoNotes,
+  getTranscriptClip,
+  upsertVideoOverviewNote,
   setVideoStarred,
   setVideoPlaybackProgress,
   setVideoReviewState,
@@ -26,6 +27,7 @@ import {
 } from "./db";
 import { copyAudioTrack, encodeAacSidecar, ffmpegBin, getVideoStreamInfo } from "./audio";
 import { ensureLibraryThumbnail } from "./library-thumbnails";
+import { scheduleNoteEmbedding } from "./note-embeddings";
 import type { Pipeline } from "./pipeline";
 
 // execFile (argv-style, NOT shell exec) wrapped as a Promise. Used only
@@ -258,6 +260,20 @@ export function registerLibraryRoutes(app: Express, pipeline: Pipeline): void {
     res.json(getTranscriptSearchIndexStats());
   });
 
+  // Stable drawer deep-link target. Keeping this separate from paginated
+  // queue results means a copied video link still opens when filters or page
+  // size would otherwise hide that record.
+  app.get(
+    "/api/videos/library/:channelId/:videoId",
+    (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
+      res.setHeader("Cache-Control", "no-store");
+      const entry = getQueueEntry(req.params.videoId, req.params.channelId);
+      if (!entry) return res.status(404).json({ error: "Video not found" });
+      const channelName = getDb().prepare("SELECT name FROM channels WHERE id = ?").pluck().get(entry.channel_id) as string | undefined;
+      res.json({ entry: { ...entry, channel_name: channelName ?? entry.channel_id } });
+    },
+  );
+
   app.get(
     "/api/videos/library/:channelId/:videoId/transcript",
     async (req: Request<{ channelId: string; videoId: string }>, res: Response) => {
@@ -273,11 +289,15 @@ export function registerLibraryRoutes(app: Express, pipeline: Pipeline): void {
           try { video = await getVideoStreamInfo(entry.video_path); } catch {}
         }
 
+        const overviewNote = entry.overview_note_id
+          ? getTranscriptClip(entry.overview_note_id)
+          : undefined;
         res.json({
           videoId: entry.video_id,
           channelId: entry.channel_id,
           segments: getTranscriptSegmentsForVideo(entry.video_id, entry.channel_id),
-          notes: entry.notes ?? "",
+          notes: overviewNote?.note ?? entry.notes ?? "",
+          overviewNoteId: overviewNote?.id ?? null,
           aiSummary: entry.ai_summary ?? "",
           aiSummaryModel: entry.ai_summary_model ?? null,
           video,
@@ -658,8 +678,12 @@ function registerLibraryMutators(app: Express, pipeline: Pipeline): void {
       try {
         const { notes } = req.body || {};
         const value = notes === null || notes === undefined ? null : String(notes);
-        setVideoNotes(req.params.videoId, req.params.channelId, value);
-        res.json({ success: true });
+        const entry = getQueueEntry(req.params.videoId, req.params.channelId);
+        if (!entry) return res.status(404).json({ error: "Video not found" });
+
+        const overviewNote = upsertVideoOverviewNote(entry.video_id, entry.channel_id, value);
+        scheduleNoteEmbedding(overviewNote.id);
+        res.json({ success: true, noteId: overviewNote.id, note: overviewNote });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : "Failed to save notes" });
       }

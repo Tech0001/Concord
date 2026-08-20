@@ -10,6 +10,7 @@ import {
   getQueueList,
   setVideoPlaybackProgress,
   setVideoReviewState,
+  upsertVideoOverviewNote,
 } from "./db";
 import { backgroundJobs } from "./background-jobs";
 import { libraryThumbnailCachePath } from "./library-thumbnails";
@@ -54,6 +55,19 @@ test("playback progress persists and recently-viewed sorting uses it", () => {
   getDb().prepare("UPDATE video_queue SET last_opened_at = ? WHERE video_id = ?").run("2026-01-01 00:00:00", "audio");
   getDb().prepare("UPDATE video_queue SET last_opened_at = ? WHERE video_id = ?").run("2026-02-01 00:00:00", "video");
   assert.equal(getQueueList({ sort: "recently_viewed" }).rows[0]?.video_id, "video");
+});
+
+test("whole-video observations become one reusable research note", () => {
+  const created = upsertVideoOverviewNote("video", "channel", "First observation");
+  assert.equal(created.note, "First observation");
+  assert.equal(created.anchors.length, 1);
+  assert.equal(created.anchors[0]?.video_id, "video");
+  assert.equal(getQueueEntry("video", "channel")?.overview_note_id, created.id);
+
+  const updated = upsertVideoOverviewNote("video", "channel", "Revised observation");
+  assert.equal(updated.id, created.id);
+  assert.equal(updated.note, "Revised observation");
+  assert.equal(getQueueEntry("video", "channel")?.notes, "Revised observation");
 });
 
 test("cached thumbnails are served from a dot-prefixed app-data path", async () => {

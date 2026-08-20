@@ -1921,6 +1921,7 @@ export class Pipeline extends EventEmitter {
       error: null,
       retries: 0,
       notes: null,
+      overview_note_id: null,
       ai_summary: null,
       ai_summary_model: null,
       starred: 0,

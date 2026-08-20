@@ -16,7 +16,9 @@ import { SpeakerLabelDialog } from "@/components/SpeakerLabelDialog";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Bookmark, BookmarkPlus, Calendar, ChevronDown, ChevronUp, Clock, Download, FileText, Loader2, PictureInPicture2, Play, Plus, Radio, RefreshCw, Scissors, Search, Sparkles, X } from "lucide-react";
+import { chatStream, useChatStream } from "@/hooks/use-chat-stream";
+import { Bookmark, BookmarkPlus, Calendar, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns2, Copy, Download, FileText, Info, Link2, Loader2, Maximize2, MessageSquareText, NotebookPen, PanelRight, PictureInPicture2, Play, Plus, Radio, RefreshCw, Scissors, Search, Sparkles, X } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 export interface VideoDrawerEntry {
@@ -87,6 +89,29 @@ interface VideoDrawerProps {
   initialSeconds?: number;
   initialSegmentIndex?: number;
   onOpenChange: (open: boolean) => void;
+  previousVideo?: VideoDrawerEntry | null;
+  nextVideo?: VideoDrawerEntry | null;
+  onNavigate?: (video: VideoDrawerEntry) => void;
+}
+
+type DrawerMode = "compact" | "wide" | "full";
+type DrawerTab = "transcript" | "notes" | "summary" | "details";
+
+const DRAWER_MODE_KEY = "concord-video-drawer-mode-v1";
+const DRAWER_TAB_KEY = "concord-video-drawer-tab-v1";
+
+function storedDrawerMode(): DrawerMode {
+  if (typeof window === "undefined") return "wide";
+  const value = window.localStorage.getItem(DRAWER_MODE_KEY);
+  return value === "compact" || value === "full" || value === "wide" ? value : "wide";
+}
+
+function storedDrawerTab(): DrawerTab {
+  if (typeof window === "undefined") return "transcript";
+  const value = window.localStorage.getItem(DRAWER_TAB_KEY);
+  return value === "notes" || value === "summary" || value === "details" || value === "transcript"
+    ? value
+    : "transcript";
 }
 
 function formatUploadDate(uploadDate?: string | null): string {
@@ -137,7 +162,16 @@ function isAudioPath(filePath?: string | null): boolean {
   return AUDIO_EXTS.has(filePath.slice(lastDot).toLowerCase());
 }
 
-export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentIndex, onOpenChange }: VideoDrawerProps) {
+export function VideoDrawer({
+  open,
+  video,
+  initialSeconds = 0,
+  initialSegmentIndex,
+  onOpenChange,
+  previousVideo,
+  nextVideo,
+  onNavigate,
+}: VideoDrawerProps) {
   const videoRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   const transcriptListRef = useRef<HTMLDivElement | null>(null);
   const segmentRefs = useRef<Record<number, HTMLButtonElement | null>>({});
@@ -164,6 +198,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
   const [sameVideoClips, setSameVideoClips] = useState<RelatedClip[]>([]);
   const [loadingRelated, setLoadingRelated] = useState(false);
   const [notes, setNotes] = useState("");
+  const [overviewNoteId, setOverviewNoteId] = useState<string | null>(null);
   const [aiSummary, setAiSummary] = useState("");
   const [aiSummaryModel, setAiSummaryModel] = useState<string | null>(null);
   const [regeneratingSummary, setRegeneratingSummary] = useState(false);
@@ -178,7 +213,20 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
   const [exportQuality, setExportQuality] = useState("same");
   const [exportOpen, setExportOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<DrawerMode>(storedDrawerMode);
+  const [activeTab, setActiveTab] = useState<DrawerTab>(storedDrawerTab);
+  const [selectionAiOpen, setSelectionAiOpen] = useState(false);
   const { toast } = useToast();
+
+  const changeDrawerMode = (mode: DrawerMode) => {
+    setDrawerMode(mode);
+    window.localStorage.setItem(DRAWER_MODE_KEY, mode);
+  };
+
+  const changeTab = (tab: DrawerTab) => {
+    setActiveTab(tab);
+    window.localStorage.setItem(DRAWER_TAB_KEY, tab);
+  };
 
   const persistPlayback = useCallback((seconds: number, force = false) => {
     if (!video || !Number.isFinite(seconds)) return;
@@ -224,6 +272,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     setSelectionStartIndex(null);
     setSelectionEndIndex(null);
     setRangeNote("");
+    setSelectionAiOpen(false);
     setExportStartInput(formatTimestamp(initialSeconds));
     setExportEndInput(formatTimestamp(initialSeconds + 60));
     setExportOpen(false);
@@ -267,12 +316,14 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
         const data = await response.json() as {
           segments?: TranscriptSegment[];
           notes?: string;
+          overviewNoteId?: string | null;
           aiSummary?: string;
           aiSummaryModel?: string | null;
           video?: VideoStreamInfo | null;
         };
         setSegments(data.segments || []);
         setNotes(data.notes || "");
+        setOverviewNoteId(data.overviewNoteId ?? null);
         setAiSummary(data.aiSummary || "");
         setAiSummaryModel(data.aiSummaryModel ?? null);
         setNotesStatus("idle");
@@ -299,12 +350,15 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     const videoId = video.video_id;
     notesTimerRef.current = window.setTimeout(async () => {
       try {
-        await apiRequest(
+        const response = await apiRequest(
           "PATCH",
           `/api/videos/library/${encodeURIComponent(channelId)}/${encodeURIComponent(videoId)}/notes`,
           { notes: value },
         );
+        const data = await response.json() as { noteId?: string };
+        if (data.noteId) setOverviewNoteId(data.noteId);
         setNotesStatus("saved");
+        void loadRelatedClips();
       } catch {
         setNotesStatus("idle");
       }
@@ -492,52 +546,57 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
 
   const effectiveDuration = videoDuration || video?.duration || 0;
 
-  // Build a sorted list of clipped time ranges for "already clipped" hints
-  // on the transcript. A segment is considered clipped if it overlaps any
-  // saved clip's [start, end] interval.
-  const clippedRanges = useMemo(() => {
-    return sameVideoClips
-      .map(clip => ({ start: clip.start_seconds, end: clip.end_seconds }))
-      .sort((a, b) => a.start - b.start);
-  }, [sameVideoClips]);
+  const evidenceClips = useMemo(
+    () => sameVideoClips.filter(clip => clip.id !== overviewNoteId),
+    [overviewNoteId, sameVideoClips],
+  );
 
-  const isSegmentClipped = (segment: TranscriptSegment) => {
-    for (const range of clippedRanges) {
-      if (range.start >= segment.end) break;
-      if (range.end > segment.start) return true;
+  // Build the clip-to-transcript index once. The previous renderer scanned
+  // every saved clip for every transcript row (O(segments × clips)); long
+  // recordings paid that cost again on every playback tick. Binary-search
+  // each clip's first overlapping row, then walk only its actual span.
+  const transcriptClipIndex = useMemo(() => {
+    const clipped = new Set<number>();
+    const anchored = new Map<number, RelatedClip[]>();
+    for (const clip of evidenceClips) {
+      let lo = 0;
+      let hi = segments.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (segments[mid].end <= clip.start_seconds) lo = mid + 1;
+        else hi = mid;
+      }
+      let first = -1;
+      for (let index = lo; index < segments.length; index++) {
+        const segment = segments[index];
+        if (segment.start >= clip.end_seconds) break;
+        if (segment.end <= clip.start_seconds) continue;
+        if (first < 0) first = index;
+        clipped.add(index);
+      }
+      if (first >= 0) {
+        const matches = anchored.get(first) ?? [];
+        matches.push(clip);
+        anchored.set(first, matches);
+      }
     }
-    return false;
-  };
-
-  // Return every saved clip whose [start, end] overlaps this segment.
-  // Used to render inline tag pills + note for clipped transcript segments
-  // so the user can see what they tagged at a glance. A clip is anchored
-  // to the FIRST segment its range overlaps, even when the range spans
-  // many — otherwise a single multi-segment clip echoes the same tag/note
-  // block on every segment in the range and looks like ten clips. The
-  // visual span of the clip is still shown via the row-background tint
-  // driven by isSegmentClipped(), which separately checks overlap.
-  const clipsForSegment = (segment: TranscriptSegment): RelatedClip[] => {
-    const matches: RelatedClip[] = [];
-    for (const clip of sameVideoClips) {
-      if (clip.start_seconds >= segment.end) continue;
-      if (clip.end_seconds <= segment.start) continue;
-      // Anchor each clip to the earliest segment it touches: skip if
-      // this segment ends at-or-before the clip starts (i.e. the clip
-      // begins inside an even earlier segment which is the real anchor).
-      if (segment.start > clip.start_seconds) continue;
-      matches.push(clip);
-    }
-    return matches;
-  };
+    return { clipped, anchored };
+  }, [evidenceClips, segments]);
 
   const closestSegmentIndex = useMemo(() => {
     if (!segments.length) return -1;
     const current = Math.max(0, activeSeconds);
+    let lo = 0;
+    let hi = segments.length - 1;
     let closest = 0;
-    for (let i = 0; i < segments.length; i++) {
-      if (segments[i].start <= current) closest = i;
-      if (segments[i].start > current) break;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (segments[mid].start <= current) {
+        closest = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
     }
     return closest;
   }, [segments, activeSeconds]);
@@ -549,6 +608,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
       .map((segment, index) => segment.text.toLowerCase().includes(query) ? index : -1)
       .filter(index => index >= 0);
   }, [segments, transcriptQuery]);
+  const transcriptMatchSet = useMemo(() => new Set(transcriptMatches), [transcriptMatches]);
 
   const selectedSearchIndex = transcriptMatches.length ? transcriptMatches[Math.min(searchCursor, transcriptMatches.length - 1)] : -1;
   const highlightedSegmentIndex = selectedSearchIndex >= 0 ? selectedSearchIndex : initialSegmentIndex ?? closestSegmentIndex;
@@ -561,6 +621,10 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
       end: Math.max(selectionStartIndex, end),
     };
   }, [selectionEndIndex, selectionStartIndex]);
+  const selectedRangeText = useMemo(() => {
+    if (!rangeBounds) return "";
+    return segments.slice(rangeBounds.start, rangeBounds.end + 1).map(segment => segment.text).join("\n\n");
+  }, [rangeBounds, segments]);
 
   const exportStartSeconds = parseTimestampInput(exportStartInput);
   const exportEndSeconds = parseTimestampInput(exportEndInput);
@@ -729,23 +793,82 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
     }
   };
 
+  const copyDrawerLink = async () => {
+    if (!video) return;
+    const url = new URL("/library", window.location.origin);
+    url.searchParams.set("video", video.video_id);
+    url.searchParams.set("channel", video.channel_id);
+    if (activeSeconds > 0) url.searchParams.set("t", String(Math.floor(activeSeconds)));
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      toast({ title: "Video link copied", description: formatTimestamp(activeSeconds) });
+    } catch {
+      toast({ variant: "destructive", title: "Could not copy the video link" });
+    }
+  };
+
+  const copySelectedRange = async () => {
+    if (!rangeBounds || !selectedRangeText) return;
+    const start = segments[rangeBounds.start]?.start ?? 0;
+    const end = segments[rangeBounds.end]?.end ?? start;
+    try {
+      await navigator.clipboard.writeText(`${formatTimestamp(start)} - ${formatTimestamp(end)}\n${selectedRangeText}`);
+      toast({ title: "Selected transcript copied" });
+    } catch {
+      toast({ variant: "destructive", title: "Could not copy the selection" });
+    }
+  };
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto p-0 sm:max-w-2xl lg:max-w-3xl">
+      <SheetContent
+        className={cn(
+          "gap-0 overflow-hidden p-0",
+          drawerMode === "compact" && "!w-full sm:!max-w-2xl",
+          drawerMode === "wide" && "!w-[94vw] !max-w-[1200px]",
+          drawerMode === "full" && "!inset-2 !h-auto !w-auto !max-w-none rounded-lg border",
+        )}
+      >
         {video ? (
           <>
-            <SheetHeader className="border-b pr-12">
+            <SheetHeader className="z-20 shrink-0 border-b bg-background/95 pr-12 backdrop-blur">
               <div className="flex items-start justify-between gap-3">
                 <SheetTitle className="line-clamp-2 min-w-0 flex-1 text-base">{video.title}</SheetTitle>
-                <Link
-                  href={`/ai?scope=video&videoId=${encodeURIComponent(video.video_id)}&channelId=${encodeURIComponent(video.channel_id)}&title=${encodeURIComponent(video.title)}`}
-                  onClick={() => onOpenChange(false)}
-                >
-                  <Button size="sm" variant="outline" className="h-7 shrink-0 gap-1 text-xs">
-                    <Sparkles className="h-3.5 w-3.5" />
-                    Ask AI
+                <div className="flex shrink-0 items-center gap-1">
+                  {onNavigate && (
+                    <div className="flex items-center rounded-md border p-0.5">
+                      <Button size="icon" variant="ghost" className="h-6 w-6" disabled={!previousVideo} onClick={() => previousVideo && onNavigate(previousVideo)} title="Previous media item">
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button size="icon" variant="ghost" className="h-6 w-6" disabled={!nextVideo} onClick={() => nextVideo && onNavigate(nextVideo)} title="Next media item">
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )}
+                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => void copyDrawerLink()} title="Copy a link to this timestamp">
+                    <Link2 className="h-3.5 w-3.5" />
                   </Button>
-                </Link>
+                  <div className="hidden items-center rounded-md border p-0.5 sm:flex" aria-label="Drawer size">
+                    <Button size="icon" variant={drawerMode === "compact" ? "secondary" : "ghost"} className="h-6 w-6" onClick={() => changeDrawerMode("compact")} title="Compact drawer">
+                      <PanelRight className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button size="icon" variant={drawerMode === "wide" ? "secondary" : "ghost"} className="h-6 w-6" onClick={() => changeDrawerMode("wide")} title="Wide workspace">
+                      <Columns2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button size="icon" variant={drawerMode === "full" ? "secondary" : "ghost"} className="h-6 w-6" onClick={() => changeDrawerMode("full")} title="Full-screen workspace">
+                      <Maximize2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <Link
+                    href={`/ai?scope=video&videoId=${encodeURIComponent(video.video_id)}&channelId=${encodeURIComponent(video.channel_id)}&title=${encodeURIComponent(video.title)}`}
+                    onClick={() => onOpenChange(false)}
+                  >
+                    <Button size="sm" variant="outline" className="h-7 shrink-0 gap-1 text-xs">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Ask AI
+                    </Button>
+                  </Link>
+                </div>
               </div>
               <SheetDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span>{video.channel_name || video.channel_id}</span>
@@ -768,7 +891,11 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
               </SheetDescription>
             </SheetHeader>
 
-            <div className="space-y-4 p-4">
+            <div className={cn(
+              "min-h-0 flex-1",
+              drawerMode === "compact" ? "overflow-y-auto" : "grid overflow-hidden lg:grid-cols-[minmax(360px,0.9fr)_minmax(480px,1.1fr)]",
+            )}>
+              <aside className={cn("space-y-4 p-4", drawerMode !== "compact" && "lg:overflow-y-auto lg:border-r")}>
               {streamUrl ? (
                 <div className="relative">
                   {/* Both audio + video use a <video> element so
@@ -823,7 +950,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
               {streamUrl && effectiveDuration > 0 && (
                 <ClipTimeline
                   duration={effectiveDuration}
-                  clips={sameVideoClips}
+                  clips={evidenceClips}
                   currentSeconds={activeSeconds}
                   onSeek={seekTo}
                 />
@@ -911,7 +1038,21 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                 )}
               </div>
 
-              <div className="rounded-md border">
+              <p className="text-[11px] leading-5 text-muted-foreground">
+                Space toggles playback · ←/→ seek 10 seconds · Shift-click a transcript row to extend a selection
+              </p>
+              </aside>
+
+              <section className={cn("min-h-0", drawerMode !== "compact" && "lg:flex lg:flex-col lg:overflow-hidden")}>
+                <div className="sticky top-0 z-10 flex shrink-0 items-center gap-1 overflow-x-auto border-b bg-background px-3 py-2">
+                  <DrawerTabButton active={activeTab === "transcript"} onClick={() => changeTab("transcript")} icon={FileText} label="Transcript" count={segments.length} />
+                  <DrawerTabButton active={activeTab === "notes"} onClick={() => changeTab("notes")} icon={NotebookPen} label="Notes" count={evidenceClips.length + (overviewNoteId ? 1 : 0)} />
+                  <DrawerTabButton active={activeTab === "summary"} onClick={() => changeTab("summary")} icon={Sparkles} label="Summary" />
+                  <DrawerTabButton active={activeTab === "details"} onClick={() => changeTab("details")} icon={Info} label="Details" />
+                </div>
+                <div className={cn("space-y-4 p-4", drawerMode !== "compact" && "lg:min-h-0 lg:flex-1 lg:overflow-y-auto")}>
+
+              {activeTab === "details" && <div className="rounded-md border">
                 <button
                   type="button"
                   onClick={() => setExportOpen(open => !open)}
@@ -1026,9 +1167,9 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                     )}
                   </div>
                 )}
-              </div>
+              </div>}
 
-              <AiSummarySection
+              {activeTab === "summary" && <AiSummarySection
                 summary={aiSummary}
                 model={aiSummaryModel}
                 regenerating={regeneratingSummary}
@@ -1057,16 +1198,26 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                     setRegeneratingSummary(false);
                   }
                 }}
-              />
+              />}
 
-              <div className="space-y-1">
+              {activeTab === "notes" && <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label htmlFor="video-notes" className="text-sm font-medium">Your notes</label>
-                  {notesStatus !== "idle" && (
-                    <span className="text-[11px] text-muted-foreground">
-                      {notesStatus === "saving" ? "Saving…" : "Saved"}
-                    </span>
-                  )}
+                  <div>
+                    <label htmlFor="video-notes" className="text-sm font-medium">Overview research note</label>
+                    <p className="text-[11px] text-muted-foreground">Anchored to this video, searchable in Notes, and available to AI.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {overviewNoteId && (
+                      <Link href={`/notes?noteId=${encodeURIComponent(overviewNoteId)}`} onClick={() => onOpenChange(false)}>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs">Open note</Button>
+                      </Link>
+                    )}
+                    {notesStatus !== "idle" && (
+                      <span className="text-[11px] text-muted-foreground">
+                        {notesStatus === "saving" ? "Saving…" : "Saved"}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <textarea
                   id="video-notes"
@@ -1076,9 +1227,9 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                   rows={3}
                   className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground/60 placeholder:font-normal placeholder:italic focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
                 />
-              </div>
+              </div>}
 
-              <div className="space-y-2">
+              {activeTab === "transcript" && <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <FileText className="h-4 w-4" />
@@ -1144,6 +1295,24 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                         <Button size="sm" className="h-8 whitespace-nowrap text-xs" disabled={savingClip} onClick={saveSelectedRange}>
                           Save as new
                         </Button>
+                        <Button size="sm" variant="outline" className="h-8 whitespace-nowrap text-xs" onClick={() => void copySelectedRange()}>
+                          <Copy className="h-3 w-3" />Copy
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-8 whitespace-nowrap text-xs" onClick={() => setSelectionAiOpen(open => !open)}>
+                          <MessageSquareText className="h-3 w-3" />Ask AI
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 whitespace-nowrap text-xs"
+                          onClick={() => {
+                            useSelectedRangeForExport();
+                            setExportOpen(true);
+                            changeTab("details");
+                          }}
+                        >
+                          <Scissors className="h-3 w-3" />Export
+                        </Button>
                         {video && rangeBounds && (
                           <AddAnchorToNotePopover
                             anchor={{
@@ -1173,6 +1342,15 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                         onOpen={loadTagOptions}
                         quote={rangeBounds ? segments.slice(rangeBounds.start, rangeBounds.end + 1).map(s => s.text).join(" ") : ""}
                       />
+                      {selectionAiOpen && video && (
+                        <DrawerSelectionAi
+                          key={`${rangeBounds.start}:${rangeBounds.end}`}
+                          video={video}
+                          startSeconds={segments[rangeBounds.start]?.start ?? 0}
+                          endSeconds={segments[rangeBounds.end]?.end ?? 0}
+                          excerpt={selectedRangeText}
+                        />
+                      )}
                     </div>
                   )}
                 </div>
@@ -1181,11 +1359,11 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                   {segments.map((segment, index) => {
                     const active = index === closestSegmentIndex;
                     const highlighted = index === highlightedSegmentIndex;
-                    const searchMatch = transcriptMatches.includes(index);
+                    const searchMatch = transcriptMatchSet.has(index);
                     const selected = !!rangeBounds && index >= rangeBounds.start && index <= rangeBounds.end;
                     const takingNote = clipSegmentIndex === index;
-                    const segmentClips = clipsForSegment(segment);
-                    const clipped = segmentClips.length > 0;
+                    const segmentClips = transcriptClipIndex.anchored.get(index) ?? [];
+                    const clipped = transcriptClipIndex.clipped.has(index);
                     // Aggregate tags across all overlapping clips, dedup'd.
                     const allTags = Array.from(new Set(segmentClips.flatMap(c => c.tags || [])));
                     // First non-empty note. Multiple-clip overlap is rare; if it
@@ -1195,6 +1373,7 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                     return (
                       <div
                         key={`${segment.start}:${index}`}
+                        style={{ contentVisibility: "auto", containIntrinsicSize: "0 92px" }}
                         className={`border-b px-3 py-2 text-sm last:border-b-0 ${
                           clipped ? "border-l-4 border-l-primary bg-primary/5" : ""
                         } ${
@@ -1204,7 +1383,14 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                         <button
                           ref={node => { segmentRefs.current[index] = node; }}
                           type="button"
-                          onClick={() => seekTo(segment.start)}
+                          onClick={(event) => {
+                            if (event.shiftKey) {
+                              if (selectionStartIndex === null) setSelectionStartIndex(index);
+                              setSelectionEndIndex(index);
+                              return;
+                            }
+                            seekTo(segment.start);
+                          }}
                           className="block w-full text-left hover:text-foreground"
                         >
                           <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
@@ -1365,8 +1551,9 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
                     <p className="p-3 text-sm text-muted-foreground">No timestamped transcript is available for this video.</p>
                   )}
                 </div>
-              </div>
+              </div>}
 
+              {activeTab === "notes" && <>
               <RelatedClipSection
                 heading="Related notes · By tag"
                 description="Notes from other videos that share at least one tag"
@@ -1389,16 +1576,20 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
               <RelatedClipSection
                 heading="Notes on this video"
                 description={null}
-                clips={sameVideoClips}
+                clips={evidenceClips}
                 loading={loadingRelated}
                 emptyMessage="No saved notes anchored to this video yet."
                 onSelect={seekRelatedClip}
               />
+              </>}
 
-              <div className="space-y-1 text-xs text-muted-foreground">
+              {activeTab === "details" && <div className="space-y-1 rounded-md border p-3 text-xs text-muted-foreground">
+                <div className="mb-2 font-medium text-foreground">Source files</div>
                 {video.video_path && <div className="break-all font-mono">{video.video_path}</div>}
                 {video.md_path && <div className="break-all font-mono">{video.md_path}</div>}
-              </div>
+              </div>}
+                </div>
+              </section>
             </div>
           </>
         ) : (
@@ -1435,6 +1626,125 @@ export function VideoDrawer({ open, video, initialSeconds = 0, initialSegmentInd
         );
       })()}
     </Sheet>
+  );
+}
+
+function DrawerTabButton({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+  count,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: LucideIcon;
+  label: string;
+  count?: number;
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant={active ? "secondary" : "ghost"}
+      className="h-8 shrink-0 gap-1.5 text-xs"
+      onClick={onClick}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+      {count !== undefined && <Badge variant="outline" className="ml-0.5 h-5 px-1 text-[10px]">{count}</Badge>}
+    </Button>
+  );
+}
+
+/** Inline, selection-scoped AI keeps playback and transcript context visible.
+ * It uses the same durable conversation stream as the main AI page, so the
+ * resulting exchange is saved and can be continued there afterward. */
+function DrawerSelectionAi({
+  video,
+  startSeconds,
+  endSeconds,
+  excerpt,
+}: {
+  video: VideoDrawerEntry;
+  startSeconds: number;
+  endSeconds: number;
+  excerpt: string;
+}) {
+  const stream = useChatStream();
+  const [question, setQuestion] = useState("What is important in this passage?");
+  const [answer, setAnswer] = useState("");
+  const [started, setStarted] = useState(false);
+  const [requestActive, setRequestActive] = useState(false);
+  const [completionAtStart, setCompletionAtStart] = useState(0);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!requestActive) return;
+    if (stream.streamingText) setAnswer(stream.streamingText);
+    if (stream.error) setRequestError(stream.error);
+    if (stream.conversationId) setConversationId(stream.conversationId);
+    if (stream.completionTick > completionAtStart) setRequestActive(false);
+  }, [completionAtStart, requestActive, stream.completionTick, stream.conversationId, stream.error, stream.streamingText]);
+
+  const ask = () => {
+    if (!question.trim() || stream.isStreaming) return;
+    setStarted(true);
+    setRequestActive(true);
+    setCompletionAtStart(stream.completionTick);
+    setRequestError(null);
+    setConversationId(null);
+    setAnswer("");
+    const passage = excerpt.slice(0, 12_000);
+    void chatStream.ask({
+      question: [
+        `Selected passage from “${video.title}” (${formatTimestamp(startSeconds)}–${formatTimestamp(endSeconds)}):`,
+        passage,
+        `Question: ${question.trim()}`,
+      ].join("\n\n"),
+      sources: [isAudioPath(video.video_path) ? "audio" : "video"],
+      videoKeys: [{ videoId: video.video_id, channelId: video.channel_id }],
+    });
+  };
+
+  const busyElsewhere = stream.isStreaming && !requestActive;
+  return (
+    <div className="space-y-2 rounded-md border border-primary/30 bg-background p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-xs font-medium">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />Ask about this selection
+        </div>
+        {conversationId && started && (
+          <Link href="/ai">
+            <Button size="sm" variant="ghost" className="h-6 text-[10px]">Continue in AI</Button>
+          </Link>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <Input
+          value={question}
+          onChange={event => setQuestion(event.target.value)}
+          onKeyDown={event => { if (event.key === "Enter") ask(); }}
+          disabled={requestActive || busyElsewhere}
+          className="h-8 text-xs"
+          placeholder="Ask a question about the selected passage"
+        />
+        {requestActive ? (
+          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => chatStream.abort()}>Stop</Button>
+        ) : (
+          <Button size="sm" className="h-8 text-xs" disabled={!question.trim() || stream.isStreaming} onClick={ask}>Ask</Button>
+        )}
+      </div>
+      {busyElsewhere && <p className="text-[11px] text-muted-foreground">Another AI response is currently running.</p>}
+      {requestError && <p className="text-xs text-destructive">{requestError}</p>}
+      {(answer || requestActive) && (
+        <div className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded border bg-muted/30 p-2 text-xs leading-5">
+          {answer || <span className="text-muted-foreground">Thinking…</span>}
+          {requestActive && <span className="ml-1 inline-block h-3 w-1 animate-pulse bg-primary" />}
+        </div>
+      )}
+    </div>
   );
 }
 

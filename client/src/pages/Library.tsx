@@ -491,7 +491,7 @@ export default function Library() {
     }
   };
 
-  const openDrawer = (entry: QueueEntry) => {
+  const openDrawer = (entry: QueueEntry, recordHistory = true) => {
     setDrawerVideo({
       video_id: entry.video_id,
       channel_id: entry.channel_id,
@@ -507,12 +507,90 @@ export default function Library() {
     });
     setDrawerSeconds(entry.last_position_seconds || 0);
     setDrawerOpen(true);
+    if (recordHistory) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("video", entry.video_id);
+      url.searchParams.set("channel", entry.channel_id);
+      if (entry.last_position_seconds > 0) url.searchParams.set("t", String(Math.floor(entry.last_position_seconds)));
+      else url.searchParams.delete("t");
+      window.history.pushState({ concordVideoDrawer: true }, "", url);
+    }
   };
 
   const handleDrawerOpenChange = (open: boolean) => {
     setDrawerOpen(open);
-    if (!open) fetchData();
+    if (!open) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("video");
+      url.searchParams.delete("channel");
+      url.searchParams.delete("t");
+      window.history.replaceState(window.history.state, "", url);
+      fetchData();
+    }
   };
+
+  useEffect(() => {
+    const restoreDrawerFromUrl = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const videoId = params.get("video");
+      const drawerChannelId = params.get("channel");
+      if (!videoId || !drawerChannelId) {
+        setDrawerOpen(false);
+        return;
+      }
+      try {
+        const response = await apiRequest(
+          "GET",
+          `/api/videos/library/${encodeURIComponent(drawerChannelId)}/${encodeURIComponent(videoId)}?t=${Date.now()}`,
+        );
+        const data = await response.json() as { entry: QueueEntry & { channel_name?: string } };
+        const entry = data.entry;
+        const requestedSeconds = Number(params.get("t"));
+        setDrawerVideo({
+          video_id: entry.video_id,
+          channel_id: entry.channel_id,
+          channel_name: entry.channel_name || entry.channel_id,
+          title: entry.title,
+          upload_date: entry.upload_date,
+          duration: entry.duration,
+          status: entry.status,
+          is_live: entry.is_live,
+          video_path: entry.video_path,
+          md_path: entry.md_path,
+          word_count: entry.word_count,
+        });
+        setDrawerSeconds(Number.isFinite(requestedSeconds) && requestedSeconds >= 0
+          ? requestedSeconds
+          : entry.last_position_seconds || 0);
+        setDrawerOpen(true);
+      } catch (error: any) {
+        toast({ variant: "destructive", title: "Could not open linked video", description: error.message });
+      }
+    };
+    const onPopState = () => { void restoreDrawerFromUrl(); };
+    window.addEventListener("popstate", onPopState);
+    void restoreDrawerFromUrl();
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const drawerIndex = drawerVideo
+    ? entries.findIndex(entry => entry.video_id === drawerVideo.video_id && entry.channel_id === drawerVideo.channel_id)
+    : -1;
+  const asDrawerEntry = (entry: QueueEntry | undefined): VideoDrawerEntry | null => entry ? ({
+    video_id: entry.video_id,
+    channel_id: entry.channel_id,
+    channel_name: channelNames[entry.channel_id] || entry.channel_id,
+    title: entry.title,
+    upload_date: entry.upload_date,
+    duration: entry.duration,
+    status: entry.status,
+    is_live: entry.is_live,
+    video_path: entry.video_path,
+    md_path: entry.md_path,
+    word_count: entry.word_count,
+  }) : null;
+  const previousDrawerVideo = asDrawerEntry(drawerIndex > 0 ? entries[drawerIndex - 1] : undefined);
+  const nextDrawerVideo = asDrawerEntry(drawerIndex >= 0 ? entries[drawerIndex + 1] : undefined);
 
   return (
     <div className="mx-auto max-w-[1350px] px-4 py-4 space-y-4">
@@ -986,6 +1064,12 @@ export default function Library() {
         video={drawerVideo}
         initialSeconds={drawerSeconds}
         onOpenChange={handleDrawerOpenChange}
+        previousVideo={previousDrawerVideo}
+        nextVideo={nextDrawerVideo}
+        onNavigate={(target) => {
+          const entry = entries.find(item => item.video_id === target.video_id && item.channel_id === target.channel_id);
+          if (entry) openDrawer(entry);
+        }}
       />
       {renameTarget && (
         <RenameFileDialog

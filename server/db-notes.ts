@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { nanoid } from "nanoid";
 
 // ---------------------------------------------------------------
 // Notes (transcript_clips) + anchors + tags + links + graph
@@ -371,6 +372,64 @@ export function updateTranscriptClip(
   params.push(id);
   getDb().prepare(`UPDATE transcript_clips SET ${sets.join(", ")} WHERE id = ?`).run(...params);
   return getTranscriptClip(id);
+}
+
+/** Create or update the single whole-video research note linked from a queue
+ * row. This lazily migrates the legacy video_queue.notes text the first time
+ * the drawer is edited, without generating hundreds of empty notes. */
+export function upsertVideoOverviewNote(
+  videoId: string,
+  channelId: string,
+  body: string | null,
+): TranscriptClip {
+  const row = getDb().prepare(`
+    SELECT q.video_id, q.channel_id, q.title, q.upload_date, q.duration,
+           q.overview_note_id, c.name AS channel_name
+    FROM video_queue q
+    LEFT JOIN channels c ON c.id = q.channel_id
+    WHERE q.video_id = ? AND q.channel_id = ?
+  `).get(videoId, channelId) as {
+    video_id: string;
+    channel_id: string;
+    title: string;
+    upload_date: string | null;
+    duration: number | null;
+    overview_note_id: string | null;
+    channel_name: string | null;
+  } | undefined;
+  if (!row) throw new Error("Video not found");
+
+  let note = row.overview_note_id ? getTranscriptClip(row.overview_note_id) : undefined;
+  if (note) {
+    note = updateTranscriptClip(note.id, { note: body });
+  } else {
+    note = createTranscriptClip({
+      id: nanoid(),
+      title: `Overview · ${row.title}`,
+      channelName: row.channel_name,
+      uploadDate: row.upload_date,
+      note: body,
+      anchors: [{
+        videoId: row.video_id,
+        channelId: row.channel_id,
+        startSeconds: 0,
+        endSeconds: row.duration ?? 0,
+        excerpt: "Whole-video overview",
+      }],
+    });
+    getDb().prepare(`
+      UPDATE video_queue SET overview_note_id = ? WHERE video_id = ? AND channel_id = ?
+    `).run(note.id, row.video_id, row.channel_id);
+  }
+  if (!note) throw new Error("Overview research note could not be saved");
+
+  // Mirror into the old field so older clients and existing exports retain
+  // the text while the first-class research note is canonical.
+  getDb().prepare(`
+    UPDATE video_queue SET notes = ?, updated_at = datetime('now')
+    WHERE video_id = ? AND channel_id = ?
+  `).run(body?.trim() || null, row.video_id, row.channel_id);
+  return note;
 }
 
 /** Append an anchor to an existing note. Returns the new anchor's ordinal.
@@ -1234,6 +1293,5 @@ export function saveClipMapLayout(mapKey: string, nodes: ClipMapLayoutNode[]): {
 
   return { saved: cleaned.length };
 }
-
 
 
