@@ -75,6 +75,8 @@ export function registerPipelineRoutes(app: Express, pipeline: Pipeline): void {
     pipeline.on("jobError", onJobUpdate);
     pipeline.on("checkComplete", onStateChange);
     pipeline.on("configChanged", onStateChange);
+    pipeline.on("started", onStateChange);
+    pipeline.on("stopped", onStateChange);
 
     // Initial snapshot so the page renders before the first real event.
     res.write(`event: state\ndata: ${JSON.stringify(pipeline.getState())}\n\n`);
@@ -86,6 +88,8 @@ export function registerPipelineRoutes(app: Express, pipeline: Pipeline): void {
       pipeline.off("jobError", onJobUpdate);
       pipeline.off("checkComplete", onStateChange);
       pipeline.off("configChanged", onStateChange);
+      pipeline.off("started", onStateChange);
+      pipeline.off("stopped", onStateChange);
     });
   });
 

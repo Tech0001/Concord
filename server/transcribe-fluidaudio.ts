@@ -20,6 +20,7 @@ import {
   upsertVideoSpeakerAssignment,
   SPEAKER_AUTOMATCH_THRESHOLD,
 } from "./db";
+import { trackChildProcess } from "./child-process-registry";
 
 interface FluidAudioJSON {
   audioFile: string;
@@ -147,7 +148,10 @@ export async function transcribeWithFluidAudio(
 function runFluidAudio(bin: string, args: string[], tag: string): Promise<void> {
   return new Promise((resolve, reject) => {
     console.log(`[${tag}] Spawning: ${bin} ${args.join(" ")}`);
-    const proc = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      `FluidAudio ${tag}`,
+    );
     let stderr = "";
 
     proc.stdout.on("data", (d: Buffer) => {

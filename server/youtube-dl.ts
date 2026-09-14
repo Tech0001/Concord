@@ -88,6 +88,37 @@ const LIVE_ENDED_FRIENDLY =
   + "The video is fine — try again in 10-30 minutes (longer for multi-hour streams). "
   + "This is a known yt-dlp transition window after a stream ends.";
 
+/** Fallback clients for YouTube's GVS PO-token rollout. They currently
+ *  expose a plain progressive stream when the default android_vr media URL
+ *  is rejected with HTTP 403. This is intentionally a recovery path: the
+ *  available result may be limited to 360p. */
+const POT_FALLBACK_CLIENTS = "tv_simply,mweb";
+
+type DownloadAttemptError = Error & { potBlocked?: boolean };
+
+/** Remove only files belonging to this unique manual-download target. A
+ *  failed multi-format yt-dlp run can leave `.part`, `.ytdl`, and `.f136`
+ *  siblings that would otherwise make the fallback resume the bad URL. */
+function cleanPartialDownloadFiles(outputPath: string): void {
+  const dir = path.dirname(outputPath);
+  const outputName = path.basename(outputPath);
+  const base = path.basename(outputPath, path.extname(outputPath));
+  if (!fs.existsSync(dir)) return;
+
+  try {
+    for (const file of fs.readdirSync(dir)) {
+      const belongsToAttempt = file === outputName
+        || file.startsWith(`${base}.f`)
+        || (file.startsWith(`${base}.`) && (file.endsWith(".part") || file.endsWith(".ytdl")));
+      if (!belongsToAttempt) continue;
+      try {
+        fs.unlinkSync(path.join(dir, file));
+        console.log(`[download] Cleaned failed partial: ${file}`);
+      } catch {}
+    }
+  } catch {}
+}
+
 export async function getYouTubeVideoInfo(url: string): Promise<YouTubeDlVideoInfo> {
   const cookieOpts = youtubeCookieOpts();
   const sleep = youtubeSleep();
@@ -143,193 +174,126 @@ export async function downloadYouTubeVideo(
   progressCallback: ProgressCallback,
   opts: { audioLanguage?: string } = {},
 ): Promise<void> {
-  try {
-    const url = `https://www.youtube.com/watch?v=${videoId}`;
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
 
-    console.log(`Starting download for video ${videoId} with format ${formatId} (audioLang: ${opts.audioLanguage || "any"})`);
-    console.log(`Output path: ${outputPath}`);
-    
-    // Start downloading with progress tracking
-    // Ensure temp directory exists
-    try {
-      if (!fs.existsSync(path.dirname(outputPath))) {
-        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-      }
-    } catch (error) {
-      console.error("Error ensuring temp directory exists:", error);
-    }
+  console.log(`Starting download for video ${videoId} with format ${formatId} (audioLang: ${opts.audioLanguage || "any"})`);
+  console.log(`Output path: ${outputPath}`);
 
-    const cookieOpts = youtubeCookieOpts();
-    const sleep = youtubeSleep();
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  const cookieOpts = youtubeCookieOpts();
+  const sleep = youtubeSleep();
 
-    // Build the audio selector. yt-dlp's selector grammar lets us
-    // express "prefer audio in language X but fall back if none":
-    //   bestaudio[language=en][ext=m4a] / bestaudio[language=en] / bestaudio[ext=m4a]
-    // The double-slash chain tries each branch left-to-right until
-    // one matches a real stream. Without the audioLanguage filter
-    // yt-dlp picks whichever audio comes first — usually the
-    // channel's original language, not the user's preference.
-    const audioSelector = opts.audioLanguage
-      ? `(bestaudio[language=${opts.audioLanguage}][ext=m4a]/bestaudio[language=${opts.audioLanguage}]/bestaudio[ext=m4a])`
-      : "bestaudio[ext=m4a]";
+  // Prefer the configured language, then any matching audio, then m4a.
+  const audioSelector = opts.audioLanguage
+    ? `(bestaudio[language=${opts.audioLanguage}][ext=m4a]/bestaudio[language=${opts.audioLanguage}]/bestaudio[ext=m4a])`
+    : "bestaudio[ext=m4a]";
 
-    // youtube-dl-exec library call (NOT child_process.exec) — runs
-    // yt-dlp with the format selector built above so the user's
-    // preferred audio language wins on multi-track videos.
+  const runAttempt = (playerClient?: string): Promise<void> => new Promise((resolve, reject) => {
+    let combinedOutput = "";
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      callback();
+    };
+
     const downloader = youtubedl.exec(url, {
       output: outputPath,
       format: `${formatId}+${audioSelector}/best`,
-      // Merge video and audio streams into a single file
       mergeOutputFormat: "mp4",
-      // Important: Force enabling the postprocessor for proper audio/video merging
       postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -b:a 192k",
-      // Cache to improve speed
-      cacheDir: './youtube-dl-cache',
-      // Avoid rate limiting errors
-      limitRate: '2M',
-      // Allow retries
+      cacheDir: "./youtube-dl-cache",
+      limitRate: "2M",
       retries: 10,
-      // Don't remove intermediate files on error to help debugging
       keepFragments: true,
-      // Enable all postprocessors
       embedSubs: false,
-      // Additional debugging
       verbose: true,
-      // Use Node as the JS runtime so yt-dlp can decode YouTube's player
-      // and see AV1/VP9 streams (otherwise falls back to H.264-only API).
-      jsRuntimes: 'node',
-      // Auth cookies — same priority as the metadata path above.
+      jsRuntimes: "node",
+      ...(playerClient ? { extractorArgs: `youtube:player_client=${playerClient}` } : {}),
       ...cookieOpts,
       sleepInterval: sleep.min,
       maxSleepInterval: sleep.max,
     } as Parameters<typeof youtubedl>[1]);
 
     if (!downloader.stdout || !downloader.stderr) {
-      throw new Error("Failed to create download process");
+      finish(() => reject(new Error("Failed to create download process")));
+      return;
     }
 
-    // youtube-dl-exec auto-rejects on non-zero exit. We track failure via
-    // the "exit" event below; swallow this rejection to prevent an
-    // unhandled-promise crash when YouTube returns a 5xx mid-download.
+    // youtube-dl-exec rejects its Promise on a non-zero exit. The close
+    // handler below owns completion because it has the captured stderr needed
+    // to distinguish a PO-token 403 from other failures.
     Promise.resolve(downloader).catch(() => {});
 
-    // Parse progress information from stdout
     downloader.stdout.on("data", (data: Buffer) => {
       const output = data.toString();
+      combinedOutput += output;
       console.log(`youtube-dl stdout: ${output}`);
-      
-      // Parse progress percentage
+
       const progressMatch = output.match(/(\d+\.\d+)%/);
-      if (progressMatch && progressMatch[1]) {
-        const percent = parseFloat(progressMatch[1]);
-        console.log(`Download progress: ${percent}%`);
-        
-        // Parse downloaded bytes and total bytes if available
-        const bytesMatch = output.match(/(\d+\.\d+)(\w+) of (\d+\.\d+)(\w+)/);
-        let downloaded_bytes = 0;
-        let total_bytes = 0;
-        
-        if (bytesMatch) {
-          // Convert to bytes based on unit
-          const units = { B: 1, KiB: 1024, MiB: 1024 * 1024, GiB: 1024 * 1024 * 1024 };
-          const downloadValue = parseFloat(bytesMatch[1]);
-          const downloadUnit = bytesMatch[2] as keyof typeof units;
-          const totalValue = parseFloat(bytesMatch[3]);
-          const totalUnit = bytesMatch[4] as keyof typeof units;
-          
-          downloaded_bytes = downloadValue * (units[downloadUnit] || 1);
-          total_bytes = totalValue * (units[totalUnit] || 1);
-          
-          console.log(`Downloaded: ${downloaded_bytes} bytes of ${total_bytes} bytes`);
-        }
-        
-        progressCallback({
-          percent,
-          downloaded_bytes,
-          total_bytes
-        });
+      if (!progressMatch?.[1]) return;
+      const percent = parseFloat(progressMatch[1]);
+      const bytesMatch = output.match(/(\d+\.\d+)(\w+) of (\d+\.\d+)(\w+)/);
+      let downloadedBytes = 0;
+      let totalBytes = 0;
+      if (bytesMatch) {
+        const units = { B: 1, KiB: 1024, MiB: 1024 * 1024, GiB: 1024 * 1024 * 1024 };
+        downloadedBytes = parseFloat(bytesMatch[1]) * (units[bytesMatch[2] as keyof typeof units] || 1);
+        totalBytes = parseFloat(bytesMatch[3]) * (units[bytesMatch[4] as keyof typeof units] || 1);
       }
+      progressCallback({ percent, downloaded_bytes: downloadedBytes, total_bytes: totalBytes });
     });
 
-    // Handle any errors
     downloader.stderr.on("data", (data: Buffer) => {
-      console.error(`youtube-dl stderr: ${data.toString()}`);
+      const output = data.toString();
+      combinedOutput += output;
+      console.error(`youtube-dl stderr: ${output}`);
     });
 
-    // Log when the process ends
-    downloader.on('close', (code) => {
-      console.log(`youtube-dl process exited with code ${code}`);
-      
-      // Check if file exists using the imported fs
+    downloader.once("error", (error) => {
+      console.error("Download process error:", error);
+      finish(() => reject(error));
+    });
+
+    downloader.once("close", (code) => {
+      console.log(`youtube-dl process exited with code ${code}${playerClient ? ` (player_client=${playerClient})` : ""}`);
       try {
-        if (fs.existsSync(outputPath)) {
-          const stats = fs.statSync(outputPath);
-          console.log(`Download file exists at ${outputPath}, size: ${stats.size} bytes`);
-        } else {
-          console.error(`Download file doesn't exist at ${outputPath}`);
+        if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+          const size = fs.statSync(outputPath).size;
+          progressCallback({ percent: 100, downloaded_bytes: size, total_bytes: size });
+          console.log(`Download completed successfully: ${outputPath} (${size} bytes)`);
+          finish(resolve);
+          return;
         }
       } catch (error) {
-        console.error('Error checking file status:', error);
+        finish(() => reject(error));
+        return;
       }
-    });
 
-    // Wait for download to complete - this is just the initial download, not the ffmpeg processing
-    console.log("Waiting for download to complete...");
-    
-    // Create a promise that will resolve when the download process is actually complete
-    return new Promise<void>((resolve, reject) => {
-      // Set up a handler for when the process exits
-      downloader.on('close', (code) => {
-        console.log(`youtube-dl process exited with code ${code}`);
-        
-        // Check if file exists
-        try {
-          if (fs.existsSync(outputPath)) {
-            const stats = fs.statSync(outputPath);
-            
-            if (stats.size > 0) {
-              console.log(`Download successful! File exists at ${outputPath}, size: ${stats.size} bytes`);
-              
-              // Set progress to 100% when done
-              progressCallback({
-                percent: 100,
-                downloaded_bytes: stats.size,
-                total_bytes: stats.size
-              });
-              
-              console.log("Download completed successfully");
-              resolve(); // Resolve the promise when everything is done
-            } else {
-              console.error(`Download file exists but is empty: ${outputPath}`);
-              reject(new Error("Download file is empty"));
-            }
-          } else {
-            console.error(`Download file does not exist: ${outputPath}`);
-            reject(new Error("Download file not found"));
-          }
-        } catch (error) {
-          console.error("Error checking file:", error);
-          reject(error);
-        }
-      });
-      
-      // Handle errors during the download process
-      downloader.on('error', (error) => {
-        console.error("Download process error:", error);
-        reject(error);
-      });
-      
-      // Wait for the command to finish
-      downloader.then((result) => {
-        console.log("Download command finished");
-        // We don't resolve here because we want to wait for the 'close' event
-        // which happens after any post-processing (like ffmpeg)
-      }).catch((error) => {
-        console.error("Download command failed:", error);
-        reject(error);
-      });
+      const error = new Error(`Download failed (yt-dlp exit ${code})`) as DownloadAttemptError;
+      error.potBlocked = !playerClient && /HTTP Error 403/.test(combinedOutput);
+      finish(() => reject(error));
     });
+  });
+
+  try {
+    await runAttempt();
   } catch (error) {
+    if ((error as DownloadAttemptError).potBlocked === true) {
+      cleanPartialDownloadFiles(outputPath);
+      console.warn(
+        `[download] ${videoId}: HTTP 403 on requested media — retrying with `
+        + `player_client=${POT_FALLBACK_CLIENTS}. Quality may fall back to 360p.`,
+      );
+      try {
+        await runAttempt(POT_FALLBACK_CLIENTS);
+        return;
+      } catch (fallbackError) {
+        console.error("Fallback download failed:", fallbackError);
+        throw new Error(`Failed to download video after PO-token fallback: ${fallbackError instanceof Error ? fallbackError.message : "Unknown error"}`);
+      }
+    }
+
     console.error("Error downloading video:", error);
     throw new Error(`Failed to download video: ${error instanceof Error ? error.message : "Unknown error"}`);
   }

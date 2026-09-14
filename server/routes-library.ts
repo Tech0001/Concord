@@ -29,6 +29,7 @@ import { copyAudioTrack, encodeAacSidecar, ffmpegBin, getVideoStreamInfo } from 
 import { ensureLibraryThumbnail } from "./library-thumbnails";
 import { scheduleNoteEmbedding } from "./note-embeddings";
 import type { Pipeline } from "./pipeline";
+import { trackChildProcess } from "./child-process-registry";
 
 // execFile (argv-style, NOT shell exec) wrapped as a Promise. Used only
 // to call `gio trash` / `osascript` with fixed argument vectors — no
@@ -142,7 +143,10 @@ function exportVideoSegment(options: {
   console.log(`[export] ffmpeg ${args.join(" ")}`);
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      "ffmpeg library export",
+    );
     let stderr = "";
     proc.stderr.on("data", data => {
       stderr += data.toString();

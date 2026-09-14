@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,10 +12,10 @@ import ErrorMessage from "@/components/ErrorMessage";
 import LoadingIndicator from "@/components/LoadingIndicator";
 import { VideoInfo } from "@/types/video";
 import {
-  Play, Square, RefreshCw, Plus, Trash2, Activity,
+  Plus, Trash2, Activity,
   CheckCircle, XCircle, Clock, AlertCircle, Radio,
   FileText, Download, Mic, FileDown, Loader2, Archive, List,
-  HardDrive, RotateCcw, ChevronDown, FileAudio, FolderOpen, Globe, Pencil
+  RotateCcw, ChevronDown, FileAudio, FolderOpen, Globe, Pencil
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -90,14 +89,7 @@ interface Config {
   processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean; diarizationEnabled: boolean };
 }
 
-const CODEC_OPTIONS: { value: string; label: string }[] = [
-  { value: "any",  label: "Auto (largest available)" },
-  { value: "av01", label: "AV1 (smallest, modern)" },
-  { value: "vp9",  label: "VP9 (small, broad support)" },
-  { value: "avc1", label: "H.264 (universal, largest)" },
-];
-
-function transcribingLabel(model: string | undefined): string {
+function transcribingLabel(model: string | undefined, device = "cuda"): string {
   if (!model) return "Transcribing…";
   const m = model.toLowerCase();
   // Check fluid- prefix BEFORE the parakeet substring match — the Mac
@@ -107,13 +99,9 @@ function transcribingLabel(model: string | undefined): string {
     return "Transcribing with FluidAudio on Apple Neural Engine…";
   }
   if (m.includes("parakeet")) {
-    return `Transcribing with Parakeet (${model.split("/").pop()}) on CUDA…`;
+    return `Transcribing with Parakeet (${model.split("/").pop()}) on ${device === "cpu" ? "CPU" : "NVIDIA GPU"}…`;
   }
-  return `Transcribing with faster-whisper (${model}) on CUDA…`;
-}
-
-function codecLabel(value: string): string {
-  return CODEC_OPTIONS.find(o => o.value === value)?.label || value;
+  return `Transcribing with faster-whisper (${model}) on ${device === "cpu" ? "CPU" : "NVIDIA GPU"}…`;
 }
 
 interface QueueData {
@@ -137,9 +125,7 @@ export default function PipelineStatus() {
   // never made it into the configured channels list. Surfaces one-off
   // manual downloads so Rename / Import-folder actions reach them too.
   const [virtualChannels, setVirtualChannels] = useState<{ channelId: string; videoCount: number }[]>([]);
-  // Config editing now lives on /settings (PipelineSettingsCard) — this
-  // page just displays the resolved config read-only. State for the form
-  // fields was removed; see the Configuration card render below.
+  // Configuration is edited in the Pipeline workspace Setup view.
   const [ytdlpHealth, setYtdlpHealth] = useState<{ ok: boolean; version: string | null; kind: "user" | "bundled" | "native" | "zipapp"; path: string; updatable?: boolean; error?: string } | null>(null);
   const [ytdlpHealthChecking, setYtdlpHealthChecking] = useState(false);
   const [ytdlpUpdating, setYtdlpUpdating] = useState(false);
@@ -293,15 +279,6 @@ export default function PipelineStatus() {
     }
   };
 
-  const start = async () => { await apiRequest("POST", "/api/pipeline/start"); fetchState(); toast({ title: "Started" }); };
-  const stop = async () => { await apiRequest("POST", "/api/pipeline/stop"); fetchState(); toast({ title: "Stopped" }); };
-  const checkNow = async () => {
-    const r = await apiRequest("POST", "/api/pipeline/check-now");
-    const data = await r.json();
-    fetchState();
-    toast({ title: "Check complete", description: `${data.newVideos ?? 0} new videos queued` });
-  };
-
   const addChannel = async () => {
     if (!newChannelName || !newChannelUrl) return;
     let url = newChannelUrl.trim();
@@ -321,7 +298,7 @@ export default function PipelineStatus() {
       });
       setNewChannelName(""); setNewChannelUrl("");
       fetchConfig(); fetchState();
-      toast({ title: "Channel added" });
+      toast({ title: newChannelKind === "folder" ? "Folder added" : "Subscribed to channel" });
     } catch (e: any) { toast({ variant: "destructive", title: "Error", description: e.message }); }
   };
 
@@ -479,8 +456,8 @@ export default function PipelineStatus() {
   const running = state?.status === "running";
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-4 space-y-4">
-      {/* Controls */}
+    <div className="space-y-4">
+      {/* Pipeline status; global controls are in the app header. */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
@@ -489,15 +466,6 @@ export default function PipelineStatus() {
               Pipeline
               <Badge variant={running ? "default" : "secondary"}>{running ? "Running" : state?.status || "?"}</Badge>
             </CardTitle>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={start} disabled={running} title={running ? "Pipeline already running" : "Start the pipeline"}>
-                <Play className="h-4 w-4"/>Start
-              </Button>
-              <Button size="sm" variant="outline" onClick={stop} disabled={!running} title={running ? "Stop the pipeline" : "Pipeline already stopped"}>
-                <Square className="h-4 w-4"/>Stop
-              </Button>
-              <Button size="sm" variant="outline" onClick={checkNow}><RefreshCw className="h-4 w-4"/>Check</Button>
-            </div>
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>{state?.totalCompleted || 0} done</span>
@@ -560,7 +528,7 @@ export default function PipelineStatus() {
         </CardHeader>
       </Card>
 
-      {/* Manual download + transcribe — uses Video save from Settings below */}
+      {/* Single-video download + transcription */}
       <UrlInput
         onVideoFetched={handleVideoFetched}
         onLoading={setIsVideoLoading}
@@ -594,53 +562,11 @@ export default function PipelineStatus() {
         );
       })()}
 
-      {/* Directories */}
+      {/* Recurring channel subscriptions and local folder sources */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
-            <CardTitle className="flex items-center gap-1.5"><HardDrive className="h-4 w-4"/>Configuration</CardTitle>
-            <Link href="/settings">
-              <Button size="sm" variant="ghost">Configure in Settings →</Button>
-            </Link>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-2 text-xs">
-          <div className="grid grid-cols-[140px_1fr] gap-x-2 gap-y-1">
-            <span className="text-muted-foreground">Working</span>
-            <code className="font-mono text-foreground">{config?.workingDir}</code>
-            <span className="text-muted-foreground">Videos</span>
-            <code className="font-mono text-foreground">{config?.videoSaveDir}</code>
-            <span className="text-muted-foreground">Transcripts</span>
-            <code className="font-mono text-foreground">{config?.transcriptDir}</code>
-            <span className="text-muted-foreground">Download quality</span>
-            <code className="font-mono text-foreground">{config?.videoQuality === "best" ? "Best available" : `${config?.videoQuality || "1080"}p`}</code>
-            <span className="text-muted-foreground">Video codec</span>
-            <code className="font-mono text-foreground">{codecLabel(config?.videoCodec || "any")}</code>
-            <span className="text-muted-foreground">Audio language</span>
-            <code className="font-mono text-foreground">{config?.audioLanguage || "(any)"}</code>
-            <span className="text-muted-foreground">Daily cap</span>
-            <code className="font-mono text-foreground">{config?.dailyDownloadCap ?? 200}{config?.dailyDownloadCap === 0 ? " (disabled)" : ""}</code>
-            <span className="text-muted-foreground">Check interval</span>
-            <code className="font-mono text-foreground">{config?.checkIntervalMinutes ?? 60} min</code>
-            <span className="text-muted-foreground">Download speed</span>
-            <code className="font-mono text-foreground">{config?.youtubeSpeedPreset || "conservative"}</code>
-            <span className="text-muted-foreground">YouTube cookies</span>
-            <code className="font-mono text-foreground">
-              {config?.youtubeCookiesFile
-                ? `file: ${config.youtubeCookiesFile}`
-                : (config?.youtubeCookiesFromBrowser || "none")}
-            </code>
-            <span className="text-muted-foreground">Transcription model</span>
-            <code className="font-mono text-foreground">{config?.transcription?.model || "large-v3"}</code>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Channels */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-2">
-            <CardTitle>Channels</CardTitle>
+            <CardTitle>Subscriptions & folders</CardTitle>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Switch
                 checked={config?.processing?.diarizationEnabled !== false}
@@ -650,8 +576,93 @@ export default function PipelineStatus() {
               <span>Speaker diarization</span>
             </div>
           </div>
+          <p className="text-xs text-muted-foreground">Subscribe to YouTube channels or add local folders. While running, the pipeline checks enabled sources for new media and queues it automatically.</p>
         </CardHeader>
         <CardContent className="space-y-2">
+          <div className="space-y-3 border-b pb-4">
+            <h3 className="text-sm font-medium">Add a source</h3>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Source type</span>
+              <div className="inline-flex overflow-hidden rounded-md border">
+                <button
+                  type="button"
+                  onClick={() => setNewChannelKind("youtube")}
+                  aria-pressed={newChannelKind === "youtube"}
+                  className={`px-2.5 py-1 transition-colors ${
+                    newChannelKind === "youtube"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  YouTube channel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewChannelKind("folder")}
+                  aria-pressed={newChannelKind === "folder"}
+                  className={`border-l px-2.5 py-1 transition-colors ${
+                    newChannelKind === "folder"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Local folder
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                placeholder="Source name"
+                aria-label="Source name"
+                value={newChannelName}
+                onChange={e => setNewChannelName(e.target.value)}
+                className="flex-1"
+              />
+              {newChannelKind === "folder" ? (
+                <div className="flex-[2]">
+                  <FolderInput
+                    value={newChannelUrl}
+                    onChange={setNewChannelUrl}
+                    placeholder="/absolute/path/to/folder"
+                    prompt="Choose the folder to scan for local media"
+                    className="font-mono text-xs"
+                  />
+                </div>
+              ) : (
+                <Input
+                  placeholder="https://www.youtube.com/@channel"
+                  aria-label="YouTube channel URL"
+                  value={newChannelUrl}
+                  onChange={e => setNewChannelUrl(e.target.value)}
+                  className="flex-[2] font-mono text-xs"
+                />
+              )}
+              <Select
+                value={newChannelCategory}
+                onValueChange={(v) => setNewChannelCategory(v as "personal" | "work")}
+              >
+                <SelectTrigger className="w-[110px]" aria-label="Source category"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="personal">Personal</SelectItem>
+                  <SelectItem value="work">Work</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button size="sm" onClick={addChannel} disabled={!newChannelName || !newChannelUrl}>
+                <Plus className="h-4 w-4"/>{newChannelKind === "folder" ? "Add folder" : "Subscribe"}
+              </Button>
+            </div>
+            {newChannelKind === "folder" ? (
+              <p className="text-[11px] text-muted-foreground">
+                Paste an absolute path. The pipeline will scan it recursively for video and audio files. New files are picked up on the next check.
+              </p>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                Add a channel URL to subscribe to new uploads. Use Full Scan on a saved source to find older videos.
+              </p>
+            )}
+          </div>
+
+          <h3 className="pt-2 text-sm font-medium">Your sources</h3>
           {config?.channels
             .filter(ch => !serverCategory || (ch.category ?? "personal") === serverCategory)
             .map(ch => {
@@ -740,7 +751,7 @@ export default function PipelineStatus() {
               </div>
             );
           })}
-          {(!config?.channels.length) && <p className="text-xs text-muted-foreground">No channels.</p>}
+          {(!config?.channels.length) && <p className="text-xs text-muted-foreground">No subscriptions or folders yet. Add your first source above.</p>}
 
           {/* Virtual channels — exist only in video_queue.channel_id,
               never had a channels-table row. Surface them so the user
@@ -780,79 +791,7 @@ export default function PipelineStatus() {
             </div>
           )}
 
-          <div className="space-y-2 pt-2">
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="text-muted-foreground">Source</span>
-              <div className="inline-flex overflow-hidden rounded-md border">
-                <button
-                  type="button"
-                  onClick={() => setNewChannelKind("youtube")}
-                  className={`px-2.5 py-1 transition-colors ${
-                    newChannelKind === "youtube"
-                      ? "bg-secondary text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  YouTube channel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNewChannelKind("folder")}
-                  className={`border-l px-2.5 py-1 transition-colors ${
-                    newChannelKind === "folder"
-                      ? "bg-secondary text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Local folder
-                </button>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <Input
-                placeholder="Name"
-                value={newChannelName}
-                onChange={e => setNewChannelName(e.target.value)}
-                className="flex-1"
-              />
-              {newChannelKind === "folder" ? (
-                <div className="flex-[2]">
-                  <FolderInput
-                    value={newChannelUrl}
-                    onChange={setNewChannelUrl}
-                    placeholder="/absolute/path/to/folder"
-                    prompt="Choose the folder to scan for local media"
-                    className="font-mono text-xs"
-                  />
-                </div>
-              ) : (
-                <Input
-                  placeholder="https://www.youtube.com/@channel"
-                  value={newChannelUrl}
-                  onChange={e => setNewChannelUrl(e.target.value)}
-                  className="flex-[2] font-mono text-xs"
-                />
-              )}
-              <Select
-                value={newChannelCategory}
-                onValueChange={(v) => setNewChannelCategory(v as "personal" | "work")}
-              >
-                <SelectTrigger className="w-[110px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="personal">Personal</SelectItem>
-                  <SelectItem value="work">Work</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button size="sm" onClick={addChannel} disabled={!newChannelName || !newChannelUrl}>
-                <Plus className="h-4 w-4"/>Add
-              </Button>
-            </div>
-            {newChannelKind === "folder" && (
-              <p className="text-[11px] text-muted-foreground">
-                Paste an absolute path. The pipeline will scan it recursively for video and audio files. New files are picked up on the next check.
-              </p>
-            )}
-          </div>
+
         </CardContent>
       </Card>
 
@@ -872,7 +811,7 @@ export default function PipelineStatus() {
                 )}
                 {job.status === "downloading" && <p className="text-xs text-muted-foreground mt-1">Downloading video with yt-dlp…</p>}
                 {job.status === "extracting_audio" && <p className="text-xs text-muted-foreground mt-1">Extracting audio with ffmpeg (16kHz mono WAV)…</p>}
-                {job.status === "transcribing" && <p className="text-xs text-muted-foreground mt-1">{transcribingLabel(job.model || config?.transcription?.model)}</p>}
+                {job.status === "transcribing" && <p className="text-xs text-muted-foreground mt-1">{transcribingLabel(job.model || config?.transcription?.model, config?.transcription.device)}</p>}
                 {job.status === "saving_md" && <p className="text-xs text-muted-foreground mt-1">Saving transcript as markdown…</p>}
               </div>
             ))}

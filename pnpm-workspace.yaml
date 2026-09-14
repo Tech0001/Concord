@@ -1,0 +1,15 @@
+packages:
+  - "."
+
+onlyBuiltDependencies:
+  - "@ffmpeg-installer/darwin-arm64"
+  - "@ffmpeg-installer/linux-x64"
+  - "@ffprobe-installer/darwin-arm64"
+  - "@ffprobe-installer/linux-x64"
+  - "better-sqlite3"
+  - "electron"
+  - "esbuild"
+
+ignoredBuiltDependencies:
+  - "electron-winstaller"
+  - "youtube-dl-exec"

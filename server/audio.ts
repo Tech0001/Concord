@@ -3,6 +3,8 @@ import path from "path";
 import fs from "fs";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import ffprobeInstaller from "@ffprobe-installer/ffprobe";
+import { assertDistinctOutputPath } from "./file-safety";
+import { trackChildProcess } from "./child-process-registry";
 
 /** Resolve the bundled ffmpeg / ffprobe paths. Electron-builder packages
  *  these binaries into app.asar.unpacked (we listed @ffmpeg-installer/**
@@ -52,7 +54,10 @@ function probeAudioCodec(filePath: string): Promise<string | null> {
       "-of", "default=nokey=1:noprint_wrappers=1",
       filePath,
     ];
-    const proc = spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      "ffprobe audio codec",
+    );
     let out = "";
     proc.stdout.on("data", (d: Buffer) => { out += d.toString(); });
     proc.on("close", () => resolve(out.trim() || null));
@@ -78,6 +83,7 @@ export async function copyAudioTrack(
   videoPath: string,
   outputPath: string,
 ): Promise<string> {
+  assertDistinctOutputPath(videoPath, outputPath, "Audio-track extraction");
   const codec = (await probeAudioCodec(videoPath))?.toLowerCase() ?? null;
   // Only AAC is safe to copy into an MP4/m4a container. Everything
   // else (opus, vorbis, or unknown) gets re-encoded to AAC.
@@ -92,7 +98,10 @@ export async function copyAudioTrack(
       `[audio] ${canStreamCopy ? "Demuxing" : `Re-encoding ${codec ?? "unknown"}→aac`} audio: ffmpeg ${args.join(" ")}`,
     );
 
-    const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      "ffmpeg audio track",
+    );
     let stderr = "";
     proc.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
 
@@ -129,6 +138,7 @@ export function extractAudio(
   outputPath: string,
   options: AudioExtractOptions = {}
 ): Promise<void> {
+  assertDistinctOutputPath(videoPath, outputPath, "Whisper audio extraction");
   const {
     sampleRate = 16000,
     channels = 1,
@@ -154,7 +164,10 @@ export function extractAudio(
 
     console.log(`[audio] Extracting audio: ffmpeg ${args.join(" ")}`);
 
-    const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      "ffmpeg audio extraction",
+    );
 
     let stderr = "";
 
@@ -208,7 +221,10 @@ export function encodeAacSidecar(
       "-b:a", bitrate,
       "-y", outputPath,
     ];
-    const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      "ffmpeg AAC sidecar",
+    );
     let stderr = "";
     proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
     proc.on("close", (code) => {
@@ -236,7 +252,10 @@ export function getMediaDuration(filePath: string): Promise<number> {
       filePath,
     ];
 
-    const proc = spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      "ffprobe media stream",
+    );
     let stdout = "";
 
     proc.stdout.on("data", (data: Buffer) => {
@@ -292,7 +311,10 @@ export async function getVideoStreamInfo(filePath: string): Promise<VideoStreamI
       "-of", "json",
       filePath,
     ];
-    const proc = spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      "ffprobe media duration",
+    );
     let stdout = "";
     proc.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
     proc.on("close", (code) => {

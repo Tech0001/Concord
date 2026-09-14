@@ -10,6 +10,7 @@ import {
 } from "./diarize-merge";
 import { findClosestSpeaker, upsertVideoSpeakerAssignment, SPEAKER_AUTOMATCH_THRESHOLD, pruneOrphanedAssignmentsForVideo } from "./db";
 import { enginesDir } from "./transcription-setup";
+import { trackChildProcess } from "./child-process-registry";
 
 // ---- JSON shapes on disk ----
 
@@ -133,7 +134,10 @@ export async function transcribeWithParakeet(
 function runPython(pythonPath: string, args: string[], tag: string): Promise<void> {
   return new Promise((resolve, reject) => {
     console.log(`[${tag}] Spawning: ${pythonPath} ${args.join(" ")}`);
-    const proc = spawn(pythonPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(pythonPath, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      `Python ${tag}`,
+    );
     let stderr = "";
 
     proc.stdout.on("data", (d: Buffer) => {

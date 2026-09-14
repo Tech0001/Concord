@@ -1,9 +1,11 @@
+import "./runtime-logs";
 import express, { type Request, Response, NextFunction } from "express";
 import { fileURLToPath } from "url";
 import type { AddressInfo } from "net";
 import { registerRoutes } from "./routes";
 import { serveStatic, log } from "./vite";
 import { getConfigValues } from "./db";
+import { shutdownManagedChildProcesses } from "./child-process-registry";
 
 // Process-level safety nets. Without these, a single unhandled promise
 // rejection (or a synchronous throw inside an async callback) takes
@@ -38,19 +40,25 @@ const QUIET_PATHS = new Set([
   "/api/clips/tags",
   "/api/system/info",
   "/api/status",
+  "/api/runtime-logs",
   "/api/chat/conversations",
 ]);
 const QUIET_PREFIXES = [
   "/api/pipeline/events",                   // SSE — fires constantly
+  "/api/runtime-logs/events",               // live server output SSE
   "/api/pipeline/queue/",                   // per-channel queue polls
   "/api/videos/download-progress/",         // long-poll progress
   "/api/clips/related/",                    // VideoDrawer side-panel polls
 ];
+const QUIET_GET_PATHS = new Set([
+  "/api/background-jobs",                  // BackgroundJobs status poll
+]);
 const QUIET_LOGS = process.env.LOG_QUIET !== "0";
 
-function shouldQuiet(path: string, status: number): boolean {
+function shouldQuiet(method: string, path: string, status: number): boolean {
   if (!QUIET_LOGS) return false;
   if (status >= 400) return false;
+  if (method === "GET" && QUIET_GET_PATHS.has(path)) return true;
   if (QUIET_PATHS.has(path)) return true;
   return QUIET_PREFIXES.some((p) => path.startsWith(p));
 }
@@ -69,7 +77,7 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (!path.startsWith("/api")) return;
-    if (shouldQuiet(path, res.statusCode)) return;
+    if (shouldQuiet(req.method, path, res.statusCode)) return;
 
     let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
     if (capturedJsonResponse) {
@@ -92,7 +100,27 @@ app.use((req, res, next) => {
  * get an ephemeral port, then loads BrowserWindow against `localhost:<port>`.
  * Run directly via `tsx` / `node` it auto-starts on PORT or 5050.
  */
-export async function startServer(opts: { port?: number } = {}): Promise<{ port: number; close: () => Promise<void> }> {
+export interface StartServerOptions {
+  port?: number;
+  /** Reuse this server on an OS-assigned port when the preferred port is busy. */
+  fallbackToRandom?: boolean;
+}
+
+export interface ServerHandle {
+  port: number;
+  close: () => Promise<void>;
+}
+
+let activeServerPromise: Promise<ServerHandle> | null = null;
+
+export function startServer(opts: StartServerOptions = {}): Promise<ServerHandle> {
+  // Registering the same Express routes twice also starts duplicate pipeline
+  // timers. Treat repeated callers as requests for the existing server.
+  activeServerPromise ??= startServerOnce(opts);
+  return activeServerPromise;
+}
+
+async function startServerOnce(opts: StartServerOptions): Promise<ServerHandle> {
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -127,15 +155,70 @@ export async function startServer(opts: { port?: number } = {}): Promise<{ port:
   // binds to 0.0.0.0 so a phone/tablet on the same WiFi can browse the app.
   const lanAccess = getConfigValues().lanAccess === "true";
   const host = lanAccess ? "0.0.0.0" : "127.0.0.1";
-  return new Promise((resolve) => {
-    server.listen({ port: requestedPort, host }, () => {
-      const addr = server.address() as AddressInfo;
-      log(`serving on ${host}:${addr.port}${lanAccess ? " (LAN access enabled)" : ""}`);
-      resolve({
-        port: addr.port,
-        close: () => new Promise<void>((r) => server.close(() => r())),
-      });
-    });
+  try {
+    await listenOnce(server, requestedPort, host);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (!opts.fallbackToRandom || requestedPort === 0 || code !== "EADDRINUSE") throw error;
+    console.warn(`[server] port ${requestedPort} in use; falling back to a random port`);
+    await listenOnce(server, 0, host);
+  }
+
+  const addr = server.address() as AddressInfo;
+  log(`serving on ${host}:${addr.port}${lanAccess ? " (LAN access enabled)" : ""}`);
+  let closePromise: Promise<void> | null = null;
+  return {
+    port: addr.port,
+    close: () => {
+      closePromise ??= (async () => {
+        await closeHttpServer(server);
+        const report = await shutdownManagedChildProcesses();
+        if (report.requested > 0) {
+          console.log(
+            `[shutdown] stopped ${report.requested} tool process(es)`
+            + `${report.forced > 0 ? ` (${report.forced} forced)` : ""}`
+            + `${report.remaining > 0 ? `; ${report.remaining} still present` : ""}`,
+          );
+        }
+      })();
+      return closePromise;
+    },
+  };
+}
+
+function listenOnce(server: import("http").Server, port: number, host: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      server.off("error", onError);
+      server.off("listening", onListening);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onListening = () => {
+      cleanup();
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen({ port, host });
+  });
+}
+
+function closeHttpServer(server: import("http").Server): Promise<void> {
+  if (!server.listening) return Promise.resolve();
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    server.close(finish);
+    // SSE and media streams otherwise keep server.close() pending forever.
+    server.closeAllConnections?.();
+    setTimeout(finish, 5_000).unref();
   });
 }
 
@@ -143,8 +226,20 @@ export async function startServer(opts: { port?: number } = {}): Promise<{ port:
 // In Electron, the main process imports startServer and calls it explicitly.
 const isMain = process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url);
 if (isMain) {
-  startServer().catch((err) => {
-    console.error("Server failed to start:", err);
-    process.exit(1);
-  });
+  startServer()
+    .then(handle => {
+      let stopping = false;
+      const stop = (signal: string) => {
+        if (stopping) return;
+        stopping = true;
+        console.log(`[server] received ${signal}; shutting down`);
+        void handle.close().finally(() => process.exit(0));
+      };
+      process.once("SIGINT", () => stop("SIGINT"));
+      process.once("SIGTERM", () => stop("SIGTERM"));
+    })
+    .catch((err) => {
+      console.error("Server failed to start:", err);
+      process.exit(1);
+    });
 }

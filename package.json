@@ -1,7 +1,7 @@
 {
   "name": "concord",
   "productName": "Concord",
-  "version": "2.3.0",
+  "version": "2.4.2",
   "description": "Concord — personal research archive for spoken-word media",
   "author": "mackers",
   "homepage": "https://github.com/mackers/concord",
@@ -15,7 +15,7 @@
     "build:server": "esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --define:process.env.NODE_ENV=\\\"production\\\" --outfile=dist/index.js",
     "build:electron": "esbuild electron/main.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/electron/main.js",
     "build": "pnpm run build:client && pnpm run build:server && pnpm run build:electron",
-    "test": "node --import tsx server/embedding-dimensions.test.ts && node --import tsx client/src/lib/ai-chat-persistence.test.ts && node --import tsx server/library-features.test.ts",
+    "test": "node --import tsx server/embedding-dimensions.test.ts && node --import tsx server/file-safety.test.ts && node --import tsx client/src/lib/ai-chat-persistence.test.ts && node --import tsx client/src/lib/compare-sources.test.ts && node --import tsx server/library-features.test.ts && node --import tsx server/child-process-registry.test.ts && node --import tsx server/runtime-logs.test.ts && node --import tsx server/pipeline-readiness.test.ts",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc",
     "electron:rebuild": "electron-builder install-app-deps",
@@ -23,7 +23,7 @@
     "fetch-binaries": "./scripts/fetch-binaries.sh",
     "electron:dist": "pnpm run fetch-binaries && pnpm run build && electron-builder --mac --arm64",
     "electron:dist:notarize": ". ./.env.notarize && pnpm run electron:dist",
-    "electron:dist:linux": "pnpm run build && pnpm run electron:rebuild && electron-builder --linux"
+    "electron:dist:linux": "pnpm run fetch-binaries && pnpm run build && pnpm run electron:rebuild && electron-builder --linux"
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "1.1.0",
@@ -54,21 +54,6 @@
     "tw-animate-css": "1.4.0",
     "wouter": "3.9.0",
     "youtube-dl-exec": "3.1.6"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@ffmpeg-installer/darwin-arm64",
-      "@ffmpeg-installer/linux-x64",
-      "@ffprobe-installer/darwin-arm64",
-      "@ffprobe-installer/linux-x64",
-      "better-sqlite3",
-      "electron",
-      "esbuild"
-    ],
-    "ignoredBuiltDependencies": [
-      "electron-winstaller",
-      "youtube-dl-exec"
-    ]
   },
   "devDependencies": {
     "@electron/rebuild": "4.0.4",
@@ -104,8 +89,7 @@
     "extraResources": [
       { "from": "build/icon-src/icon_1024.png", "to": "icon.png" },
       { "from": "server/transcription-engines", "to": "transcription-engines" },
-      { "from": "build/binaries/fluidaudiocli", "to": "binaries/fluidaudiocli" },
-      { "from": "build/binaries/yt-dlp", "to": "binaries/yt-dlp" }
+      { "from": "build/binaries", "to": "binaries", "filter": ["yt-dlp", "fluidaudiocli"] }
     ],
     "asar": true,
     "asarUnpack": [

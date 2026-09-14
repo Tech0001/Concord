@@ -4,8 +4,45 @@ import os from "os";
 import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { trackChildProcess } from "./child-process-registry";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * A packaged Electron app already contains a compatible Node runtime, but
+ * yt-dlp discovers JavaScript runtimes by looking for a `node` executable on
+ * PATH. Expose the running Electron executable through a private symlink and
+ * set ELECTRON_RUN_AS_NODE only for yt-dlp's process tree. This keeps YouTube
+ * player deciphering self-contained on machines that have no system Node.
+ */
+function packagedYtdlpEnvironment(): NodeJS.ProcessEnv | null {
+  if (!process.versions.electron || process.platform === "win32") return null;
+  const runtimeDir = path.join(userDataDir(), "runtime-bin");
+  const nodeShim = path.join(runtimeDir, "node");
+  try {
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    let currentTarget: string | null = null;
+    try {
+      currentTarget = fs.readlinkSync(nodeShim);
+    } catch {
+      try {
+        if (fs.lstatSync(nodeShim)) fs.unlinkSync(nodeShim);
+      } catch { /* missing is expected on first launch */ }
+    }
+    if (currentTarget !== process.execPath) {
+      if (currentTarget !== null) fs.unlinkSync(nodeShim);
+      fs.symlinkSync(process.execPath, nodeShim);
+    }
+    return {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      PATH: `${runtimeDir}${path.delimiter}${process.env.PATH || ""}`,
+    };
+  } catch (error) {
+    console.warn("[yt-dlp] could not expose Electron's Node runtime:", error);
+    return null;
+  }
+}
 
 // Concord's yt-dlp resolution strategy, ordered by precedence:
 //
@@ -130,6 +167,17 @@ if (resolved) {
 }
 
 const ytdlp = resolved ? create(resolved.path) : youtubedl;
+const rawExec = ytdlp.exec.bind(ytdlp);
+const packagedEnv = packagedYtdlpEnvironment();
+ytdlp.exec = ((url, flags, options = {}) => {
+  const child = rawExec(url, flags, {
+    ...options,
+    ...(packagedEnv
+      ? { env: { ...packagedEnv, ...(options.env ?? {}) } }
+      : {}),
+  });
+  return trackChildProcess(child, `yt-dlp ${url}`);
+}) as typeof ytdlp.exec;
 export default ytdlp;
 
 /** Active yt-dlp binary path. `undefined` when we're on the

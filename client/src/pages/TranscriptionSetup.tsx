@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { AlertCircle, CheckCircle2, Cpu, Loader2, Settings as SettingsIcon, SkipForward } from "lucide-react";
+import { AlertCircle, CheckCircle2, Cpu, Loader2, Settings as SettingsIcon } from "lucide-react";
 
 /** Mirror of server/transcription-setup.ts SetupStatus. */
 interface SetupStatus {
@@ -20,10 +19,7 @@ interface SetupStatus {
 
 interface ProgressLine { phase: string; line: string }
 
-const SKIP_FLAG = "concord-skip-transcription-setup";
-
-export default function TranscriptionSetup() {
-  const [, navigate] = useLocation();
+export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onInstalled?: () => void; onBusyChange?: (busy: boolean) => void }) {
   const { toast } = useToast();
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -33,6 +29,7 @@ export default function TranscriptionSetup() {
   // Power-user toggle to surface BOTH engine cards. Default off so the
   // common path is one button click on the recommended engine.
   const [showAllEngines, setShowAllEngines] = useState(false);
+  const [showInstaller, setShowInstaller] = useState(false);
 
   // Auto-scroll the install log to the bottom on each new line.
   useEffect(() => {
@@ -51,13 +48,9 @@ export default function TranscriptionSetup() {
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  const skipSetup = () => {
-    localStorage.setItem(SKIP_FLAG, "1");
-    navigate("/");
-  };
-
   const startInstall = async (engine: "parakeet" | "whisper") => {
     setInstalling(true);
+    onBusyChange?.(true);
     setProgress([]);
     setDone(null);
 
@@ -76,6 +69,7 @@ export default function TranscriptionSetup() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      let completed = false;
       while (true) {
         const { value, done: streamDone } = await reader.read();
         if (streamDone) break;
@@ -90,6 +84,7 @@ export default function TranscriptionSetup() {
             try {
               const event = JSON.parse(line.slice(6));
               if (event.phase === "complete") {
+                completed = true;
                 setDone({ ok: !!event.ok, engine: event.engine, error: event.error });
               } else {
                 setProgress(prev => [...prev, { phase: String(event.phase), line: String(event.line) }]);
@@ -98,10 +93,13 @@ export default function TranscriptionSetup() {
           }
         }
       }
+      if (!completed) throw new Error("The installation connection closed before completion. Check the engine status and retry if needed.");
     } catch (err: any) {
       setDone({ ok: false, error: err.message });
     } finally {
       setInstalling(false);
+      onBusyChange?.(false);
+      onInstalled?.();
       // Refresh status so the "installed" flag flips after success.
       void loadStatus();
     }
@@ -124,29 +122,52 @@ export default function TranscriptionSetup() {
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <p>FluidAudio ships with the macOS build — no Python venv setup needed.</p>
-            <Button onClick={() => navigate("/")}>Continue to Library</Button>
           </CardContent>
         </Card>
       </div>
     );
   }
 
-  if (done?.ok) {
+  if (done?.ok || (status.installed && !showInstaller)) {
     return (
       <div className="mx-auto max-w-2xl space-y-4 px-4 py-6">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-              {done.engine ? `${done.engine} installed` : "Engine installed"}
+              {done?.engine || status.venv.engine || "Transcription engine"} installed
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
-            <p>Transcription is ready. New downloads (and retranscribes) will use the {done.engine} engine.</p>
+            <p>The engine is installed. Models download on first use. Review the model and device settings below before finishing setup.</p>
             <p className="text-xs text-muted-foreground">
-              You can swap engines later from Settings → Transcription.
+              Recommended hardware settings select CPU automatically when no NVIDIA GPU is detected.
             </p>
-            <Button onClick={() => navigate("/")}>Continue</Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={async () => {
+                try {
+                  await apiRequest("POST", "/api/transcription/select", { engine: done?.engine || status.venv.engine });
+                  onInstalled?.();
+                  toast({ title: "Recommended hardware settings applied" });
+                } catch (error) {
+                  toast({ variant: "destructive", title: "Could not apply settings", description: String(error) });
+                }
+              }}>Use recommended hardware settings</Button>
+              <Button variant="ghost" onClick={() => { setDone(null); setShowInstaller(true); }}>Change engine / repair</Button>
+              <Button variant="ghost" className="text-destructive" disabled={installing} onClick={async () => {
+                if (!confirm("Remove Concord's transcription environment? You will need to install an engine before processing again.")) return;
+                setInstalling(true);
+                onBusyChange?.(true);
+                try {
+                  await apiRequest("POST", "/api/transcription/uninstall", {});
+                  setDone(null);
+                  await loadStatus();
+                  onInstalled?.();
+                } catch (error) {
+                  toast({ variant: "destructive", title: "Could not remove engine", description: String(error) });
+                } finally { setInstalling(false); onBusyChange?.(false); }
+              }}>Remove engine</Button>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -204,7 +225,7 @@ export default function TranscriptionSetup() {
                 <AlertCircle className="h-3.5 w-3.5" /> Python ≥ 3.10 required
               </div>
               <p className="mt-1 text-amber-900/80 dark:text-amber-200/80">
-                Install with <code className="rounded bg-amber-500/10 px-1 py-0.5">sudo apt install python3.12 python3.12-venv</code>, then re-open this page.
+                On Omarchy, install Python with <code className="rounded bg-amber-500/10 px-1 py-0.5">mise install python@3.12</code>, then reopen setup. On Ubuntu, install Python 3.12 and its venv package.
               </p>
             </div>
           )}
@@ -245,9 +266,6 @@ export default function TranscriptionSetup() {
                 {installing
                   ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Installing {recommended}…</>
                   : <>Install {recommended} ({recommended === "parakeet" ? "~5GB" : "~1.5GB"})</>}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={skipSetup} disabled={installing}>
-                <SkipForward className="mr-1 h-3.5 w-3.5" /> Skip for now
               </Button>
             </div>
           )}
@@ -298,7 +316,11 @@ export default function TranscriptionSetup() {
               <div className="rounded-md border border-red-500/40 bg-red-500/5 p-2 text-xs text-red-900 dark:text-red-200">
                 <div className="font-medium">Install failed</div>
                 <p className="mt-1">{done.error}</p>
-                <p className="mt-2 text-[11px]">Common fixes: <code>sudo apt install python3-venv libsndfile1</code>, then retry.</p>
+                <p className="mt-2 text-[11px]">
+                  Parakeet requires Python 3.10–3.13. On Arch/Omarchy, install a compatible version with
+                  {" "}<code>mise install python@3.12</code>; on Ubuntu use
+                  {" "}<code>sudo apt install python3.12-venv libsndfile1</code>. Then retry.
+                </p>
                 <Button size="sm" variant="outline" className="mt-2" onClick={() => startInstall(recommended)}>
                   Retry
                 </Button>
@@ -311,7 +333,7 @@ export default function TranscriptionSetup() {
       {/* Footer help */}
       <div className="flex items-center justify-end text-xs text-muted-foreground">
         <SettingsIcon className="mr-1 h-3 w-3" />
-        Switch engines or repair install later from Settings → Transcription.
+        You can return to Pipeline → Setup to change engines or repair the installation.
       </div>
     </div>
   );

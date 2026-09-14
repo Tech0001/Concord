@@ -1,7 +1,11 @@
 import type { Express, Request, Response } from "express";
 import { setConfigValues } from "./db";
+import type { Pipeline } from "./pipeline";
+import { transcriptionDefaults } from "./transcription-config";
+import { clearRuntimeChecks, setRuntimeInstalling } from "./pipeline-readiness";
 import {
   detectPython,
+  detectGpu,
   getSetupStatus,
   installEngine,
   uninstallEngine,
@@ -19,7 +23,17 @@ import {
  *   POST /api/transcription/select      Persist a chosen engine to config
  *   POST /api/transcription/uninstall   Wipe the venv (used by Reinstall)
  */
-export function registerTranscriptionSetupRoutes(app: Express): void {
+export function registerTranscriptionSetupRoutes(app: Express, pipeline: Pipeline): void {
+  let installing = false;
+  const saveEngine = (engine: EngineId, directory: string) => {
+    const defaults = transcriptionDefaults(engine, detectGpu().present, directory);
+    setConfigValues({
+      ...Object.fromEntries(Object.entries(defaults).map(([key, value]) => [`transcription.${key}`, value])),
+      "processing.diarizationEnabled": engine === "parakeet",
+    });
+    clearRuntimeChecks();
+    pipeline.reloadConfig();
+  };
   app.get("/api/transcription/status", (_req: Request, res: Response) => {
     res.json(getSetupStatus());
   });
@@ -32,6 +46,16 @@ export function registerTranscriptionSetupRoutes(app: Express): void {
     if (engine !== "parakeet" && engine !== "whisper") {
       return res.status(400).json({ error: "engine must be 'parakeet' or 'whisper'" });
     }
+
+    if (installing) return res.status(409).json({ error: "Transcription installation is already running." });
+    if (pipeline.getState().jobs.some(job => ["queued", "downloading", "extracting_audio", "transcribing"].includes(job.status))) {
+      return res.status(409).json({ error: "Wait for the current processing jobs to finish before changing the transcription installation." });
+    }
+    installing = true;
+    setRuntimeInstalling(true);
+    pipeline.stop();
+    setConfigValues({ "pipeline.setupCompleted": false });
+    clearRuntimeChecks();
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -53,16 +77,15 @@ export function registerTranscriptionSetupRoutes(app: Express): void {
       const result = await installEngine(engine, python, onProgress);
       // Persist the new engine + venv path to config so transcribe.ts can
       // pick it up without a restart.
-      setConfigValues({
-        "transcription.engine": engine,
-        "transcription.venvPath": venvDir(),
-      });
+      saveEngine(engine, venvDir());
       send({ phase: "saved", line: `Saved engine=${engine}, venvPath=${venvDir()}` });
       send({ phase: "complete", ok: true, pythonPath: result.pythonPath, engine });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       send({ phase: "complete", ok: false, error: msg });
     } finally {
+      installing = false;
+      setRuntimeInstalling(false);
       res.end();
     }
   });
@@ -75,19 +98,29 @@ export function registerTranscriptionSetupRoutes(app: Express): void {
     if (engine !== "parakeet" && engine !== "whisper") {
       return res.status(400).json({ error: "engine must be 'parakeet' or 'whisper'" });
     }
-    setConfigValues({
-      "transcription.engine": engine,
-      ...(venvPath ? { "transcription.venvPath": venvPath } : {}),
-    });
+    if (installing) return res.status(409).json({ error: "Wait for the transcription installation to finish." });
+    const status = getSetupStatus();
+    if (!venvPath && (!status.venv.exists || status.venv.engine !== engine)) {
+      return res.status(400).json({ error: "Install this engine first." });
+    }
+    saveEngine(engine, venvPath || venvDir());
     res.json({ ok: true });
   });
 
   app.post("/api/transcription/uninstall", (_req: Request, res: Response) => {
+    if (installing) return res.status(409).json({ error: "Wait for the transcription installation to finish." });
+    if (pipeline.getState().jobs.some(job => ["queued", "downloading", "extracting_audio", "transcribing"].includes(job.status))) {
+      return res.status(409).json({ error: "Wait for processing jobs to finish before removing their transcription engine." });
+    }
+    pipeline.stop();
     uninstallEngine();
     setConfigValues({
       "transcription.engine": "",
       "transcription.venvPath": "",
+      "pipeline.setupCompleted": false,
     });
+    clearRuntimeChecks();
+    pipeline.reloadConfig();
     res.json({ ok: true });
   });
 }

@@ -229,7 +229,10 @@ export default function Library() {
   const [type, setType] = useState(savedSettings.type || "all");
   const [hasTranscript, setHasTranscript] = useState(savedSettings.hasTranscript || "all");
   const [starredOnly, setStarredOnly] = useState(savedSettings.starred === "yes");
-  const [sort, setSort] = useState(savedSettings.sort || "upload_desc");
+  const [sort, setSort] = useState(() => {
+    const requested = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("sort") : null;
+    return requested || savedSettings.sort || "upload_desc";
+  });
   const [reviewState, setReviewState] = useState(savedSettings.reviewState || "all");
   const [viewMode, setViewMode] = useState<"grid" | "list">(savedSettings.viewMode || "grid");
   const [savedViews, setSavedViews] = useState<SavedLibraryView[]>(initialSavedViews);
@@ -819,6 +822,12 @@ export default function Library() {
               onOpen={openDrawer}
               onToggleStar={toggleStar}
               onSetReview={setReview}
+              model={model}
+              retranscribing={retranscribing}
+              onRetry={retryDownload}
+              onRetranscribe={retranscribe}
+              onRename={setRenameTarget}
+              onTrash={setTrashTarget}
             />
           ) : (
           <div className="overflow-x-auto rounded-md border">
@@ -971,7 +980,7 @@ export default function Library() {
                                       onClick={() => retryDownload(entry)}
                                     >
                                       <RefreshCw className="h-3 w-3" />
-                                      {inFlight ? "Retrying…" : "Retry (re-download)"}
+                                      {inFlight ? "Retrying…" : entry.url.startsWith("file:") ? "Retry processing" : "Retry (re-download)"}
                                     </button>
                                   )}
                                   <button
@@ -1097,6 +1106,12 @@ interface LibraryGridProps {
   onOpen: (entry: QueueEntry) => void;
   onToggleStar: (entry: QueueEntry) => void;
   onSetReview: (entry: QueueEntry, value: QueueEntry["review_state"]) => void;
+  model: string;
+  retranscribing: Record<string, boolean>;
+  onRetry: (entry: QueueEntry) => void;
+  onRetranscribe: (entry: QueueEntry) => void;
+  onRename: (entry: QueueEntry) => void;
+  onTrash: (entry: QueueEntry) => void;
 }
 
 function LibraryGrid({
@@ -1107,6 +1122,12 @@ function LibraryGrid({
   onOpen,
   onToggleStar,
   onSetReview,
+  model,
+  retranscribing,
+  onRetry,
+  onRetranscribe,
+  onRename,
+  onTrash,
 }: LibraryGridProps) {
   if (entries.length === 0) {
     return <div className="rounded-md border py-12 text-center text-sm text-muted-foreground">No media match these filters.</div>;
@@ -1122,6 +1143,15 @@ function LibraryGrid({
           : 0;
         const thumbnailUrl = `/api/videos/library/${encodeURIComponent(entry.channel_id)}/${encodeURIComponent(entry.video_id)}/thumbnail`;
         const people = speakerBadges[`${entry.video_id}|${entry.channel_id}`] || [];
+        const inFlight = retranscribing[key]
+          || entry.status === "queued"
+          || entry.status === "transcribing"
+          || entry.status === "extracting_audio"
+          || entry.status === "downloading";
+        const canRetranscribe = !!entry.video_path && entry.status !== "downloading" && entry.status !== "transcribing";
+        const showRetry = entry.status === "failed" || !!entry.error;
+        const hasMenuActions = showRetry || canRetranscribe || !!entry.video_path;
+        const localSource = entry.url.startsWith("file:");
         return (
           <article key={key} className="group overflow-hidden rounded-lg border bg-card shadow-sm transition-shadow hover:shadow-md">
             <button
@@ -1178,14 +1208,73 @@ function LibraryGrid({
                     {entry.upload_date ? ` · ${formatDate(entry.upload_date)}` : ""}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  aria-label={entry.starred ? "Unstar" : "Star"}
-                  className={cn("shrink-0 rounded p-1 hover:bg-secondary", entry.starred ? "text-amber-500" : "text-muted-foreground")}
-                  onClick={() => onToggleStar(entry)}
-                >
-                  <Star className={cn("h-4 w-4", entry.starred && "fill-current")} />
-                </button>
+                <div className="flex shrink-0 items-center gap-0.5">
+                  <button
+                    type="button"
+                    aria-label={entry.starred ? "Unstar" : "Star"}
+                    className={cn("rounded p-1 hover:bg-secondary", entry.starred ? "text-amber-500" : "text-muted-foreground")}
+                    onClick={() => onToggleStar(entry)}
+                  >
+                    <Star className={cn("h-4 w-4", entry.starred && "fill-current")} />
+                  </button>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        disabled={!hasMenuActions}
+                        title="More actions"
+                        aria-label={`More actions for ${entry.title}`}
+                      >
+                        {inFlight
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <MoreVertical className="h-3.5 w-3.5" />}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-52 p-1" align="end">
+                      {showRetry && (
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={inFlight}
+                          onClick={() => onRetry(entry)}
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                          {inFlight ? "Retrying…" : localSource ? "Retry processing" : "Retry (re-download)"}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={!canRetranscribe || inFlight}
+                        onClick={() => onRetranscribe(entry)}
+                        title={`Re-transcribe with: ${model}`}
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        {inFlight ? "Working…" : "Re-transcribe"}
+                      </button>
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={!entry.video_path}
+                        onClick={() => onRename(entry)}
+                      >
+                        <Pencil className="h-3 w-3" />
+                        Rename file
+                      </button>
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400"
+                        disabled={!entry.video_path}
+                        onClick={() => onTrash(entry)}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        Move to trash…
+                      </button>
+                    </PopoverContent>
+                  </Popover>
+                </div>
               </div>
 
               {people.length > 0 && (

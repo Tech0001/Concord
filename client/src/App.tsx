@@ -20,19 +20,21 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import NotFound from "@/pages/not-found";
-import Pipeline from "@/pages/Pipeline";
+import PipelineHub from "@/pages/PipelineHub";
 import Library from "@/pages/Library";
 import Search from "@/pages/Search";
 import Clips from "@/pages/Clips";
 import AI from "@/pages/AI";
 import Speakers from "@/pages/Speakers";
 import Status from "@/pages/Status";
-import Settings from "@/pages/Settings";
-import TranscriptionSetup from "@/pages/TranscriptionSetup";
+import { usePipelineSetup } from "@/hooks/use-pipeline-setup";
 import Discover from "@/pages/Discover";
 import Watchers from "@/pages/Watchers";
 import Docs from "@/pages/Docs";
 import Extract from "@/pages/Extract";
+import Health from "@/pages/Health";
+import Compare from "@/pages/Compare";
+import Terminal from "@/pages/Terminal";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import {
@@ -43,6 +45,7 @@ import {
   FileAudio,
   FileText,
   Gauge,
+  HeartPulse,
   Map as MapIcon,
   Menu,
   Mic,
@@ -53,12 +56,16 @@ import {
   Search as SearchIcon,
   Settings as SettingsIcon,
   Sparkles,
+  SplitSquareHorizontal,
+  SquareTerminal,
   Sun,
   Users,
 } from "lucide-react";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { CategoryProvider, useCategory, type Category } from "@/hooks/use-category";
 import { SidebarProvider, useSidebar } from "@/hooks/use-sidebar";
+import { GlobalCommandPalette } from "@/components/GlobalCommandPalette";
+import { PipelineControls } from "@/components/PipelineControls";
 
 const MapPage = lazy(() => import("@/pages/Map"));
 
@@ -85,6 +92,7 @@ const NAV_GROUPS = [
       { href: "/speakers",    label: "Speakers",    icon: Users },
       { href: "/map",         label: "Map",         icon: MapIcon },
       { href: "/ai",          label: "AI",          icon: Sparkles },
+      { href: "/compare",     label: "Compare",     icon: SplitSquareHorizontal },
     ],
   },
   {
@@ -92,6 +100,8 @@ const NAV_GROUPS = [
     items: [
       { href: "/pipeline",    label: "Pipeline",    icon: Activity },
       { href: "/status",      label: "Status",      icon: Gauge },
+      { href: "/health",      label: "Health",      icon: HeartPulse },
+      { href: "/terminal",    label: "Terminal",    icon: SquareTerminal },
       { href: "/extract",     label: "Extract",     icon: FileAudio },
     ],
   },
@@ -136,7 +146,7 @@ function TopBar() {
 
   return (
     <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 [-webkit-app-region:drag]">
-      <div className="flex h-12 items-center gap-3 px-3 md:gap-6 md:px-4">
+      <div className="flex h-12 items-center gap-3 px-3 md:px-4 lg:gap-6">
         <div className="flex items-center gap-2 [-webkit-app-region:no-drag]">
           <SidebarToggle />
           <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-foreground text-[11px] font-semibold text-background tracking-tight">
@@ -155,6 +165,18 @@ function TopBar() {
         {/* Right-side controls — no-drag so settings/theme/hamburger
             buttons remain clickable inside the draggable header. */}
         <div className="ml-auto flex items-center gap-1 md:ml-0 [-webkit-app-region:no-drag]">
+          <PipelineControls />
+          <Button
+            size="sm"
+            variant="ghost"
+            className="hidden h-8 gap-2 px-2 text-xs text-muted-foreground sm:inline-flex"
+            onClick={() => window.dispatchEvent(new Event("concord:open-command"))}
+            title="Search or run a command (Ctrl+K)"
+          >
+            <SearchIcon className="h-3.5 w-3.5" />
+            <span className="hidden lg:inline">Search</span>
+            <kbd className="hidden rounded border bg-muted px-1 py-0.5 font-mono text-[9px] lg:inline">Ctrl K</kbd>
+          </Button>
           <CategoryToggle />
           <LlmStatusDot />
 
@@ -176,9 +198,9 @@ function TopBar() {
           {/* Settings + theme controls only fit on md+ — the mobile menu
               repeats them inside the drawer so phone users still have access. */}
           <Link
-            href="/settings"
-            aria-label="Settings"
-            title="Settings"
+            href="/pipeline/setup"
+            aria-label="Pipeline setup"
+            title="Pipeline setup"
             className="hidden h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground md:inline-flex"
           >
             <SettingsIcon className="h-3.5 w-3.5" />
@@ -204,7 +226,7 @@ function TopBar() {
                       {group.name}
                     </p>
                     {group.items.map(({ href, label, icon: Icon }) => {
-                      const active = location === href;
+                      const active = location === href || (href === "/pipeline" && location.startsWith("/pipeline/"));
                       return (
                         <SheetClose asChild key={href}>
                           <Link
@@ -225,14 +247,14 @@ function TopBar() {
                 <div className="mt-2 flex flex-col gap-0.5 border-t pt-2">
                   <SheetClose asChild>
                     <Link
-                      href="/settings"
+                      href="/pipeline/setup"
                       className={cn(
                         "inline-flex h-10 items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
-                        location === "/settings" && "bg-secondary text-foreground"
+                        (location === "/settings" || location === "/pipeline/setup") && "bg-secondary text-foreground"
                       )}
                     >
                       <SettingsIcon className="h-4 w-4" />
-                      <span>Settings</span>
+                      <span>Pipeline setup</span>
                     </Link>
                   </SheetClose>
                 </div>
@@ -345,7 +367,11 @@ function Router() {
     <Switch>
       <Route path="/" component={Library} />
       <Route path="/status" component={Status} />
-      <Route path="/pipeline" component={Pipeline} />
+      <Route path="/health" component={Health} />
+      <Route path="/terminal" component={Terminal} />
+      <Route path="/pipeline"><PipelineHub /></Route>
+      <Route path="/pipeline/setup"><PipelineHub section="setup" /></Route>
+      <Route path="/pipeline/ai"><PipelineHub section="ai" /></Route>
       <Route path="/library" component={Library} />
       <Route path="/discover" component={Discover} />
       <Route path="/watchers" component={Watchers} />
@@ -356,8 +382,9 @@ function Router() {
       <Route path="/speakers" component={Speakers} />
       <Route path="/extract" component={Extract} />
       <Route path="/ai" component={AI} />
-      <Route path="/settings" component={Settings} />
-      <Route path="/setup/transcription" component={TranscriptionSetup} />
+      <Route path="/compare" component={Compare} />
+      <Route path="/settings"><PipelineHub section="setup" /></Route>
+      <Route path="/setup/transcription"><PipelineHub section="setup" /></Route>
       <Route path="/map">
         <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading map...</div>}>
           <MapPage />
@@ -368,30 +395,20 @@ function Router() {
   );
 }
 
-/** Redirect to /setup/transcription on first launch when no engine is
- *  installed AND the user hasn't dismissed the wizard. The check fires
- *  once per page load. The dismiss flag lives in localStorage so a
- *  user who skipped doesn't get re-nudged on every reload. */
-function TranscriptionSetupGate() {
+/** First-use setup is stored on the server, so every window uses the same gate. */
+function PipelineSetupGate({ children }: { children: React.ReactNode }) {
   const [location, navigate] = useLocation();
+  const { data: setup, error, refetch } = usePipelineSetup();
+  const inSetup = location.startsWith("/pipeline") || location === "/settings" || location === "/setup/transcription";
+  const troubleshooting = location === "/health" || location === "/terminal";
   useEffect(() => {
-    if (location.startsWith("/setup")) return;
-    if (localStorage.getItem("concord-skip-transcription-setup") === "1") return;
-    let cancelled = false;
-    fetch("/api/transcription/status")
-      .then(r => r.ok ? r.json() : null)
-      .then(status => {
-        if (cancelled || !status) return;
-        if (status.skipSetup) return;       // Mac
-        if (status.installed) return;       // already done
-        navigate("/setup/transcription");
-      })
-      .catch(() => { /* status endpoint missing or unreachable — silent */ });
-    return () => { cancelled = true; };
-  // We deliberately re-run on every navigation so a user who clears the
-  // skip flag and reloads gets gated without a hard refresh.
-  }, [location, navigate]);
-  return null;
+    if (setup && !setup.ready && !inSetup && !troubleshooting) navigate("/pipeline/setup", { replace: true });
+  }, [setup, inSetup, troubleshooting, navigate]);
+  if (troubleshooting) return <>{children}</>;
+  if (error) return <div className="space-y-3 p-6"><p>Could not check Pipeline setup. Reconnect to Concord to continue.</p><Button onClick={() => void refetch()}>Retry</Button></div>;
+  if (!setup) return <p className="p-6 text-sm text-muted-foreground">Checking Pipeline setup…</p>;
+  if (!setup.ready && !inSetup) return null;
+  return <>{children}</>;
 }
 
 /** Top-bar button that toggles the sidebar between full + rail
@@ -441,7 +458,7 @@ function Sidebar() {
                 </p>
               )}
             {group.items.map(({ href, label, icon: Icon }) => {
-              const active = location === href;
+              const active = location === href || (href === "/pipeline" && location.startsWith("/pipeline/"));
               return (
                 <Link
                   key={href}
@@ -461,6 +478,17 @@ function Sidebar() {
           </div>
         ))}
       </nav>
+      <div
+        className={cn(
+          "mt-auto shrink-0 border-t text-muted-foreground",
+          collapsed ? "px-1 py-3 text-center text-[10px]" : "px-5 py-3 text-xs",
+        )}
+        title={`Concord v${__APP_VERSION__}`}
+        aria-label={`Concord version ${__APP_VERSION__}`}
+      >
+        {!collapsed && <span>Concord </span>}
+        <span className="tabular-nums">v{__APP_VERSION__}</span>
+      </div>
     </aside>
   );
 }
@@ -472,11 +500,11 @@ function App() {
         <SidebarProvider>
           <div className="min-h-screen bg-background text-foreground">
             <TopBar />
-            <TranscriptionSetupGate />
+            <GlobalCommandPalette />
             <div className="flex">
               <Sidebar />
               <main className="min-w-0 flex-1 pb-12">
-                <Router />
+                <PipelineSetupGate><Router /></PipelineSetupGate>
               </main>
             </div>
             <Toaster />

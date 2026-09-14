@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   enqueueVideo,
+  enqueueVideos,
   getDb,
   getQueueEntry,
   getQueueList,
@@ -15,6 +16,14 @@ import {
 import { backgroundJobs } from "./background-jobs";
 import { libraryThumbnailCachePath } from "./library-thumbnails";
 import { sendLibraryThumbnailFile } from "./routes-library";
+import {
+  buildArchiveHealthReport,
+  cleanOrphanedDerivedIndexes,
+  createDatabaseBackup,
+  duplicateEntriesFor,
+  fingerprintMedia,
+  validateBackupFile,
+} from "./archive-maintenance";
 import type { Response } from "express";
 
 // Include a dot-prefixed path component to match Linux's ~/.local app-data
@@ -46,6 +55,34 @@ test("library media/review filters distinguish audio, video, and live records", 
   assert.deepEqual(getQueueList({ type: "live" }).rows.map(row => row.video_id), ["live"]);
   assert.deepEqual(getQueueList({ reviewState: "in_review" }).rows.map(row => row.video_id), ["video"]);
   assert.equal(getQueueEntry("video", "channel")?.thumbnail_url, "https://img.test/video.jpg");
+});
+
+test("local files are deduplicated by channel and source URL when a mount change alters their id", () => {
+  const sourceUrl = "file:///run/media/pc/Maac/YouTube/audio/meetings/example.m4a";
+  assert.equal(enqueueVideo({
+    videoId: "legacy-path-hash",
+    channelId: "meetings",
+    title: "Existing meeting",
+    url: sourceUrl,
+  }), true);
+
+  assert.equal(enqueueVideo({
+    videoId: "new-path-hash",
+    channelId: "meetings",
+    title: "Existing meeting",
+    url: sourceUrl,
+  }), false);
+  assert.equal(enqueueVideos([{
+    videoId: "another-path-hash",
+    channelId: "meetings",
+    title: "Existing meeting",
+    url: sourceUrl,
+  }]), 0);
+
+  const row = getDb().prepare(
+    "SELECT count(*) AS count FROM video_queue WHERE channel_id = ? AND url = ?",
+  ).get("meetings", sourceUrl) as { count: number };
+  assert.equal(row.count, 1);
 });
 
 test("playback progress persists and recently-viewed sorting uses it", () => {
@@ -103,6 +140,70 @@ test("durable jobs and note citation columns are present after migration", () =>
   assert.deepEqual(tables.map(row => row.name), ["background_jobs", "vec_notes"]);
   const sourceColumns = getDb().prepare("PRAGMA table_info(chat_message_sources)").all() as { name: string }[];
   assert.ok(sourceColumns.some(column => column.name === "note_id"));
+  const queueColumns = getDb().prepare("PRAGMA table_info(video_queue)").all() as { name: string }[];
+  assert.ok(queueColumns.some(column => column.name === "media_fingerprint"));
+  assert.ok(queueColumns.some(column => column.name === "source_checked_at"));
+});
+
+test("archive health reports missing local files without mutating source records", () => {
+  const report = buildArchiveHealthReport("test-embedding-model");
+  assert.equal(report.expectedEmbeddingDimensions, 1024);
+  assert.ok(report.issues.some(issue => issue.id === "missing-media" && issue.count >= 1));
+  assert.ok(report.issues.some(issue => issue.id === "missing-transcripts"));
+});
+
+test("derived cleanup removes orphan virtual-table rows without touching valid sources", () => {
+  const db = getDb();
+  const vector = JSON.stringify(Array(1024).fill(0));
+  db.prepare(`
+    INSERT INTO vec_segments
+      (embedding, video_id, channel_id, segment_index, model, text, start_seconds, end_seconds, speaker)
+    VALUES (?, 'orphan-video', 'orphan-channel', ?, 'test-model', 'orphan vector', ?, ?, NULL)
+  `).run(vector, 0n, 0, 1);
+  db.prepare(`
+    INSERT INTO vec_segments
+      (embedding, video_id, channel_id, segment_index, model, text, start_seconds, end_seconds, speaker)
+    VALUES (?, 'video', 'channel', ?, 'test-model', 'valid vector', ?, ?, NULL)
+  `).run(vector, 0n, 0, 1);
+  db.prepare(`
+    INSERT INTO transcript_segments_fts
+      (video_id, channel_id, segment_index, start_seconds, end_seconds, speaker, text)
+    VALUES ('orphan-video', 'orphan-channel', 0, 0, 1, NULL, 'orphan keyword row')
+  `).run();
+  db.prepare(`
+    INSERT INTO transcript_index (video_id, channel_id, md_path, md_mtime_ms, segment_count)
+    VALUES ('orphan-video', 'orphan-channel', '/missing.md', 0, 1)
+  `).run();
+
+  const result = cleanOrphanedDerivedIndexes();
+  assert.equal(result.vectorRows, 1);
+  assert.equal(result.keywordRows, 1);
+  assert.equal(result.transcriptIndexes, 1);
+  assert.equal(result.removed, 3);
+  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM vec_segments WHERE video_id = 'video' AND channel_id = 'channel'").get() as { count: number }).count, 1);
+});
+
+test("media fingerprints detect same bytes stored under different records", () => {
+  const media = path.join(tempDir, "same-recording.mp3");
+  fs.writeFileSync(media, Buffer.from("same media bytes for duplicate audit"));
+  add("duplicate-one", "Duplicate one", media);
+  add("duplicate-two", "Duplicate two", media);
+  const first = getQueueEntry("duplicate-one", "channel");
+  const second = getQueueEntry("duplicate-two", "channel");
+  assert.ok(first && second);
+  const a = fingerprintMedia(first);
+  const b = fingerprintMedia(second);
+  assert.equal(a?.fingerprint, b?.fingerprint);
+  assert.equal(duplicateEntriesFor(a?.fingerprint || null).length, 2);
+});
+
+test("database backups are consistent and independently validated", async () => {
+  const folder = path.join(tempDir, "backups");
+  const backup = await createDatabaseBackup(folder);
+  assert.ok(fs.existsSync(backup.path));
+  const validated = validateBackupFile(backup.path);
+  assert.equal(validated.ok, true);
+  assert.ok(validated.videos >= 2);
 });
 
 test("a job stranded as running is resumed from persistent state", async () => {

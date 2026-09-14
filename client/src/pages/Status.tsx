@@ -296,6 +296,12 @@ export default function Status() {
     return () => { clearInterval(id); clearInterval(lid); };
   }, [load, probeLlm]);
 
+  useEffect(() => {
+    if (!snap || window.location.hash !== "#background-jobs") return;
+    const timer = window.setTimeout(() => document.getElementById("background-jobs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    return () => window.clearTimeout(timer);
+  }, [snap]);
+
   if (loading && !snap) {
     return <div className="mx-auto max-w-7xl px-4 py-8 text-sm text-muted-foreground">Loading status…</div>;
   }

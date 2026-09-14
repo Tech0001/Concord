@@ -101,9 +101,13 @@ export function registerChatRoutes(app: Express, pipeline: Pipeline): void {
     // An exact drawer scope takes precedence over the page's broad source
     // chips. This prevents “Ask about this document” from silently citing a
     // similarly named video or note instead.
-    if (videoKeys?.length) sourceKinds = ["video", "audio"];
-    else if (documentIds?.length) sourceKinds = ["doc"];
-    else if (noteIds?.length) sourceKinds = ["note"];
+    if (videoKeys?.length || documentIds?.length || noteIds?.length) {
+      sourceKinds = [
+        ...(videoKeys?.length ? ["video", "audio"] as const : []),
+        ...(documentIds?.length ? ["doc"] as const : []),
+        ...(noteIds?.length ? ["note"] as const : []),
+      ];
+    }
 
     // History for multi-turn — pass last 4 turns (2 exchanges) verbatim.
     let history: { role: "user" | "assistant"; content: string }[] = [];

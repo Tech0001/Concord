@@ -25,6 +25,7 @@ import { getConfigValues } from "./db";
 import { ffmpegBin } from "./audio";
 import { channelFolderName, datedBaseName } from "./naming";
 import { transcribeWithFluidAudio } from "./transcribe-fluidaudio";
+import { trackChildProcess } from "./child-process-registry";
 
 // ---- Voice-notes channel ---------------------------------------------------
 
@@ -219,7 +220,10 @@ function encodeWavToM4a(wavPath: string, m4aPath: string): Promise<void> {
       "-y",
       m4aPath,
     ];
-    const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      "ffmpeg voice note",
+    );
     let stderr = "";
     proc.stderr.on("data", (d: Buffer) => {
       stderr += d.toString();

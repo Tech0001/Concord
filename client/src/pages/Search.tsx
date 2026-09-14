@@ -544,7 +544,7 @@ export default function TranscriptSearch() {
           {/* Mode hint — terse, only when it adds value. */}
           {mode === "meaning" && (!embeddingStats || embeddingStats.totalSegments === 0) && (
             <p className="text-xs text-amber-600 dark:text-amber-400">
-              No embeddings yet — run <strong>Reindex semantics</strong> on the <a href="/settings" className="underline">Settings page</a> first.
+              No embeddings yet — run <strong>Reindex semantics</strong> in <a href="/pipeline/ai" className="underline">Pipeline → AI & extras</a> first.
             </p>
           )}
 

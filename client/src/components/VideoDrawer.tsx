@@ -17,9 +17,10 @@ import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { chatStream, useChatStream } from "@/hooks/use-chat-stream";
-import { Bookmark, BookmarkPlus, Calendar, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns2, Copy, Download, FileText, Info, Link2, Loader2, Maximize2, MessageSquareText, NotebookPen, PanelRight, PictureInPicture2, Play, Plus, Radio, RefreshCw, Scissors, Search, Sparkles, X } from "lucide-react";
+import { Bookmark, BookmarkPlus, Calendar, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns2, Copy, Download, FileText, Fingerprint, Globe2, Headphones, Info, Link2, Loader2, Maximize2, MessageSquareText, NotebookPen, PanelRight, Pause, PictureInPicture2, Play, Plus, Radio, RefreshCw, Scissors, Search, SkipForward, Sparkles, SplitSquareHorizontal, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { pinCompareSource } from "@/lib/compare-sources";
 
 export interface VideoDrawerEntry {
   video_id: string;
@@ -50,6 +51,19 @@ interface VideoStreamInfo {
   fps: number | null;
   container: string | null;
   fileSizeMb: number | null;
+}
+
+interface MediaProvenance {
+  sourceKind: string;
+  sourceUrl: string | null;
+  importedAt: string;
+  checkedAt: string | null;
+  sourceAvailable: boolean | null;
+  mediaPath: string | null;
+  transcriptPath: string | null;
+  fingerprint: string | null;
+  bytes: number | null;
+  duplicates: { videoId: string; channelId: string; title: string; path: string | null; importedAt: string }[];
 }
 
 function codecDisplayName(codec: string | null): string {
@@ -99,6 +113,8 @@ type DrawerTab = "transcript" | "notes" | "summary" | "details";
 
 const DRAWER_MODE_KEY = "concord-video-drawer-mode-v1";
 const DRAWER_TAB_KEY = "concord-video-drawer-tab-v1";
+const AUDIO_RATE_KEY = "concord-audio-playback-rate-v1";
+const AUDIO_SKIP_SILENCE_KEY = "concord-audio-skip-silence-v1";
 
 function storedDrawerMode(): DrawerMode {
   if (typeof window === "undefined") return "wide";
@@ -112,6 +128,12 @@ function storedDrawerTab(): DrawerTab {
   return value === "notes" || value === "summary" || value === "details" || value === "transcript"
     ? value
     : "transcript";
+}
+
+function storedAudioRate(): number {
+  if (typeof window === "undefined") return 1;
+  const rate = Number(window.localStorage.getItem(AUDIO_RATE_KEY));
+  return [0.75, 1, 1.25, 1.5, 1.75, 2].includes(rate) ? rate : 1;
 }
 
 function formatUploadDate(uploadDate?: string | null): string {
@@ -180,6 +202,8 @@ export function VideoDrawer({
   const [speakerMap, setSpeakerMap] = useState<Record<string, { id: string; name: string; color: string | null }>>({});
   const [labelDialog, setLabelDialog] = useState<{ localSpeaker: string; currentSpeakerId: string | null } | null>(null);
   const [videoInfo, setVideoInfo] = useState<VideoStreamInfo | null>(null);
+  const [provenance, setProvenance] = useState<MediaProvenance | null>(null);
+  const [provenanceBusy, setProvenanceBusy] = useState(false);
   const [loadingSegments, setLoadingSegments] = useState(false);
   const [segmentError, setSegmentError] = useState("");
   const [activeSeconds, setActiveSeconds] = useState(initialSeconds);
@@ -207,6 +231,9 @@ export function VideoDrawer({
   const currentSecondsRef = useRef(initialSeconds);
   const lastSavedSecondsRef = useRef(-1);
   const [videoDuration, setVideoDuration] = useState(0);
+  const [isMediaPlaying, setIsMediaPlaying] = useState(false);
+  const [audioRate, setAudioRate] = useState(storedAudioRate);
+  const [skipSilence, setSkipSilence] = useState(() => typeof window !== "undefined" && window.localStorage.getItem(AUDIO_SKIP_SILENCE_KEY) === "1");
   const [exportStartInput, setExportStartInput] = useState(formatTimestamp(initialSeconds));
   const [exportEndInput, setExportEndInput] = useState(formatTimestamp(initialSeconds + 60));
   const [exportMode, setExportMode] = useState<"fast" | "accurate">("fast");
@@ -258,6 +285,7 @@ export function VideoDrawer({
     if (!video?.video_path) return "";
     return `/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/stream`;
   }, [video]);
+  const audioOnly = isAudioPath(video?.video_path);
 
   useEffect(() => {
     setActiveSeconds(initialSeconds);
@@ -276,6 +304,7 @@ export function VideoDrawer({
     setExportStartInput(formatTimestamp(initialSeconds));
     setExportEndInput(formatTimestamp(initialSeconds + 60));
     setExportOpen(false);
+    setIsMediaPlaying(false);
   }, [initialSeconds, initialSegmentIndex, videoKey(video)]);
 
   useEffect(() => {
@@ -339,6 +368,36 @@ export function VideoDrawer({
     loadSegments();
     loadSpeakerMap();
   }, [open, videoKey(video)]);
+
+  const loadProvenance = async () => {
+    if (!video) return;
+    try {
+      const response = await fetch(`/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/provenance`, { cache: "no-store" });
+      if (!response.ok) return;
+      const data = await response.json() as { provenance?: MediaProvenance };
+      setProvenance(data.provenance || null);
+    } catch { setProvenance(null); }
+  };
+
+  useEffect(() => {
+    if (!open || !video) { setProvenance(null); return; }
+    void loadProvenance();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, videoKey(video)]);
+
+  const updateProvenance = async (action: "verify-source" | "fingerprint") => {
+    if (!video || provenanceBusy) return;
+    setProvenanceBusy(true);
+    try {
+      const response = await fetch(`/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/${action}`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      await loadProvenance();
+      toast({ title: action === "verify-source" ? (data.available ? "Original source is available" : "Original source could not be reached") : "Media fingerprint recorded", description: data.detail || (data.duplicates ? `${data.duplicates} possible duplicate${data.duplicates === 1 ? "" : "s"} found.` : undefined) });
+    } catch (error) {
+      toast({ variant: "destructive", title: action === "verify-source" ? "Source check failed" : "Fingerprint failed", description: error instanceof Error ? error.message : String(error) });
+    } finally { setProvenanceBusy(false); }
+  };
 
   // Debounced notes save: 600ms after last keystroke.
   const handleNotesChange = (value: string) => {
@@ -412,11 +471,12 @@ export function VideoDrawer({
       setVideoDuration(player.duration);
     }
     if (activeSeconds > 0) seekTo(activeSeconds, false);
-    // Opt into WebKit/Chromium automatic PiP — the browser pops the
-    // video out on its own when the app is backgrounded. The official
-    // mechanism (cleaner than the visibilitychange fallback); harmless
-    // where unsupported.
-    try { (player as any).autoPictureInPicture = true; } catch { /* ignore */ }
+    if (player) player.playbackRate = audioRate;
+    // PiP only exists on video elements. Audio remains available through the
+    // Media Session controls without forcing it through a cramped video UI.
+    if (player instanceof HTMLVideoElement) {
+      try { (player as any).autoPictureInPicture = true; } catch { /* ignore */ }
+    }
   };
 
   // Whether the platform exposes ANY PiP entry point. Kept broad (not a
@@ -545,6 +605,47 @@ export function VideoDrawer({
   }, [videoKey(video)]);
 
   const effectiveDuration = videoDuration || video?.duration || 0;
+
+  const toggleAudioPlayback = () => {
+    const player = videoRef.current;
+    if (!player) return;
+    if (player.paused) {
+      void player.play().catch(() => {
+        setIsMediaPlaying(false);
+      });
+    } else {
+      player.pause();
+    }
+  };
+
+  const changeAudioRate = (value: string) => {
+    const rate = Number(value);
+    if (!Number.isFinite(rate)) return;
+    setAudioRate(rate);
+    window.localStorage.setItem(AUDIO_RATE_KEY, String(rate));
+    if (videoRef.current) videoRef.current.playbackRate = rate;
+  };
+
+  const toggleSkipSilence = () => {
+    setSkipSilence(enabled => {
+      const next = !enabled;
+      window.localStorage.setItem(AUDIO_SKIP_SILENCE_KEY, next ? "1" : "0");
+      return next;
+    });
+  };
+
+  const maybeSkipTranscriptSilence = (player: HTMLAudioElement, seconds: number) => {
+    if (!skipSilence || player.paused || segments.length === 0) return;
+    let lo = 0;
+    let hi = segments.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (segments[mid].end <= seconds) lo = mid + 1;
+      else hi = mid;
+    }
+    const next = segments[lo];
+    if (next && seconds < next.start - 1.25) player.currentTime = next.start;
+  };
 
   const evidenceClips = useMemo(
     () => sameVideoClips.filter(clip => clip.id !== overviewNoteId),
@@ -868,6 +969,18 @@ export function VideoDrawer({
                       Ask AI
                     </Button>
                   </Link>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 shrink-0 gap-1 text-xs"
+                    onClick={() => {
+                      pinCompareSource({ kind: "video", videoId: video.video_id, channelId: video.channel_id, title: video.title });
+                      toast({ title: "Pinned for comparison", description: "Open Compare to choose the second source." });
+                    }}
+                  >
+                    <SplitSquareHorizontal className="h-3.5 w-3.5" />
+                    Compare
+                  </Button>
                 </div>
               </div>
               <SheetDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -892,42 +1005,130 @@ export function VideoDrawer({
             </SheetHeader>
 
             <div className={cn(
-              "min-h-0 flex-1",
-              drawerMode === "compact" ? "overflow-y-auto" : "grid overflow-hidden lg:grid-cols-[minmax(360px,0.9fr)_minmax(480px,1.1fr)]",
+              // Media and research tabs stack on phones, so the shared body
+              // must own vertical scrolling there. Only lock overflow once
+              // the desktop two-column grid gives each pane its own scroller.
+              "min-h-0 flex-1 overflow-y-auto overscroll-y-contain [-webkit-overflow-scrolling:touch]",
+              drawerMode !== "compact" && "lg:grid lg:overflow-hidden lg:grid-cols-[minmax(360px,0.9fr)_minmax(480px,1.1fr)]",
             )}>
               <aside className={cn("space-y-4 p-4", drawerMode !== "compact" && "lg:overflow-y-auto lg:border-r")}>
               {streamUrl ? (
                 <div className="relative">
-                  {/* Both audio + video use a <video> element so
-                      Picture-in-Picture works for either — PiP is what
-                      lets playback continue while you use other apps on
-                      iOS. Audio-only files just render a slim black bar
-                      (the native control row); video uses 16:9. */}
-                  <video
-                    key={streamUrl}
-                    ref={videoRef as RefObject<HTMLVideoElement>}
-                    controls
-                    playsInline
-                    preload="metadata"
-                    onLoadedMetadata={onLoadedMetadata}
-                    onTimeUpdate={event => {
-                      const seconds = event.currentTarget.currentTime;
-                      setActiveSeconds(seconds);
-                      currentSecondsRef.current = seconds;
-                      persistPlayback(seconds);
-                    }}
-                    onPause={event => persistPlayback(event.currentTarget.currentTime, true)}
-                    onEnded={() => {
-                      currentSecondsRef.current = 0;
-                      persistPlayback(0, true);
-                    }}
-                    className={cn(
-                      "w-full rounded-md border bg-black",
-                      isAudioPath(video.video_path) ? "h-16" : "aspect-video",
-                    )}
-                    src={streamUrl}
-                  />
-                  {pipApiPresent && (
+                  {audioOnly ? (
+                    <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+                      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                        <Headphones className="h-4 w-4" />
+                        Audio playback
+                      </div>
+                      <audio
+                        key={streamUrl}
+                        ref={videoRef as RefObject<HTMLAudioElement>}
+                        preload="metadata"
+                        onLoadedMetadata={onLoadedMetadata}
+                        onPlay={() => setIsMediaPlaying(true)}
+                        onTimeUpdate={event => {
+                          const seconds = event.currentTarget.currentTime;
+                          setActiveSeconds(seconds);
+                          currentSecondsRef.current = seconds;
+                          persistPlayback(seconds);
+                          maybeSkipTranscriptSilence(event.currentTarget, seconds);
+                        }}
+                        onPause={event => {
+                          setIsMediaPlaying(false);
+                          persistPlayback(event.currentTarget.currentTime, true);
+                        }}
+                        onEnded={() => {
+                          setIsMediaPlaying(false);
+                          setActiveSeconds(0);
+                          currentSecondsRef.current = 0;
+                          persistPlayback(0, true);
+                        }}
+                        className="hidden"
+                        src={streamUrl}
+                      />
+                      <div className="flex min-w-0 items-center gap-3">
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="secondary"
+                          className="h-10 w-10 shrink-0 rounded-full"
+                          onClick={toggleAudioPlayback}
+                          aria-label={isMediaPlaying ? "Pause audio" : "Play audio"}
+                        >
+                          {isMediaPlaying ? (
+                            <Pause className="h-4 w-4 fill-current" />
+                          ) : (
+                            <Play className="ml-0.5 h-4 w-4 fill-current" />
+                          )}
+                        </Button>
+                        <span className="w-11 shrink-0 text-right font-mono text-xs tabular-nums text-foreground">
+                          {formatTimestamp(activeSeconds)}
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={Math.max(effectiveDuration, 0)}
+                          step={0.1}
+                          value={effectiveDuration > 0 ? Math.min(activeSeconds, effectiveDuration) : 0}
+                          onChange={event => seekTo(Number(event.currentTarget.value), false)}
+                          disabled={effectiveDuration <= 0}
+                          className="h-2 min-w-0 flex-1 cursor-pointer accent-primary disabled:cursor-wait disabled:opacity-50"
+                          aria-label="Audio position"
+                        />
+                        <span className="w-11 shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+                          {effectiveDuration > 0 ? formatTimestamp(effectiveDuration) : "--:--"}
+                        </span>
+                      </div>
+                      {effectiveDuration > 0 && (
+                        <AudioWaveform
+                          imageUrl={`/api/videos/library/${encodeURIComponent(video.channel_id)}/${encodeURIComponent(video.video_id)}/waveform`}
+                          duration={effectiveDuration}
+                          currentSeconds={activeSeconds}
+                          segments={segments}
+                          speakerMap={speakerMap}
+                          onSeek={seconds => seekTo(seconds, false)}
+                        />
+                      )}
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-2">
+                        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                          <span>Speed</span>
+                          <Select value={String(audioRate)} onValueChange={changeAudioRate}>
+                            <SelectTrigger className="h-7 w-[76px] text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {[0.75, 1, 1.25, 1.5, 1.75, 2].map(rate => <SelectItem key={rate} value={String(rate)} className="text-xs">{rate}×</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <Button type="button" size="sm" variant={skipSilence ? "secondary" : "ghost"} className="h-7 gap-1.5 text-xs" onClick={toggleSkipSilence} title="Jump across transcript gaps longer than 1.25 seconds">
+                          <SkipForward className="h-3.5 w-3.5" />
+                          Skip silence
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <video
+                      key={streamUrl}
+                      ref={videoRef as RefObject<HTMLVideoElement>}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      onLoadedMetadata={onLoadedMetadata}
+                      onTimeUpdate={event => {
+                        const seconds = event.currentTarget.currentTime;
+                        setActiveSeconds(seconds);
+                        currentSecondsRef.current = seconds;
+                        persistPlayback(seconds);
+                      }}
+                      onPause={event => persistPlayback(event.currentTarget.currentTime, true)}
+                      onEnded={() => {
+                        currentSecondsRef.current = 0;
+                        persistPlayback(0, true);
+                      }}
+                      className="aspect-video w-full rounded-md border bg-black"
+                      src={streamUrl}
+                    />
+                  )}
+                  {!audioOnly && pipApiPresent && (
                     <Button
                       type="button"
                       size="sm"
@@ -1588,6 +1789,27 @@ export function VideoDrawer({
                 {video.video_path && <div className="break-all font-mono">{video.video_path}</div>}
                 {video.md_path && <div className="break-all font-mono">{video.md_path}</div>}
               </div>}
+
+              {activeTab === "details" && <div className="space-y-3 rounded-md border p-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium">Import provenance</div>
+                  <div className="flex gap-1">
+                    {provenance?.sourceUrl && <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" disabled={provenanceBusy} onClick={() => void updateProvenance("verify-source")}><Globe2 className="h-3.5 w-3.5" />Check original</Button>}
+                    <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" disabled={provenanceBusy || !video.video_path} onClick={() => void updateProvenance("fingerprint")}><Fingerprint className="h-3.5 w-3.5" />{provenance?.fingerprint ? "Rescan" : "Find duplicates"}</Button>
+                  </div>
+                </div>
+                {provenance ? <dl className="grid grid-cols-[105px_1fr] gap-x-3 gap-y-2 text-muted-foreground">
+                  <dt>Source</dt><dd>{provenance.sourceKind}</dd>
+                  <dt>Imported</dt><dd>{new Date(provenance.importedAt).toLocaleString()}</dd>
+                  {provenance.sourceUrl && <><dt>Original URL</dt><dd className="break-all"><a href={provenance.sourceUrl} target="_blank" rel="noreferrer" className="text-foreground underline-offset-2 hover:underline">{provenance.sourceUrl}</a></dd></>}
+                  <dt>Availability</dt><dd>{provenance.sourceAvailable == null ? "Not checked" : provenance.sourceAvailable ? "Available when last checked" : "Unavailable when last checked"}{provenance.checkedAt ? ` · ${new Date(provenance.checkedAt).toLocaleString()}` : ""}</dd>
+                  <dt>Fingerprint</dt><dd className="break-all font-mono text-[10px]">{provenance.fingerprint || "Not scanned"}</dd>
+                </dl> : <div className="text-muted-foreground">Loading provenance…</div>}
+                {!!provenance?.duplicates.length && <div className="space-y-1 border-t pt-2">
+                  <div className="font-medium text-amber-600 dark:text-amber-400">Possible duplicates ({provenance.duplicates.length})</div>
+                  {provenance.duplicates.map(duplicate => <a key={`${duplicate.channelId}:${duplicate.videoId}`} href={`/library?video=${encodeURIComponent(duplicate.videoId)}&channel=${encodeURIComponent(duplicate.channelId)}`} className="block rounded border bg-muted/20 px-2 py-1 hover:bg-muted"><div className="font-medium text-foreground">{duplicate.title}</div>{duplicate.path && <div className="truncate font-mono text-[10px] text-muted-foreground">{duplicate.path}</div>}</a>)}
+                </div>}
+              </div>}
                 </div>
               </section>
             </div>
@@ -1941,6 +2163,70 @@ function RelatedClipSection({
       </div>
     </div>
   );
+}
+
+function AudioWaveform({
+  imageUrl,
+  duration,
+  currentSeconds,
+  segments,
+  speakerMap,
+  onSeek,
+}: {
+  imageUrl: string;
+  duration: number;
+  currentSeconds: number;
+  segments: TranscriptSegment[];
+  speakerMap: Record<string, { id: string; name: string; color: string | null }>;
+  onSeek: (seconds: number) => void;
+}) {
+  const regions = useMemo(() => {
+    const output: { start: number; end: number; speaker: string; label: string; color: string }[] = [];
+    for (const segment of segments) {
+      if (!segment.speaker) continue;
+      const known = speakerMap[segment.speaker];
+      const previous = output[output.length - 1];
+      const color = known?.color || speakerColor(segment.speaker);
+      const label = known?.name || segment.speaker;
+      if (previous && previous.speaker === segment.speaker && segment.start - previous.end <= 2) {
+        previous.end = segment.end;
+      } else {
+        output.push({ start: segment.start, end: segment.end, speaker: segment.speaker, label, color });
+      }
+    }
+    return output;
+  }, [segments, speakerMap]);
+
+  return (
+    <button
+      type="button"
+      className="relative block h-24 w-full overflow-hidden rounded-md border bg-background text-left"
+      onClick={event => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        onSeek(Math.max(0, Math.min(duration, (event.clientX - rect.left) / rect.width * duration)));
+      }}
+      aria-label="Audio waveform; click to seek"
+    >
+      <img src={imageUrl} alt="" draggable={false} className="absolute inset-0 h-[calc(100%-12px)] w-full object-fill opacity-70 dark:opacity-80" />
+      <div className="absolute inset-x-0 bottom-0 h-3 bg-muted/70">
+        {regions.map((region, index) => (
+          <span
+            key={`${region.speaker}:${index}`}
+            className="absolute bottom-0 h-full opacity-80"
+            style={{ left: `${region.start / duration * 100}%`, width: `${Math.max(0.15, (region.end - region.start) / duration * 100)}%`, backgroundColor: region.color }}
+            title={`${region.label} · ${formatTimestamp(region.start)}–${formatTimestamp(region.end)}`}
+          />
+        ))}
+      </div>
+      <span className="absolute inset-y-0 w-px bg-foreground shadow-[0_0_3px_var(--background)]" style={{ left: `${Math.min(100, currentSeconds / duration * 100)}%` }} />
+    </button>
+  );
+}
+
+function speakerColor(label: string): string {
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) hash = ((hash << 5) - hash + label.charCodeAt(i)) | 0;
+  return `hsl(${Math.abs(hash) % 360} 60% 55%)`;
 }
 
 interface AnchorPayload {

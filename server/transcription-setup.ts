@@ -4,6 +4,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import { trackChildProcess } from "./child-process-registry";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,7 +28,7 @@ function isPackagedElectron(): boolean {
 export type EngineId = "parakeet" | "whisper";
 
 export interface PythonInfo {
-  /** True when a python3 ≥3.10 is available on PATH. */
+  /** True when a Python supported by the transcription dependency stack is available. */
   ok: boolean;
   /** Path to the python binary, or "python3" if only the name resolved. */
   path: string;
@@ -108,8 +109,29 @@ const ENGINE_MARKER = "concord-engine.txt";
 
 // ---- Detection ------------------------------------------------------------
 
-/** Probe the system python3. We only need ≥3.10 because both engines
- *  drop older Python in their wheels. */
+/** Return mise-managed Python binaries even when that version is installed
+ * alongside the global default and therefore has no active PATH shim. */
+function misePythonCandidates(minor: string): string[] {
+  const miseData = process.env.MISE_DATA_DIR || path.join(os.homedir(), ".local", "share", "mise");
+  const installsDir = path.join(miseData, "installs", "python");
+  let versions: string[];
+  try {
+    versions = fs.readdirSync(installsDir)
+      .filter(version => version === minor || version.startsWith(`${minor}.`))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  } catch {
+    return [];
+  }
+
+  return versions.flatMap(version => [
+    path.join(installsDir, version, "bin", `python${minor}`),
+    path.join(installsDir, version, "bin", "python3"),
+  ]);
+}
+
+/** Probe for a Python version with wheels across NeMo's ASR dependency
+ * stack. Python 3.14 itself runs NeMo, but some required ASR packages do not
+ * publish 3.14 wheels yet, so setup deliberately stays on 3.10–3.13. */
 export function detectPython(): PythonInfo {
   const tryPath = (p: string): PythonInfo | null => {
     const r = spawnSync(p, ["--version"], { encoding: "utf-8" });
@@ -118,23 +140,35 @@ export function detectPython(): PythonInfo {
     const m = out.match(/Python (\d+)\.(\d+)\.(\d+)/);
     if (!m) return { ok: false, path: p, version: out, versionParts: null, error: "could not parse version" };
     const parts: [number, number, number] = [Number(m[1]), Number(m[2]), Number(m[3])];
-    const okVersion = parts[0] > 3 || (parts[0] === 3 && parts[1] >= 10);
+    const okVersion = parts[0] === 3 && parts[1] >= 10 && parts[1] <= 13;
+    const error = parts[0] !== 3 || parts[1] < 10
+      ? `python ${parts.join(".")} is too old (need 3.10–3.13)`
+      : parts[1] > 13
+        ? `python ${parts.join(".")} is too new for the current transcription dependency wheels (need 3.10–3.13)`
+        : undefined;
     return {
       ok: okVersion,
       path: p,
       version: out,
       versionParts: parts,
-      error: okVersion ? undefined : `python ${parts.join(".")} is too old (need ≥ 3.10)`,
+      error,
     };
   };
 
-  // Prefer specific minor versions when present (newer = better wheels);
-  // fall back to the bare "python3" alias for distros that only ship it.
-  for (const candidate of ["python3.12", "python3.11", "python3.10", "python3"]) {
+  // Python 3.12 is the known-good NeMo environment. Check ordinary PATH
+  // commands and side-by-side mise installs before falling back to python3.
+  const candidates = ["3.12", "3.13", "3.11", "3.10"]
+    .flatMap(minor => [`python${minor}`, ...misePythonCandidates(minor)]);
+  candidates.push("python3");
+
+  let unsupported: PythonInfo | null = null;
+  for (const candidate of Array.from(new Set(candidates))) {
     const info = tryPath(candidate);
-    if (info) return info;
+    if (info?.ok) return info;
+    if (info && !unsupported) unsupported = info;
   }
-  return { ok: false, path: "python3", version: null, versionParts: null, error: "python3 not found on PATH" };
+  return unsupported
+    ?? { ok: false, path: "python3", version: null, versionParts: null, error: "Python 3.10–3.13 not found" };
 }
 
 /** Probe nvidia-smi. Returns present=false on every non-NVIDIA / non-CUDA
@@ -165,7 +199,7 @@ export function detectGpu(): GpuInfo {
 export function detectVenv(): VenvInfo {
   const dir = venvDir();
   const py = path.join(dir, "bin", "python");
-  if (!fs.existsSync(py)) return { path: dir, exists: false, engine: null };
+  if (!isUsablePython(py)) return { path: dir, exists: false, engine: null };
 
   let engine: EngineId | null = null;
   try {
@@ -174,6 +208,22 @@ export function detectVenv(): VenvInfo {
   } catch { /* no marker — engine unknown but venv exists */ }
 
   return { path: dir, exists: true, engine };
+}
+
+/** A copied venv can leave behind a Python symlink that exists as a directory
+ * entry but points to an interpreter from the previous OS. Actually execute
+ * the interpreter and check its minor version so setup does not mistake a
+ * stale or unsupported environment for a usable install. */
+function isUsablePython(pythonPath: string): boolean {
+  if (!fs.existsSync(pythonPath)) return false;
+  const result = spawnSync(pythonPath, ["--version"], { encoding: "utf-8" });
+  if (result.status !== 0 || result.error) return false;
+  const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+  const match = output.match(/Python (\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major === 3 && minor >= 10 && minor <= 13;
 }
 
 /** The auto-pick rule: parakeet only when there's a real NVIDIA GPU
@@ -217,7 +267,7 @@ export function getSetupStatus(): SetupStatus {
     gpu,
     recommendedEngine,
     venv,
-    installed: venv.exists,
+    installed: venv.exists && venv.engine !== null,
   };
 }
 
@@ -249,17 +299,34 @@ export async function installEngine(
   const dir = venvDir();
   fs.mkdirSync(path.dirname(dir), { recursive: true });
 
-  // Step 1: create venv (or reuse existing if a marker matches)
-  if (!fs.existsSync(path.join(dir, "bin", "python"))) {
+  // Step 1: create the venv. Virtual environments are not portable between
+  // operating-system installs: their interpreter links and console-script
+  // shebangs contain absolute paths. Remove only Concord's dependency venv
+  // when it is present but unusable; the database and model caches live
+  // outside this directory and are left untouched.
+  const venvPython = path.join(dir, "bin", "python");
+  if (!isUsablePython(venvPython)) {
+    if (fs.existsSync(dir)) {
+      onProgress({
+        phase: "venv",
+        line: `Existing transcription environment is incompatible or incomplete; rebuilding ${dir}`,
+      });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
     onProgress({ phase: "venv", line: `Creating venv at ${dir}` });
     await runStreaming(python.path, ["-m", "venv", dir], onProgress, "venv");
+    if (!isUsablePython(venvPython)) {
+      const msg = `Virtual environment was created, but its Python interpreter is not usable: ${venvPython}`;
+      onProgress({ phase: "error", line: msg });
+      throw new Error(msg);
+    }
   } else {
     onProgress({ phase: "venv", line: `Reusing existing venv at ${dir}` });
   }
 
-  const venvPython = path.join(dir, "bin", "python");
-
   // Step 2: pip install -r requirements
+  // An interrupted repair must not retain a successful install marker.
+  fs.rmSync(path.join(dir, ENGINE_MARKER), { force: true });
   const reqs = path.join(enginesDir(), `requirements-${engine}.txt`);
   if (!fs.existsSync(reqs)) {
     const msg = `Requirements file missing: ${reqs}`;
@@ -274,7 +341,10 @@ export async function installEngine(
     "pip",
   );
 
-  // Step 3: write the engine marker so detectVenv() can identify it later
+  onProgress({ phase: "pip", line: "Checking that the transcription runtime imports successfully…" });
+  await runStreaming(venvPython, ["-c", engine === "parakeet" ? "import nemo.collections.asr" : "from faster_whisper import WhisperModel"], onProgress, "pip");
+
+  // Step 3: write the marker only after the installed runtime imports.
   fs.writeFileSync(path.join(dir, ENGINE_MARKER), engine + "\n");
   onProgress({ phase: "marker", line: `Recorded engine: ${engine}` });
 
@@ -292,7 +362,10 @@ function runStreaming(
   phase: InstallProgress["phase"],
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      `transcription setup (${phase})`,
+    );
     const stderrTail: string[] = [];
     const STDERR_TAIL_LINES = 40;
 

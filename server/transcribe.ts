@@ -5,6 +5,8 @@ import { getConfigValues } from "./db";
 import { transcribeWithFluidAudio } from "./transcribe-fluidaudio";
 import { transcribeWithParakeet } from "./transcribe-parakeet";
 import { enginesDir } from "./transcription-setup";
+import { trackChildProcess } from "./child-process-registry";
+import { resolveTranscriptionPython } from "./transcription-config";
 
 export interface TranscriptionOptions {
   model?: string;
@@ -148,7 +150,11 @@ export function transcribeAudio(
   // whisper-flavored override. PARAKEET_PYTHON env var can still customize.
   const resolvedPythonPath = parakeet
     ? defaultPythonPath(true)
-    : (pythonPath || defaultPythonPath(false));
+    : resolveTranscriptionPython({
+      engine: getConfigValues()["transcription.engine"],
+      venvPath: getConfigValues()["transcription.venvPath"],
+      pythonVenv: pythonPath || defaultPythonPath(false),
+    }, false);
   const scriptPath = path.join(
     enginesDir(),
     parakeet ? "transcribe-parakeet.py" : "transcribe.py",
@@ -217,10 +223,13 @@ function spawnTranscriber(argsInput: {
 
     console.log(`[transcribe] Spawning: ${resolvedPythonPath} ${args.join(" ")}`);
 
-    const proc = spawn(resolvedPythonPath, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      cwd: process.cwd(),
-    });
+    const proc = trackChildProcess(
+      spawn(resolvedPythonPath, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: process.cwd(),
+      }),
+      "Python transcription",
+    );
 
     let stdout = "";
     let stderr = "";

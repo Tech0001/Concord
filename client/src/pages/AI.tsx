@@ -185,7 +185,8 @@ function newConversationStub(id = ""): ConversationDetail {
 type AiSourceScope =
   | { kind: "video"; videoId: string; channelId: string; title: string }
   | { kind: "doc"; documentId: string; title: string }
-  | { kind: "note"; noteId: string; title: string };
+  | { kind: "note"; noteId: string; title: string }
+  | { kind: "compare"; sources: Array<{ kind: "video" | "doc" | "note"; videoId?: string; channelId?: string; documentId?: string; noteId?: string; title: string }>; title: string };
 
 function readAiSourceScope(): AiSourceScope | null {
   if (typeof window === "undefined") return null;
@@ -205,6 +206,12 @@ function readAiSourceScope(): AiSourceScope | null {
     const noteId = params.get("noteId") || "";
     return noteId ? { kind, noteId, title } : null;
   }
+  if (kind === "compare") {
+    try {
+      const sources = JSON.parse(params.get("sources") || "[]");
+      return Array.isArray(sources) && sources.length ? { kind, sources: sources.slice(0, 2), title } : null;
+    } catch { return null; }
+  }
   return null;
 }
 
@@ -213,7 +220,9 @@ export default function AI() {
   const { serverCategory } = useCategory();
   const [location, navigate] = useLocation();
   const sourceScope = useMemo(() => readAiSourceScope(), [location]);
-  const [initialActiveId] = useState(() => loadActiveConversationId(
+  const [initialActiveId] = useState(() => (
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("conversationId") || "" : ""
+  ) || loadActiveConversationId(
     typeof window === "undefined" ? null : window.localStorage,
   ));
 
@@ -221,7 +230,9 @@ export default function AI() {
   const [active, setActive] = useState<ConversationDetail>(() => newConversationStub(initialActiveId));
   const [loadingConv, setLoadingConv] = useState(false);
 
-  const [composer, setComposer] = useState(() => loadChatDraft(
+  const [composer, setComposer] = useState(() => (
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("prompt") || "" : ""
+  ) || loadChatDraft(
     typeof window === "undefined" ? null : window.localStorage,
     initialActiveId,
   ));
@@ -387,9 +398,9 @@ export default function AI() {
       channelIds: channelFilter === "all" ? undefined : [channelFilter],
       category: serverCategory || undefined,
       sources: enabledSources.size === 4 ? undefined : Array.from(enabledSources),
-      videoKeys: sourceScope?.kind === "video" ? [{ videoId: sourceScope.videoId, channelId: sourceScope.channelId }] : undefined,
-      documentIds: sourceScope?.kind === "doc" ? [sourceScope.documentId] : undefined,
-      noteIds: sourceScope?.kind === "note" ? [sourceScope.noteId] : undefined,
+      videoKeys: sourceScope?.kind === "video" ? [{ videoId: sourceScope.videoId, channelId: sourceScope.channelId }] : sourceScope?.kind === "compare" ? sourceScope.sources.filter(source => source.kind === "video" && source.videoId && source.channelId).map(source => ({ videoId: source.videoId!, channelId: source.channelId! })) : undefined,
+      documentIds: sourceScope?.kind === "doc" ? [sourceScope.documentId] : sourceScope?.kind === "compare" ? sourceScope.sources.filter(source => source.kind === "doc" && source.documentId).map(source => source.documentId!) : undefined,
+      noteIds: sourceScope?.kind === "note" ? [sourceScope.noteId] : sourceScope?.kind === "compare" ? sourceScope.sources.filter(source => source.kind === "note" && source.noteId).map(source => source.noteId!) : undefined,
     });
   }, [composer, streaming, active.id, channelFilter, serverCategory, enabledSources, sourceScope, scrollToBottom]);
 
@@ -595,7 +606,7 @@ export default function AI() {
         <Button size="sm" onClick={onNew} disabled={streaming} className="flex-1 justify-start">
           <Plus className="mr-1.5 h-3.5 w-3.5" /> New chat
         </Button>
-        <Link href="/settings">
+        <Link href="/pipeline/ai">
           <Button size="icon" variant="ghost" className="h-8 w-8" title="Settings">
             <SettingsIcon className="h-3.5 w-3.5" />
           </Button>
@@ -718,7 +729,7 @@ export default function AI() {
         {sourceScope && (
           <div className="flex items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-3 py-2 text-xs">
             <div className="min-w-0">
-              <span className="font-medium">Scoped to {sourceScope.kind === "doc" ? "document" : sourceScope.kind}: </span>
+              <span className="font-medium">Scoped to {sourceScope.kind === "doc" ? "document" : sourceScope.kind === "compare" ? "comparison" : sourceScope.kind}: </span>
               <span className="truncate text-muted-foreground">{sourceScope.title}</span>
             </div>
             <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={() => navigate("/ai")} title="Search the full archive instead">

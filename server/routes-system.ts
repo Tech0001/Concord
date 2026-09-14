@@ -9,6 +9,7 @@ import path from "path";
 import os from "os";
 import crypto from "crypto";
 import { probeYtdlpHealth, userYtdlpPath } from "./yt-dlp-bin";
+import { PipelineSetupRequiredError } from "./pipeline-readiness";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,6 +26,21 @@ const execFileAsync = promisify(execFile);
  * /api/system/lan-url (which reads the bound port).
  */
 export function registerSystemRoutes(app: Express, pipeline: Pipeline, httpServer: Server): void {
+  app.get("/api/pipeline/setup", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(pipeline.getSetupStatus());
+  });
+
+  app.post("/api/pipeline/setup/complete", (_req, res) => {
+    try { res.json(pipeline.completeSetup()); }
+    catch (error) {
+      res.status(error instanceof PipelineSetupRequiredError ? 409 : 400).json({
+        error: error instanceof Error ? error.message : "Could not finish setup",
+        ...(error instanceof PipelineSetupRequiredError ? { setup: error.setup } : {}),
+      });
+    }
+  });
+
   app.get("/api/pipeline/status", (_req, res) => {
     res.json(pipeline.getState());
   });

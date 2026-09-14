@@ -4,6 +4,7 @@ import path from "path";
 import { spawn } from "child_process";
 import { ffmpegBin } from "./audio";
 import { getDb, type QueueEntry, videoKind } from "./db";
+import { trackChildProcess } from "./child-process-registry";
 
 const inflight = new Map<string, Promise<string | null>>();
 const waiting: Array<() => void> = [];
@@ -56,7 +57,7 @@ function extractVideoFrame(entry: QueueEntry, output: string): Promise<boolean> 
   if (!entry.video_path || !fs.existsSync(entry.video_path)) return Promise.resolve(false);
   const seek = Math.max(1, Math.min(60, (entry.duration || 100) * 0.1));
   return new Promise((resolve) => {
-    const proc = spawn(ffmpegBin, [
+    const proc = trackChildProcess(spawn(ffmpegBin, [
       "-ss", String(seek),
       "-i", entry.video_path!,
       "-frames:v", "1",
@@ -64,7 +65,7 @@ function extractVideoFrame(entry: QueueEntry, output: string): Promise<boolean> 
       "-q:v", "4",
       "-f", "image2",
       "-y", output,
-    ], { stdio: "ignore" });
+    ], { stdio: "ignore" }), "ffmpeg library thumbnail");
     proc.on("error", () => resolve(false));
     proc.on("close", (code) => resolve(
       code === 0 && fs.existsSync(output) && fs.statSync(output).size > 100,

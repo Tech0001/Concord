@@ -171,6 +171,16 @@ export default function Clips() {
   const { toast } = useToast();
   const { serverCategory } = useCategory();
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("new") === "1") {
+      setNewNoteOpen(true);
+      params.delete("new");
+      const qs = params.toString();
+      window.history.replaceState(null, "", qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+    }
+  }, []);
+
   const linkPickerSource = useMemo(
     () => clips.find(c => c.id === linkPickerSourceId) || null,
     [clips, linkPickerSourceId],

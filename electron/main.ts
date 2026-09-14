@@ -2,6 +2,12 @@ import { app, BrowserWindow, shell, Menu, nativeImage } from "electron";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import {
+  getRuntimeLogs,
+  installRuntimeLogCapture,
+  subscribeRuntimeLogs,
+  type RuntimeLogEntry,
+} from "../server/runtime-logs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -14,7 +20,19 @@ const serverEntry = process.env.SERVER_ENTRY
   : path.resolve(__dirname, "..", "index.js");
 
 let mainWindow: BrowserWindow | null = null;
-let closeServer: (() => Promise<void>) | null = null;
+interface ServerHandle {
+  port: number;
+  close: () => Promise<void>;
+}
+type StartServer = (opts: {
+  port?: number;
+  fallbackToRandom?: boolean;
+}) => Promise<ServerHandle>;
+
+let serverHandle: ServerHandle | null = null;
+let serverStartPromise: Promise<ServerHandle> | null = null;
+let shutdownPromise: Promise<void> | null = null;
+let quitAfterShutdown = false;
 
 // ---- Console forwarding to renderer DevTools ----
 //
@@ -24,55 +42,14 @@ let closeServer: (() => Promise<void>) | null = null;
 // Forward every log line into the renderer's console too so the in-app
 // DevTools (Cmd/Ctrl+Shift+I) becomes the "terminal" for the app.
 
-type LogLevel = "log" | "info" | "warn" | "error" | "debug";
-interface BufferedLog { level: LogLevel; msg: string }
-
-const logBuffer: BufferedLog[] = [];
-const LOG_BUFFER_MAX = 500;
-let consoleForwardingInstalled = false;
-
-/** Install once at module load — captures startup logs that fire before
- *  the BrowserWindow exists. The originals still hit stdout/stderr; the
- *  copy is buffered (and live-flushed once the window is ready). */
-function installConsoleForwarding(): void {
-  if (consoleForwardingInstalled) return;
-  consoleForwardingInstalled = true;
-  const orig: Record<LogLevel, (...args: unknown[]) => void> = {
-    log: console.log.bind(console),
-    info: console.info.bind(console),
-    warn: console.warn.bind(console),
-    error: console.error.bind(console),
-    debug: console.debug.bind(console),
-  };
-  const formatArg = (a: unknown): string => {
-    if (typeof a === "string") return a;
-    if (a instanceof Error) return a.stack || a.message;
-    try {
-      return JSON.stringify(a, null, 2);
-    } catch {
-      return String(a);
-    }
-  };
-  for (const level of Object.keys(orig) as LogLevel[]) {
-    console[level] = (...args: unknown[]) => {
-      orig[level](...args);
-      const msg = args.map(formatArg).join(" ");
-      const entry: BufferedLog = { level, msg };
-      if (logBuffer.length >= LOG_BUFFER_MAX) logBuffer.shift();
-      logBuffer.push(entry);
-      sendToRenderer(entry);
-    };
-  }
-}
-
-function sendToRenderer(entry: BufferedLog): void {
+function sendToRenderer(entry: RuntimeLogEntry): void {
   const w = mainWindow;
   if (!w || w.isDestroyed()) return;
   const wc = w.webContents;
   if (wc.isDestroyed() || wc.isLoading()) return;
   // executeJavaScript is round-trip-free for fire-and-forget logging.
   // String-quote the message so newlines / quotes survive the round trip.
-  const code = `console.${entry.level}(${JSON.stringify("[server] " + entry.msg)});`;
+  const code = `console.${entry.level}(${JSON.stringify("[server] " + entry.message)});`;
   wc.executeJavaScript(code, true).catch(() => { /* swallow — not worth logging the log failure */ });
 }
 
@@ -80,10 +57,38 @@ function sendToRenderer(entry: BufferedLog): void {
  *  did-finish-load. Subsequent live logs go through sendToRenderer
  *  directly. */
 function flushLogBufferToRenderer(): void {
-  for (const entry of logBuffer) sendToRenderer(entry);
+  for (const entry of getRuntimeLogs()) sendToRenderer(entry);
 }
 
-installConsoleForwarding();
+installRuntimeLogCapture();
+subscribeRuntimeLogs(sendToRenderer);
+
+/**
+ * AppImage launchers prepend their mounted runtime to PATH and
+ * LD_LIBRARY_PATH. Electron itself has already loaded by this point; external
+ * Python/CUDA/media tools should instead resolve against the host system.
+ */
+function sanitizeAppImageEnvironment(): void {
+  const appDir = process.env.APPDIR;
+  if (!appDir) return;
+  const outsideAppDir = (value: string): boolean => {
+    const normalized = path.resolve(value);
+    return normalized !== appDir && !normalized.startsWith(`${appDir}${path.sep}`);
+  };
+  for (const key of ["PATH", "LD_LIBRARY_PATH"] as const) {
+    const cleaned = (process.env[key] || "")
+      .split(path.delimiter)
+      .filter(Boolean)
+      .filter(outsideAppDir)
+      .join(path.delimiter);
+    if (cleaned) process.env[key] = cleaned;
+    else delete process.env[key];
+  }
+  for (const key of ["APPIMAGE", "APPDIR", "ARGV0", "OWD"]) delete process.env[key];
+  console.log("[electron] sanitized AppImage environment for external tools");
+}
+
+sanitizeAppImageEnvironment();
 
 /** Prepend the common install locations to PATH so child processes can
  *  find tools like `node` (needed by yt-dlp's player JS decoder) on a
@@ -158,14 +163,24 @@ async function createWindow(serverPort: number): Promise<void> {
       // compromised at runtime.
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
     },
   });
+
+  const appUrl = new URL(`http://127.0.0.1:${serverPort}`);
 
   // Open external links in the user's default browser instead of inside
   // the BrowserWindow (so a click on a YouTube URL doesn't hijack the app).
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    void shell.openExternal(url);
     return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    let targetOrigin: string | null = null;
+    try { targetOrigin = new URL(url).origin; } catch { /* invalid URL: block below */ }
+    if (targetOrigin === appUrl.origin) return;
+    event.preventDefault();
+    if (targetOrigin) void shell.openExternal(url);
   });
 
   mainWindow.on("closed", () => {
@@ -180,25 +195,23 @@ async function createWindow(serverPort: number): Promise<void> {
     flushLogBufferToRenderer();
   });
 
-  await mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
+  await mainWindow.loadURL(appUrl.href);
 }
 
 async function bootstrap(): Promise<void> {
   await app.whenReady();
 
-  // Apps launched from Finder/Dock start with cwd = `/`; from terminal cwd
-  // is wherever you ran the command. Server code that uses relative paths
-  // (legacy `./pipeline.db` migration probe, `./youtube-dl-cache`, default
-  // working dir, etc.) behaves wildly differently between the two. Pin cwd
-  // to the per-user data dir — always writable, always the same, independent
-  // of launch method.
+  // Keep mutable server data in the platform's data location. Electron's
+  // Linux userData path is ~/.config/Concord, which is appropriate for UI
+  // preferences but not downloads, yt-dlp cache, or multi-gigabyte media.
   try {
-    const userData = app.getPath("userData");
-    fs.mkdirSync(userData, { recursive: true });
-    process.chdir(userData);
+    const dataRoot = concordDataRoot();
+    fs.mkdirSync(dataRoot, { recursive: true });
+    migrateLegacyLinuxWorkingData(app.getPath("userData"), dataRoot);
+    process.chdir(dataRoot);
     console.log(`[electron] cwd: ${process.cwd()}`);
   } catch (err) {
-    console.warn("[electron] chdir to userData failed:", err);
+    console.warn("[electron] chdir to Concord data root failed:", err);
   }
 
   // Set the Dock icon explicitly so dev runs (`electron dist/...`) show
@@ -217,39 +230,66 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  const { startServer } = await import(serverEntry);
-  const handle = await startServerWithFallback(startServer);
-  closeServer = handle.close;
+  const handle = await ensureServer();
   console.log(`[electron] server bound on port ${handle.port}`);
 
   await createWindow(handle.port);
 }
 
-/** Try the configured port first; fall back to OS-assigned random on
- *  EADDRINUSE so a port collision (e.g. dev server already running)
- *  doesn't crash the launch. The console log makes the fallback
- *  obvious so the user notices the URL changed. */
-async function startServerWithFallback(
-  startServer: (opts: { port?: number }) => Promise<{ port: number; close: () => Promise<void> }>,
-): Promise<{ port: number; close: () => Promise<void> }> {
-  const wanted = pickServerPort();
+function concordDataRoot(): string {
+  if (process.platform !== "linux") return app.getPath("userData");
+  const xdgData = process.env.XDG_DATA_HOME
+    || path.join(app.getPath("home"), ".local", "share");
+  return path.join(xdgData, "concord");
+}
+
+/** Move only legacy server work folders, never Electron's own cache/config. */
+function migrateLegacyLinuxWorkingData(legacyRoot: string, dataRoot: string): void {
+  if (process.platform !== "linux" || legacyRoot === dataRoot) return;
+  for (const name of ["downloads", "temp", "youtube-dl-cache"]) {
+    const source = path.join(legacyRoot, name);
+    const destination = path.join(dataRoot, name);
+    if (!fs.existsSync(source) || fs.existsSync(destination)) continue;
+    try {
+      fs.renameSync(source, destination);
+      console.log(`[electron] migrated ${name} → ${destination}`);
+    } catch (error) {
+      // Never delete or copy potentially large media implicitly. A cross-device
+      // or permissions failure leaves the original recoverable in place.
+      console.warn(`[electron] could not migrate ${source}:`, error);
+    }
+  }
+}
+
+async function ensureServer(): Promise<ServerHandle> {
+  if (serverHandle) return serverHandle;
+  serverStartPromise ??= (async () => {
+    const module = await import(serverEntry) as { startServer: StartServer };
+    const handle = await module.startServer({
+      port: pickServerPort(),
+      fallbackToRandom: true,
+    });
+    serverHandle = handle;
+    return handle;
+  })();
   try {
-    return await startServer({ port: wanted });
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== "EADDRINUSE" || wanted === 0) throw err;
-    console.warn(`[electron] port ${wanted} in use; falling back to random port`);
-    return await startServer({ port: 0 });
+    return await serverStartPromise;
+  } catch (error) {
+    serverStartPromise = null;
+    throw error;
   }
 }
 
 // macOS convention: re-create the window when the dock icon is clicked
 // and no windows are open.
 app.on("activate", async () => {
-  if (BrowserWindow.getAllWindows().length === 0 && closeServer) {
-    const { startServer } = await import(serverEntry);
-    const handle = await startServerWithFallback(startServer);
-    await createWindow(handle.port);
+  if (BrowserWindow.getAllWindows().length === 0) {
+    try {
+      const handle = await ensureServer();
+      await createWindow(handle.port);
+    } catch (error) {
+      console.error("[electron] could not reopen window:", error);
+    }
   }
 });
 
@@ -259,11 +299,22 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", async () => {
-  if (closeServer) {
-    try { await closeServer(); } catch { /* swallow on shutdown */ }
-    closeServer = null;
-  }
+app.on("before-quit", (event) => {
+  if (quitAfterShutdown) return;
+  event.preventDefault();
+  if (shutdownPromise) return;
+  shutdownPromise = (async () => {
+    if (serverHandle) {
+      try {
+        await serverHandle.close();
+      } catch (error) {
+        console.error("[electron] server shutdown failed:", error);
+      }
+      serverHandle = null;
+    }
+    quitAfterShutdown = true;
+    app.quit();
+  })();
 });
 
 // Minimal Mac menu so Cmd-Q / Cmd-W / Edit shortcuts all work without

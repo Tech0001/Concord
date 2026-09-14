@@ -1,7 +1,7 @@
 import { useState, FormEvent } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { VideoInfo } from "@/types/video";
@@ -91,22 +91,27 @@ export default function UrlInput({ onVideoFetched, onLoading, onError }: UrlInpu
 
   return (
     <Card>
-      <CardContent className="pt-4">
+      <CardHeader>
+        <CardTitle>Download a single video</CardTitle>
+        <p id="single-video-help" className="text-xs text-muted-foreground">Paste a YouTube video link to preview, download, and transcribe it. This does not subscribe to the channel.</p>
+      </CardHeader>
+      <CardContent>
         <form onSubmit={handleUrlSubmit}>
           <label htmlFor="youtube-url" className="text-xs font-medium text-muted-foreground">
-            YouTube URL
+            YouTube video URL
           </label>
           <div className="mt-1.5 flex gap-2">
             <Input
               id="youtube-url"
               type="text"
-              placeholder="watch / youtu.be / shorts / m. / embed — any YouTube URL"
+              placeholder="https://www.youtube.com/watch?v=… or https://youtu.be/…"
+              aria-describedby="single-video-help"
               value={urlInput}
               onChange={(e) => setUrlInput(e.target.value)}
               className="flex-1 font-mono text-xs"
             />
             <Button type="submit" size="sm">
-              Fetch
+              Preview video
             </Button>
           </div>
           {urlError && (

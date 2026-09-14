@@ -18,7 +18,7 @@ import {
   type DocumentRow,
 } from "./docs-index";
 import { embedDocument } from "./docs-embed";
-import { getDb } from "./db";
+import { getDb, getTranscriptClip } from "./db";
 import { backgroundJobs } from "./background-jobs";
 
 /**
@@ -185,6 +185,23 @@ export function registerDocsRoutes(app: Express): void {
     if (!doc) return res.status(404).json({ error: "Document not found" });
     setDocumentCategory(req.params.id, cat);
     res.json({ ok: true });
+  });
+
+  app.get("/api/docs/:id/workspace", (req: Request<{ id: string }>, res) => {
+    const doc = getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: "Document not found" });
+    const noteIds = getDb().prepare(`
+      SELECT DISTINCT clip_id FROM note_anchors
+      WHERE document_id = ? ORDER BY ordinal
+    `).all(doc.id) as { clip_id: string }[];
+    const notes = noteIds.map(row => getTranscriptClip(row.clip_id)).filter(Boolean);
+    const embeddings = getDb().prepare(`
+      SELECT model, COUNT(*) AS chunks FROM vec_docs
+      WHERE document_id = ? GROUP BY model ORDER BY model
+    `).all(doc.id) as { model: string; chunks: number }[];
+    const root = findRootById(doc.root_id ?? "");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ document: enrichDocAuthor(doc), root: root || null, notes, embeddings });
   });
 
   app.post("/api/docs/embed-all", (req, res) => {

@@ -4,6 +4,7 @@ import path from "path";
 import crypto from "crypto";
 import { spawn } from "child_process";
 import { ffmpegBin, ffprobeBin, getMediaDuration } from "./audio";
+import { trackChildProcess } from "./child-process-registry";
 
 /**
  * Standalone media utilities that operate on arbitrary server paths —
@@ -55,7 +56,10 @@ function probeAudioCodec(filePath: string): Promise<string | null> {
     filePath,
   ];
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      "ffprobe extract tool",
+    );
     let stdout = "";
     let stderr = "";
     proc.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
@@ -71,7 +75,10 @@ function probeAudioCodec(filePath: string): Promise<string | null> {
 function runFfmpeg(args: string[]): Promise<void> {
   console.log(`[tools] ffmpeg ${args.join(" ")}`);
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = trackChildProcess(
+      spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] }),
+      "ffmpeg extract tool",
+    );
     let stderr = "";
     proc.stderr.on("data", (data) => {
       stderr += data.toString();

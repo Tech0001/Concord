@@ -13,7 +13,7 @@ export const EMBEDDING_DIM = 1024;
 
 let db: Database.Database | null = null;
 
-function defaultDbPath(): string {
+export function defaultDbPath(): string {
   const home = os.homedir();
   if (process.platform === "darwin") {
     return path.join(home, "Library", "Application Support", "Concord", "pipeline.db");
@@ -24,6 +24,56 @@ function defaultDbPath(): string {
   }
   const xdg = process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
   return path.join(xdg, "concord", "pipeline.db");
+}
+
+/** A restore is staged beside the live database and applied before SQLite is
+ * opened on the next launch. Keeping restore out of the running connection
+ * avoids partially replacing a WAL-backed database. The previous database
+ * and sidecars are moved to a timestamped, recoverable pre-restore snapshot. */
+function applyPendingRestore(target: string): void {
+  const pending = `${target}.restore-pending`;
+  if (!fs.existsSync(pending)) return;
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const previous = `${target}.pre-restore-${stamp}`;
+  let movedCurrent = false;
+  try {
+    const candidate = new Database(pending, { readonly: true, fileMustExist: true });
+    const integrity = candidate.pragma("integrity_check", { simple: true });
+    const tables = candidate.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type = 'table' AND name IN ('app_config', 'video_queue', 'transcript_clips')
+    `).get() as { count: number };
+    candidate.close();
+    if (integrity !== "ok" || tables.count !== 3) {
+      throw new Error("staged backup failed integrity or schema validation");
+    }
+
+    if (fs.existsSync(target)) {
+      fs.renameSync(target, previous);
+      movedCurrent = true;
+    }
+    for (const suffix of ["-wal", "-shm"]) {
+      const sidecar = target + suffix;
+      if (fs.existsSync(sidecar)) fs.renameSync(sidecar, previous + suffix);
+    }
+    fs.renameSync(pending, target);
+    console.log(`[db] Applied staged restore; previous database saved as ${previous}`);
+  } catch (error) {
+    console.error("[db] Pending restore was not applied:", error instanceof Error ? error.message : error);
+    // If applying the candidate failed after the live DB was moved aside,
+    // put it back so Concord still starts with the known-good database.
+    if (movedCurrent && !fs.existsSync(target) && fs.existsSync(previous)) {
+      try {
+        fs.renameSync(previous, target);
+        for (const suffix of ["-wal", "-shm"]) {
+          if (fs.existsSync(previous + suffix)) fs.renameSync(previous + suffix, target + suffix);
+        }
+      } catch (rollbackError) {
+        console.error("[db] Could not roll back failed restore:", rollbackError);
+      }
+    }
+  }
 }
 
 // One-shot migration from the legacy in-repo path. Runs before opening the
@@ -360,6 +410,7 @@ export function getDb(dbPath?: string): Database.Database {
   if (!db) {
     const resolvedPath = dbPath ? path.resolve(dbPath) : defaultDbPath();
     if (!dbPath) migrateLegacyDbIfPresent(resolvedPath);
+    if (!dbPath) applyPendingRestore(resolvedPath);
     fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
     db = new Database(resolvedPath);
     db.pragma("journal_mode = WAL");
@@ -500,6 +551,15 @@ function runMigrations(database: Database.Database) {
   ensureColumn("video_queue", "last_position_seconds", "REAL NOT NULL DEFAULT 0");
   ensureColumn("video_queue", "last_opened_at", "TEXT");
   ensureColumn("video_queue", "review_state", "TEXT NOT NULL DEFAULT 'unreviewed'");
+  // Provenance and duplicate-audit metadata. `url` + `created_at` remain the
+  // source of truth; these fields cache explicit verification/fingerprint
+  // work so health scans stay local and cheap.
+  ensureColumn("video_queue", "source_kind", "TEXT");
+  ensureColumn("video_queue", "source_checked_at", "TEXT");
+  ensureColumn("video_queue", "source_available", "INTEGER");
+  ensureColumn("video_queue", "media_fingerprint", "TEXT");
+  ensureColumn("video_queue", "media_bytes", "INTEGER");
+  database.exec("CREATE INDEX IF NOT EXISTS idx_queue_media_fingerprint ON video_queue(media_fingerprint)");
   database.exec("CREATE INDEX IF NOT EXISTS idx_queue_last_opened ON video_queue(last_opened_at)");
   database.exec("CREATE INDEX IF NOT EXISTS idx_queue_review_state ON video_queue(review_state)");
 

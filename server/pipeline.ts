@@ -37,6 +37,8 @@ import {
   QueueEntry,
 } from "./db";
 import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
+import { unlinkDerivedFile } from "./file-safety";
+import { pipelineSetupStatus, PipelineSetupRequiredError } from "./pipeline-readiness";
 import {
   DailyCapReachedError,
   type PipelineConfig,
@@ -363,6 +365,26 @@ export class Pipeline extends EventEmitter {
 
   getConfig(): PipelineConfig { return { ...this.config }; }
 
+  getSetupStatus() {
+    this.config = this.loadConfig();
+    return pipelineSetupStatus(this.config, getConfigValues()["pipeline.setupCompleted"] === "true");
+  }
+
+  assertSetupReady(): void {
+    const setup = this.getSetupStatus();
+    if (!setup.ready) throw new PipelineSetupRequiredError(setup);
+  }
+
+  completeSetup() {
+    const setup = this.getSetupStatus();
+    if (!setup.requirementsMet) throw new PipelineSetupRequiredError(setup);
+    for (const folder of [this.config.videoSaveDir, this.config.transcriptDir]) {
+      fs.mkdirSync(folder, { recursive: true });
+    }
+    setConfigValues({ "pipeline.setupCompleted": true });
+    return this.getSetupStatus();
+  }
+
   updateConfig(updates: Partial<PipelineConfig>): void {
     this.config = {
       ...this.config,
@@ -417,6 +439,7 @@ export class Pipeline extends EventEmitter {
   // ---- Start / Stop ----
 
   start(): void {
+    this.assertSetupReady();
     if (this.status === "running") return;
 
     this.status = "running";
@@ -691,6 +714,10 @@ export class Pipeline extends EventEmitter {
   }
 
   private async processNextInQueue(): Promise<void> {
+    if (!this.getSetupStatus().ready) {
+      if (this.status === "running") this.stop();
+      return;
+    }
     if (this.activeJobs >= this.maxConcurrent) {
       // Already busy — the active job's `finally` will call this again
       return;
@@ -847,7 +874,12 @@ export class Pipeline extends EventEmitter {
       this.emit("jobUpdated", job);
 
       const m4aPath = path.join(workChannelDir, `${safeName}.m4a`);
-      const audioPath = path.join(workChannelDir, `${safeName}.wav`);
+      // A local WAV can live inside a folder that also happens to be the
+      // configured working directory. Give Whisper scratch an unmistakably
+      // derived name so ffmpeg output never aliases that source.
+      const audioPath = path.join(workChannelDir, audioOnlyLocal
+        ? `${safeName}.concord-whisper.wav`
+        : `${safeName}.wav`);
 
       // Some audio containers/codecs Firefox can't decode (Ogg-Speex,
       // Ogg-FLAC, etc.). Pre-encode an AAC sidecar for browser playback.
@@ -958,12 +990,12 @@ export class Pipeline extends EventEmitter {
           console.error(`[pipeline] Failed to move audio to ${saveM4aPath}:`, e);
         }
       } else if (fs.existsSync(m4aPath)) {
-        try { fs.unlinkSync(m4aPath); } catch {}
+        unlinkDerivedFile(m4aPath, [isLocal || linkedExistingPath ? workVideoPath : null], "pipeline audio cleanup");
       }
 
       // Step 7: Cleanup temporary whisper WAV
       if (audioPath) {
-        try { fs.unlinkSync(audioPath); } catch {}
+        unlinkDerivedFile(audioPath, [isLocal || linkedExistingPath ? workVideoPath : null], "pipeline Whisper cleanup");
       }
 
       // Complete!
@@ -1333,6 +1365,7 @@ export class Pipeline extends EventEmitter {
    *  second click while the first is still queued/running returns the
    *  existing job stub instead of enqueueing a duplicate. */
   async retranscribeVideo(videoId: string, channelId: string, model?: string): Promise<PipelineJob> {
+    this.assertSetupReady();
     const key = `${channelId}:${videoId}`;
     const existing = this.inflightRetranscribe.get(key);
     if (existing) return existing;
@@ -1410,6 +1443,7 @@ export class Pipeline extends EventEmitter {
    *  Returns a stub job immediately; progress is watched via the same
    *  /api/pipeline/state polling as every other job. */
   async retryVideo(videoId: string, channelId: string): Promise<PipelineJob> {
+    this.assertSetupReady();
     const key = `${channelId}:${videoId}`;
     const existing = this.inflightRetranscribe.get(key);
     if (existing) return existing;
@@ -1423,14 +1457,15 @@ export class Pipeline extends EventEmitter {
       id: channelId, name: channelId, url: "", enabled: true,
     };
 
-    // Local-folder channels own their source file (we never downloaded
-    // it and must not delete it) — only the derived audio is ours to
-    // clean. YouTube-sourced channels: wipe the (possibly corrupt) mp4
-    // plus its sibling .m4a / .wav so processVideo re-downloads fresh.
+    // Local-folder channels own their source file and every sibling in its
+    // folder. Never infer that `replaceExtension(source, ".m4a"/".wav")`
+    // is disposable: for an m4a/wav source that expression is the source
+    // itself. YouTube-sourced channels are Concord-owned and may be wiped
+    // before a deliberate redownload.
     const isLocal = isLocalVideoUrl(entry.url);
     const toRemove = new Set<string>();
-    if (entry.video_path) {
-      if (!isLocal) toRemove.add(entry.video_path);
+    if (entry.video_path && !isLocal) {
+      toRemove.add(entry.video_path);
       toRemove.add(replaceExtension(entry.video_path, ".m4a"));
       toRemove.add(replaceExtension(entry.video_path, ".wav"));
     }
@@ -1443,20 +1478,22 @@ export class Pipeline extends EventEmitter {
     // (line ~874: `if (!fs.existsSync(m4aPath))`), so a stale corrupt
     // .m4a would be reused and reproduce the exact same failure
     // ("moov atom not found"). Reconstruct the working-dir paths the
-    // same way processVideo does and wipe them too. Local channels
-    // skip the .mp4 (it's the user's source) but still clear derived
-    // audio.
-    if (!isLocal) {
-      const safeName = datedBaseName(entry.title, entry.upload_date);
-      const channelFolder = channelFolderName(channel.name);
-      const workDir = path.join(this.config.workingDir, channelFolder);
-      for (const ext of [".mp4", ".m4a", ".wav", ".playback.m4a"]) {
-        toRemove.add(path.join(workDir, `${safeName}${ext}`));
-      }
+    // same way processVideo does and wipe them too. This applies to local
+    // channels as well, but the protected-source guard below makes cleanup
+    // fail closed even when workingDir overlaps the monitored source folder.
+    const safeName = datedBaseName(entry.title, entry.upload_date);
+    const channelFolder = channelFolderName(channel.name);
+    const workDir = path.join(this.config.workingDir, channelFolder);
+    const workExtensions = isLocal
+      ? [".m4a", ".wav", ".playback.m4a"]
+      : [".mp4", ".m4a", ".wav", ".playback.m4a"];
+    for (const ext of workExtensions) {
+      toRemove.add(path.join(workDir, `${safeName}${ext}`));
     }
+    if (isLocal) toRemove.add(path.join(workDir, `${safeName}.concord-whisper.wav`));
 
     toRemove.forEach((f) => {
-      try { fs.unlinkSync(f); } catch { /* already gone — fine */ }
+      unlinkDerivedFile(f, isLocal ? [entry.video_path] : [], "retry cleanup");
     });
 
     // Reset the row: queued state, error cleared, retry counter zeroed,
@@ -1540,6 +1577,9 @@ export class Pipeline extends EventEmitter {
     // failed retranscribe shouldn't mark a previously-good entry as
     // "failed" — its existing transcript is still on disk.
     const previousStatus = entry.status || "complete";
+    const sourceVideoPath = entry.video_path;
+    let temporaryAudioPath: string | null = null;
+    let temporaryM4aPath: string | null = null;
     job.status = "transcribing";
     this.activeJobs++;
     this.emit("jobUpdated", job);
@@ -1555,47 +1595,36 @@ export class Pipeline extends EventEmitter {
       const mdFileName = `${safeName}.md`;
       const mdPath = path.join(transChannelDir, mdFileName);
 
-      const videoPath = entry.video_path;
-      const retainedM4aPath = videoPath ? replaceExtension(videoPath, ".m4a") : null;
-      let audioPath: string | null = retainedM4aPath ? replaceExtension(retainedM4aPath, ".wav") : null;
-
-      // Retranscribe ALWAYS forces a fresh extract from the source —
-      // otherwise a redownload (e.g. picking a different audio track
-      // for a multi-language video) silently keeps using the cached
-      // .wav from the prior run and reproduces the same transcript.
-      // Cheap: ffmpeg copy/extract is seconds for typical videos.
-      if (audioPath && fs.existsSync(audioPath)) {
-        try { fs.unlinkSync(audioPath); } catch { /* ignore */ }
-      }
-      if (retainedM4aPath && fs.existsSync(retainedM4aPath)) {
-        try { fs.unlinkSync(retainedM4aPath); } catch { /* ignore */ }
+      const videoPath = sourceVideoPath;
+      // Validate the source before removing any prior scratch artifacts.
+      if (!videoPath || !fs.existsSync(videoPath)) {
+        throw new Error("Media file no longer available for re-extraction");
       }
 
-      if (!audioPath || !fs.existsSync(audioPath)) {
-        if (!videoPath || !fs.existsSync(videoPath)) {
-          throw new Error("Video file no longer available for re-extraction");
-        }
-        job.status = "extracting_audio";
-        this.emit("jobUpdated", job);
+      const workChannelDir = path.join(this.config.workingDir, channelFolder);
+      if (!fs.existsSync(workChannelDir)) fs.mkdirSync(workChannelDir, { recursive: true });
+      const jobToken = job.id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(-48);
+      const scratchStem = `${safeName}.retranscribe-${jobToken}`;
+      const audioPath = path.join(workChannelDir, `${scratchStem}.wav`);
+      const m4aPath = isAudioOnlyPath(videoPath)
+        ? null
+        : path.join(workChannelDir, `${scratchStem}.m4a`);
+      temporaryAudioPath = audioPath;
+      temporaryM4aPath = m4aPath;
 
-        const workChannelDir = path.join(this.config.workingDir, channelFolder);
-        if (!fs.existsSync(workChannelDir)) fs.mkdirSync(workChannelDir, { recursive: true });
+      // Retranscribe ALWAYS forces a fresh extract. Scratch paths include the
+      // job id and live under workingDir; the source is passed as protected
+      // anyway so a future naming regression still cannot unlink it.
+      unlinkDerivedFile(audioPath, [videoPath], "retranscribe preparation");
+      unlinkDerivedFile(m4aPath, [videoPath], "retranscribe preparation");
 
-        // If the source is already audio (mp3 / ogg / flac / etc.), the
-        // m4a stream-copy step doesn't apply — m4a containers only carry
-        // AAC, so demuxing Vorbis/Opus/FLAC into m4a fails. Skip straight
-        // to whisper-ready WAV from the source.
-        if (isAudioOnlyPath(videoPath)) {
-          audioPath = path.join(workChannelDir, `${safeName}.wav`);
-          await extractAudio(videoPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
-        } else {
-          const m4aRetPath = retainedM4aPath || path.join(workChannelDir, `${safeName}.m4a`);
-          if (!fs.existsSync(m4aRetPath)) {
-            await copyAudioTrack(videoPath, m4aRetPath);
-          }
-          audioPath = replaceExtension(m4aRetPath, ".wav");
-          await extractAudio(m4aRetPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
-        }
+      job.status = "extracting_audio";
+      this.emit("jobUpdated", job);
+      if (m4aPath) {
+        await copyAudioTrack(videoPath, m4aPath);
+        await extractAudio(m4aPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
+      } else {
+        await extractAudio(videoPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
       }
 
       // Transcribe
@@ -1627,10 +1656,6 @@ export class Pipeline extends EventEmitter {
 
       this.maybeEmbedSegments(videoId, channelId);
       this.maybeSummarizeVideo(videoId, channelId);
-      if (audioPath) {
-        try { fs.unlinkSync(audioPath); } catch {}
-      }
-
       // Copy to QMD if needed
       if (this.config.qmdVaultDir) {
         const qmdChannelDir = path.join(this.config.qmdVaultDir, channelFolder);
@@ -1654,6 +1679,8 @@ export class Pipeline extends EventEmitter {
       // The job's own `error` carries the failure detail for the UI.
       updateQueueStatus(videoId, channelId, { status: previousStatus, error: job.error });
     } finally {
+      unlinkDerivedFile(temporaryAudioPath, [sourceVideoPath], "retranscribe cleanup");
+      unlinkDerivedFile(temporaryM4aPath, [sourceVideoPath], "retranscribe cleanup");
       this.activeJobs--;
     }
 
@@ -1662,6 +1689,7 @@ export class Pipeline extends EventEmitter {
 
   /** Transcribe an already-downloaded video without re-downloading. */
   async processDownloadedFile(filePath: string, title: string, uploadDate?: string, videoId?: string, channelId?: string, channelName?: string): Promise<PipelineJob> {
+    this.assertSetupReady();
     const existingEntry = videoId ? getQueueEntryByVideoId(videoId) : undefined;
     const monitoredChannel = channelId
       ? this.config.channels.find(c => c.id === channelId)
@@ -1722,6 +1750,8 @@ export class Pipeline extends EventEmitter {
     this.activeJobs++;
     this.emit("jobStarted", job);
 
+    let temporaryAudioPath: string | null = null;
+    let temporaryM4aPath: string | null = null;
     try {
       const channelFolder = channelFolderName(channel.name);
       const workChannelDir = path.join(this.config.workingDir, channelFolder);
@@ -1733,7 +1763,9 @@ export class Pipeline extends EventEmitter {
       job.status = "extracting_audio";
       this.emit("jobUpdated", job);
 
-      const audioPath = replaceExtension(filePath, ".wav");
+      const jobToken = job.id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(-48);
+      const scratchStem = `${safeName}.transcribe-${jobToken}`;
+      const audioPath = path.join(workChannelDir, `${scratchStem}.wav`);
       // m4aPath: only meaningful for video sources (where we stream-copy a
       // demuxed AAC track to skip re-decoding the full video). Audio
       // sources go straight to WAV — m4a containers can only carry AAC, so
@@ -1741,16 +1773,16 @@ export class Pipeline extends EventEmitter {
       // checks for null before touching it.
       const m4aPath: string | null = isAudioOnlyPath(filePath)
         ? null
-        : replaceExtension(filePath, ".m4a");
+        : path.join(workChannelDir, `${scratchStem}.m4a`);
+      temporaryAudioPath = audioPath;
+      temporaryM4aPath = m4aPath;
+      unlinkDerivedFile(audioPath, [filePath], "file transcription preparation");
+      unlinkDerivedFile(m4aPath, [filePath], "file transcription preparation");
 
       if (m4aPath === null) {
         await extractAudio(filePath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
       } else {
-        if (!fs.existsSync(m4aPath)) {
-          await copyAudioTrack(filePath, m4aPath);
-        } else {
-          console.log(`[pipeline] Using existing audio track: ${m4aPath}`);
-        }
+        await copyAudioTrack(filePath, m4aPath);
         await extractAudio(m4aPath, audioPath, { sampleRate: 16000, channels: 1, format: "wav" });
       }
 
@@ -1793,7 +1825,8 @@ export class Pipeline extends EventEmitter {
       // Move video into the channel folder under videoSaveDir
       const videoSaveChannelDir = path.join(this.config.videoSaveDir, channelFolder);
       if (!fs.existsSync(videoSaveChannelDir)) fs.mkdirSync(videoSaveChannelDir, { recursive: true });
-      const destVideoPath = path.join(videoSaveChannelDir, `${safeName}.mp4`);
+      const sourceExtension = path.extname(filePath).toLowerCase() || ".mp4";
+      const destVideoPath = path.join(videoSaveChannelDir, `${safeName}${sourceExtension}`);
       const destM4aPath = path.join(videoSaveChannelDir, `${safeName}.m4a`);
       if (filePath !== destVideoPath) {
         fs.copyFileSync(filePath, destVideoPath);
@@ -1805,16 +1838,16 @@ export class Pipeline extends EventEmitter {
       }
       if (m4aPath && this.config.processing.keepAudio && m4aPath !== destM4aPath && fs.existsSync(m4aPath)) {
         fs.copyFileSync(m4aPath, destM4aPath);
-        try { fs.unlinkSync(m4aPath); } catch {}
+        unlinkDerivedFile(m4aPath, [filePath, destVideoPath], "file transcription audio move");
         job.audioPath = destM4aPath;
         console.log(`[pipeline] Moved audio to: ${destM4aPath}`);
       } else if (fs.existsSync(destM4aPath)) {
         job.audioPath = destM4aPath;
       } else if (m4aPath && fs.existsSync(m4aPath)) {
-        try { fs.unlinkSync(m4aPath); } catch {}
+        unlinkDerivedFile(m4aPath, [filePath, destVideoPath], "file transcription audio cleanup");
       }
 
-      try { fs.unlinkSync(audioPath); } catch {}
+      unlinkDerivedFile(audioPath, [filePath, destVideoPath], "file transcription Whisper cleanup");
 
       job.status = "complete";
       job.progress = 100;
@@ -1846,6 +1879,8 @@ export class Pipeline extends EventEmitter {
       this.emit("jobUpdated", job);
       this.emit("jobError", job, error);
     } finally {
+      unlinkDerivedFile(temporaryAudioPath, [filePath], "failed file transcription cleanup");
+      unlinkDerivedFile(temporaryM4aPath, [filePath], "failed file transcription cleanup");
       this.activeJobs--;
     }
 
@@ -1855,6 +1890,7 @@ export class Pipeline extends EventEmitter {
   // ---- Manual single-video processing ----
 
   async processSingleVideo(url: string, quality?: string): Promise<PipelineJob> {
+    this.assertSetupReady();
     // Override quality if specified
     if (quality) {
       this.config.videoQuality = quality;
@@ -1929,6 +1965,11 @@ export class Pipeline extends EventEmitter {
       last_position_seconds: 0,
       last_opened_at: null,
       review_state: "unreviewed",
+      source_kind: null,
+      source_checked_at: null,
+      source_available: null,
+      media_fingerprint: null,
+      media_bytes: null,
       category: channel.category ?? "personal",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),

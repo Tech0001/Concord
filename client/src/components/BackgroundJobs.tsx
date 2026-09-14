@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, AlertCircle, CheckCircle, Loader2, PauseCircle, RefreshCw, RotateCcw, XCircle } from "lucide-react";
+import { Activity, AlertCircle, CheckCircle, ChevronDown, ChevronUp, Download, Loader2, PauseCircle, RefreshCw, RotateCcw, XCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
 interface BackgroundJob {
   id: string;
-  type: "segment_embeddings" | "doc_embeddings" | "note_embeddings" | "video_summaries";
+  type: "segment_embeddings" | "doc_embeddings" | "note_embeddings" | "video_summaries" | "thumbnail_backfill" | "media_fingerprints" | "derived_index_cleanup";
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   label: string;
   payload: { model: string };
@@ -32,12 +32,16 @@ function resultUnit(job: BackgroundJob): string {
   if (job.type === "segment_embeddings") return `${job.result.units.toLocaleString()} segments`;
   if (job.type === "doc_embeddings") return `${job.result.units.toLocaleString()} chunks`;
   if (job.type === "note_embeddings") return `${job.result.units.toLocaleString()} notes`;
+  if (job.type === "thumbnail_backfill") return `${job.result.units.toLocaleString()} thumbnails`;
+  if (job.type === "media_fingerprints") return `${(job.result.units / 1024 / 1024 / 1024).toFixed(1)} GB scanned`;
+  if (job.type === "derived_index_cleanup") return `${job.result.units.toLocaleString()} stale rows removed`;
   return `${job.result.units.toLocaleString()} output chars`;
 }
 
 export function BackgroundJobs({ limit = 10 }: { limit?: number }) {
   const [jobs, setJobs] = useState<BackgroundJob[]>([]);
   const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -57,13 +61,13 @@ export function BackgroundJobs({ limit = 10 }: { limit?: number }) {
     return () => window.clearInterval(timer);
   }, [active, load]);
 
-  const mutate = async (job: BackgroundJob, action: "cancel" | "retry") => {
+  const mutate = async (job: BackgroundJob, action: "cancel" | "retry" | "retry-failures") => {
     await fetch(`/api/background-jobs/${encodeURIComponent(job.id)}/${action}`, { method: "POST" });
     void load();
   };
 
   return (
-    <Card>
+    <Card id="background-jobs">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="flex items-center gap-2 text-sm">
           <Activity className="h-4 w-4 text-muted-foreground" />
@@ -101,6 +105,12 @@ export function BackgroundJobs({ limit = 10 }: { limit?: number }) {
                     <RotateCcw className="h-3 w-3" />Resume
                   </Button>
                 )}
+                {!!result?.failed && job.status !== "running" && job.status !== "queued" && (
+                  <Button size="sm" variant="outline" className="h-6 gap-1 px-2 text-[10px]" onClick={() => void mutate(job, "retry-failures")}>
+                    <RotateCcw className="h-3 w-3" />Retry failures
+                  </Button>
+                )}
+                <a href={`/api/background-jobs/${encodeURIComponent(job.id)}/diagnostic`} download title="Export diagnostic report" className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-secondary"><Download className="h-3 w-3" /></a>
               </div>
               <div className="h-1.5 overflow-hidden rounded bg-secondary">
                 <div className="h-full bg-primary transition-[width]" style={{ width: `${percent}%` }} />
@@ -115,6 +125,15 @@ export function BackgroundJobs({ limit = 10 }: { limit?: number }) {
                 )}
               </div>
               {firstError && <div className="line-clamp-2 text-[10px] text-destructive">{firstError}</div>}
+              {!!result?.errors?.length && <div className="border-t pt-1.5">
+                <button type="button" className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground" onClick={() => setExpanded(current => { const next = new Set(current); next.has(job.id) ? next.delete(job.id) : next.add(job.id); return next; })}>
+                  {expanded.has(job.id) ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                  {result.errors.length} failed item{result.errors.length === 1 ? "" : "s"}
+                </button>
+                {expanded.has(job.id) && <div className="mt-1.5 max-h-52 space-y-1 overflow-y-auto">
+                  {result.errors.map((failure, index) => <div key={`${failure.item}:${index}`} className="grid gap-0.5 rounded border bg-background px-2 py-1 text-[10px] sm:grid-cols-[minmax(130px,0.35fr)_1fr]"><code className="truncate font-mono" title={failure.item}>{failure.item}</code><span className="text-destructive">{failure.error}</span></div>)}
+                </div>}
+              </div>}
             </div>
           );
         })}
@@ -122,4 +141,3 @@ export function BackgroundJobs({ limit = 10 }: { limit?: number }) {
     </Card>
   );
 }
-

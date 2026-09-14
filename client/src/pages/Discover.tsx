@@ -234,7 +234,7 @@ export default function Discover() {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Uses your YouTube Data API key (Settings → YouTube Data API).
+            Uses your YouTube Data API key (Pipeline → AI & extras → YouTube Data API).
             Each search costs 100 quota units; the free tier is 10,000/day (~100 searches).
           </p>
         </CardContent>

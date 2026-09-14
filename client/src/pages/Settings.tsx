@@ -7,11 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2, FileText, BookOpen, ChevronDown, ChevronUp, HardDrive, Mic, Trash2, Wrench, Link2, AlertCircle } from "lucide-react";
-import { Link as RouterLink } from "wouter";
+import { Eye, EyeOff, RefreshCw, Save, Sparkles, Database, Loader2, FileText, BookOpen, ChevronDown, ChevronUp, HardDrive, Trash2, Wrench, Link2, AlertCircle } from "lucide-react";
 import FolderInput from "@/components/FolderInput";
 import FileInput from "@/components/FileInput";
-import { visibleModels } from "@/lib/transcription-models";
 import { BackgroundJobs } from "@/components/BackgroundJobs";
 
 interface LlmConfig {
@@ -234,7 +232,7 @@ export default function Settings() {
     <div className="mx-auto max-w-3xl space-y-6 p-4">
       <div className="flex items-center gap-3">
         <Sparkles className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-xl font-semibold">AI</h1>
+        <h2 className="text-xl font-semibold">AI & extras</h2>
         <div className="ml-auto flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs">
           <span className={`inline-block h-2 w-2 rounded-full ${statusDot}`} />
           <span className="text-muted-foreground">{statusLabel}</span>
@@ -353,11 +351,7 @@ export default function Settings() {
 
       <BackgroundJobs limit={8} />
 
-      <PipelineSettingsCard />
-
       <YouTubeApiKeyCard />
-
-      <TranscriptionEngineCard />
 
       <LibraryMaintenanceCard />
 
@@ -873,8 +867,8 @@ function CheatTable({ cols, rows }: { cols: string[]; rows: string[][] }) {
 }
 
 // ---------------------------------------------------------------
-// Pipeline settings — lifted from the Pipeline page so all global
-// config lives in one place. Edits POST to /api/pipeline/config.
+// Storage and download preferences embedded in Pipeline setup.
+// Save only the edited fields so concurrent engine/AI updates survive.
 // ---------------------------------------------------------------
 
 const CODEC_OPTIONS: { value: string; label: string }[] = [
@@ -903,12 +897,11 @@ interface PipelineConfigShape {
   [key: string]: unknown;
 }
 
-function PipelineSettingsCard() {
+export function PipelineSettingsCard({ onSaved }: { onSaved?: () => void }) {
   const { toast } = useToast();
   const [config, setConfig] = useState<PipelineConfigShape | null>(null);
-  const [platform, setPlatform] = useState<NodeJS.Platform | null>(null);
   const [saving, setSaving] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
 
   const [videoSaveDir, setVideoSaveDir] = useState("");
   const [transcriptDir, setTranscriptDir] = useState("");
@@ -921,7 +914,6 @@ function PipelineSettingsCard() {
   const [dailyCap, setDailyCap] = useState(200);
   const [lanAccess, setLanAccess] = useState(false);
   const [lanInfo, setLanInfo] = useState<{ lanAccess: boolean; ip: string | null; port: number | null; url: string | null } | null>(null);
-  const [transcriptionModel, setTranscriptionModel] = useState("large-v3");
   const [checkInterval, setCheckInterval] = useState(60);
   const [keepAudio, setKeepAudio] = useState(false);
 
@@ -940,20 +932,11 @@ function PipelineSettingsCard() {
       setYoutubeSpeed(c.youtubeSpeedPreset ?? "conservative");
       setDailyCap(typeof c.dailyDownloadCap === "number" ? c.dailyDownloadCap : 200);
       setLanAccess(c.lanAccess === true);
-      setTranscriptionModel(c.transcription?.model ?? "large-v3");
       setCheckInterval(typeof c.checkIntervalMinutes === "number" ? c.checkIntervalMinutes : 60);
       setKeepAudio(c.processing?.keepAudio === true);
     } catch {
       setConfig(null);
     }
-  }, []);
-
-  const fetchPlatform = useCallback(async () => {
-    try {
-      const r = await apiRequest("GET", "/api/system/info");
-      const d = await r.json() as { platform: NodeJS.Platform };
-      setPlatform(d.platform);
-    } catch {}
   }, []);
 
   const fetchLanInfo = useCallback(async () => {
@@ -963,16 +946,15 @@ function PipelineSettingsCard() {
     } catch { setLanInfo(null); }
   }, []);
 
-  useEffect(() => { fetchConfig(); fetchPlatform(); fetchLanInfo(); }, [fetchConfig, fetchPlatform, fetchLanInfo]);
+  useEffect(() => { fetchConfig(); fetchLanInfo(); }, [fetchConfig, fetchLanInfo]);
 
   const save = async () => {
     if (!config) return;
     setSaving(true);
     try {
       await apiRequest("POST", "/api/pipeline/config", {
-        ...config,
-        videoSaveDir,
-        transcriptDir,
+        videoSaveDir: videoSaveDir.trim(),
+        transcriptDir: transcriptDir.trim(),
         videoQuality,
         videoCodec,
         audioLanguage,
@@ -982,11 +964,11 @@ function PipelineSettingsCard() {
         dailyDownloadCap: dailyCap,
         lanAccess,
         checkIntervalMinutes: checkInterval,
-        transcription: { ...(config.transcription ?? {}), model: transcriptionModel },
-        processing: { ...(config.processing ?? {}), keepAudio },
+        processing: { keepAudio },
       });
       toast({ title: "Pipeline settings saved" });
-      fetchConfig();
+      await fetchConfig();
+      onSaved?.();
     } catch (err: any) {
       toast({ variant: "destructive", title: "Save failed", description: err?.message ?? String(err) });
     } finally {
@@ -1004,7 +986,7 @@ function PipelineSettingsCard() {
         >
           <CardTitle className="flex items-center gap-2 text-sm">
             <HardDrive className="h-4 w-4 text-muted-foreground" />
-            Pipeline
+            Storage & download settings
           </CardTitle>
           {open ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
         </button>
@@ -1012,10 +994,6 @@ function PipelineSettingsCard() {
 
       {open && (
         <CardContent className="space-y-2 text-xs">
-          <div className="grid grid-cols-[160px_1fr] items-center gap-2">
-            <span className="text-muted-foreground">Working (temp)</span>
-            <code className="font-mono text-foreground">{config?.workingDir ?? "—"}</code>
-          </div>
           <div className="grid grid-cols-[160px_1fr] items-center gap-2">
             <label className="text-muted-foreground" htmlFor="settings-videoSaveDir">Video save</label>
             <FolderInput
@@ -1061,6 +1039,13 @@ function PipelineSettingsCard() {
               </SelectContent>
             </Select>
           </div>
+          <details className="rounded-md border p-3">
+            <summary className="cursor-pointer text-sm font-medium">Schedule & advanced options</summary>
+            <div className="mt-3 space-y-3">
+          <div className="grid grid-cols-[160px_1fr] items-center gap-2">
+            <span className="text-muted-foreground">Working (temp)</span>
+            <code className="font-mono text-foreground">{config?.workingDir ?? "—"}</code>
+          </div>
           <div className="grid grid-cols-[160px_1fr] items-center gap-2">
             <label className="text-muted-foreground" htmlFor="settings-audioLang">Audio language</label>
             <Input
@@ -1090,7 +1075,7 @@ function PipelineSettingsCard() {
               <div className="flex items-center gap-2">
                 <Switch checked={lanAccess} onCheckedChange={setLanAccess} aria-label="Allow phone/tablet on same WiFi" />
                 <span className="text-xs text-muted-foreground">
-                  {lanAccess ? "On — phone/tablet on same WiFi can connect" : "Off — local Mac only (default)"}
+                  {lanAccess ? "On — phone/tablet on same WiFi can connect" : "Off — this computer only"}
                 </span>
               </div>
               {lanAccess && lanInfo?.url && (
@@ -1178,21 +1163,12 @@ function PipelineSettingsCard() {
               </p>
             </div>
           </div>
-          <div className="grid grid-cols-[160px_1fr] items-center gap-2">
-            <label className="text-muted-foreground">Transcription model</label>
-            <Select value={transcriptionModel} onValueChange={setTranscriptionModel}>
-              <SelectTrigger className="h-8"><SelectValue placeholder="Model" /></SelectTrigger>
-              <SelectContent>
-                {visibleModels(platform, transcriptionModel, config?.transcription?.engine || null).map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+            </div>
+          </details>
           <div className="flex justify-end pt-1">
             <Button size="sm" onClick={save} disabled={saving || !config}>
               <Save className="mr-1.5 h-3 w-3" />
-              {saving ? "Saving…" : "Save"}
+              {saving ? "Saving…" : "Save storage & downloads"}
             </Button>
           </div>
         </CardContent>
@@ -1202,137 +1178,6 @@ function PipelineSettingsCard() {
 }
 
 // ---- Transcription engine status (wizard pivot) -------------------------
-
-interface TranscriptionStatusShape {
-  platform: string;
-  skipSetup: boolean;
-  python: { ok: boolean; path: string; version: string | null; error?: string };
-  gpu: { present: boolean; name?: string; vramMb?: number };
-  recommendedEngine: "parakeet" | "whisper";
-  venv: { path: string; exists: boolean; engine: "parakeet" | "whisper" | null };
-  installed: boolean;
-}
-
-/** Read-only summary of the wizard-installed transcription engine + links
- *  to re-run the wizard for "switch engine" / "reinstall" cases. */
-function TranscriptionEngineCard() {
-  const { toast } = useToast();
-  const [open, setOpen] = useState(false);
-  const [status, setStatus] = useState<TranscriptionStatusShape | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const reload = useCallback(async () => {
-    try {
-      const r = await apiRequest("GET", `/api/transcription/status?t=${Date.now()}`);
-      setStatus(await r.json());
-    } catch (err: any) {
-      toast({ variant: "destructive", title: "Status check failed", description: err.message });
-    }
-  }, [toast]);
-
-  useEffect(() => { if (open) reload(); }, [open, reload]);
-
-  const uninstall = async () => {
-    if (!confirm("Wipe the transcription venv? You'll need to re-run the wizard before transcribing again.")) return;
-    setBusy(true);
-    try {
-      await apiRequest("POST", "/api/transcription/uninstall", {});
-      toast({ title: "Venv removed" });
-      await reload();
-    } catch (err: any) {
-      toast({ variant: "destructive", title: "Uninstall failed", description: err.message });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const subtitle = status
-    ? status.skipSetup
-      ? "Bundled engine on this platform"
-      : status.installed
-        ? `${status.venv.engine ?? "engine"} installed`
-        : "Not installed"
-    : "—";
-
-  return (
-    <Card>
-      <CardHeader>
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="flex w-full items-center justify-between gap-2 text-left"
-        >
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <Mic className="h-4 w-4 text-muted-foreground" />
-            Transcription
-            <span className="text-xs font-normal text-muted-foreground">· {subtitle}</span>
-          </CardTitle>
-          {open ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-        </button>
-      </CardHeader>
-
-      {open && (
-        <CardContent className="space-y-3 text-xs">
-          {!status && <div className="text-muted-foreground">Probing…</div>}
-          {status?.skipSetup && (
-            <div className="text-muted-foreground">
-              FluidAudio is bundled with the macOS build — no Python venv needed.
-              The wizard is hidden on this platform.
-            </div>
-          )}
-          {status && !status.skipSetup && (
-            <>
-              <Row label="Platform">{status.platform}</Row>
-              <Row label="Python">
-                {status.python.ok
-                  ? <span className="text-emerald-600 dark:text-emerald-400">{status.python.version}</span>
-                  : <span className="text-red-600 dark:text-red-400">{status.python.error || "not found"}</span>}
-              </Row>
-              <Row label="GPU">
-                {status.gpu.present
-                  ? `${status.gpu.name || "NVIDIA"} (${Math.round((status.gpu.vramMb ?? 0) / 1024)}GB)`
-                  : <span className="text-muted-foreground">none detected</span>}
-              </Row>
-              <Row label="Recommended">{status.recommendedEngine}</Row>
-              <Row label="Installed engine">
-                {status.installed
-                  ? <Badge variant="secondary">{status.venv.engine ?? "unknown"}</Badge>
-                  : <span className="text-muted-foreground">none — run the wizard</span>}
-              </Row>
-              <Row label="Venv path"><code className="font-mono">{status.venv.path}</code></Row>
-
-              <div className="flex flex-wrap gap-2 pt-2">
-                <RouterLink href="/setup/transcription">
-                  <Button size="sm" variant="outline">
-                    <Wrench className="mr-1.5 h-3 w-3" />
-                    {status.installed ? "Switch engine / reinstall" : "Open setup wizard"}
-                  </Button>
-                </RouterLink>
-                {status.installed && (
-                  <Button size="sm" variant="ghost" className="text-red-600 dark:text-red-400" disabled={busy} onClick={uninstall}>
-                    <Trash2 className="mr-1.5 h-3 w-3" /> Wipe venv
-                  </Button>
-                )}
-                <Button size="sm" variant="ghost" onClick={reload} disabled={busy}>
-                  <RefreshCw className="mr-1.5 h-3 w-3" /> Re-probe
-                </Button>
-              </div>
-            </>
-          )}
-        </CardContent>
-      )}
-    </Card>
-  );
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-      <span className="text-muted-foreground">{label}</span>
-      <span>{children}</span>
-    </div>
-  );
-}
 
 // ---- Library Maintenance: orphan re-link / forget ------------------------
 

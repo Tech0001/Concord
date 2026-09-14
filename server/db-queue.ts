@@ -53,6 +53,13 @@ export interface QueueEntry {
   last_position_seconds: number;
   last_opened_at: string | null;
   review_state: "unreviewed" | "in_review" | "reviewed";
+  /** Cached provenance/duplicate-audit fields. Source URL and import time are
+   * represented by `url` and `created_at`. */
+  source_kind: string | null;
+  source_checked_at: string | null;
+  source_available: number | null;
+  media_fingerprint: string | null;
+  media_bytes: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -177,7 +184,11 @@ export function countChannelQueueEntries(channelId: string): number {
 
 // ---- Enqueue ----
 
-/** Insert a video into the queue. Skips if already present. Returns true if inserted. */
+/** Insert a video into the queue. Skips if its provider id is already known,
+ * or if the same local file URL is already tracked in this channel. Local
+ * ids historically hash the absolute path, so a Linux mount-point change can
+ * otherwise make an existing file look new even after its stored path has
+ * been migrated. Returns true if inserted. */
 export function enqueueVideo(v: {
   videoId: string;
   channelId: string;
@@ -193,7 +204,12 @@ export function enqueueVideo(v: {
   thumbnailUrl?: string | null;
 }): boolean {
   const d = getDb();
-  const existing = d.prepare("SELECT 1 FROM video_queue WHERE video_id = ? LIMIT 1").get(v.videoId);
+  const existing = d.prepare(`
+    SELECT 1 FROM video_queue
+    WHERE video_id = ?
+       OR (? LIKE 'file://%' AND channel_id = ? AND url = ?)
+    LIMIT 1
+  `).get(v.videoId, v.url, v.channelId, v.url);
   if (existing) return false;
 
   const category = resolveCategoryForChannel(v.category, v.channelId);
@@ -233,7 +249,12 @@ export function enqueueVideos(
   videos: { videoId: string; channelId: string; title: string; url: string; duration?: number | null; isLive?: boolean; isShorts?: boolean; uploadDate?: string | null; category?: string; thumbnailUrl?: string | null }[]
 ): number {
   let count = 0;
-  const exists = getDb().prepare("SELECT 1 FROM video_queue WHERE video_id = ? LIMIT 1");
+  const exists = getDb().prepare(`
+    SELECT 1 FROM video_queue
+    WHERE video_id = ?
+       OR (? LIKE 'file://%' AND channel_id = ? AND url = ?)
+    LIMIT 1
+  `);
   const insert = getDb().prepare(`
     INSERT OR IGNORE INTO video_queue
       (video_id, channel_id, title, url, duration, is_live, is_shorts,
@@ -243,7 +264,7 @@ export function enqueueVideos(
 
   const tx = getDb().transaction(() => {
     for (const v of videos) {
-      if (exists.get(v.videoId)) continue;
+      if (exists.get(v.videoId, v.url, v.channelId, v.url)) continue;
       const category = resolveCategoryForChannel(v.category, v.channelId);
       const result = insert.run(
         v.videoId, v.channelId, v.title, v.url,

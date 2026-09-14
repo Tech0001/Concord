@@ -19,6 +19,9 @@ import { backfillChannelUcIds } from "./db";
 import { resolveChannelUcId } from "./channel-monitor";
 import { registerBackgroundJobRoutes } from "./routes-background-jobs";
 import { backgroundJobs } from "./background-jobs";
+import { registerResearchRoutes } from "./routes-research";
+import { registerRuntimeLogRoutes } from "./routes-runtime-logs";
+import { pipelineSetupGate } from "./pipeline-setup-gate";
 
 /**
  * Top-level HTTP wire-up. Every actual endpoint lives in a sibling
@@ -30,6 +33,12 @@ import { backgroundJobs } from "./background-jobs";
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
   const pipeline = getPipeline();
+  app.use(pipelineSetupGate(() => pipeline.getSetupStatus()));
+
+  // Embedded server output and startup history for the read-only Terminal
+  // page. Register before the work routes so its SSE stream is available as
+  // soon as the browser opens.
+  registerRuntimeLogRoutes(app);
 
   // ---- One-off video downloads ----
   // /api/videos/info, /api/videos/download, the SSE progress stream,
@@ -43,6 +52,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // /api/pipeline/ytdlp-health, /api/system/*, /api/dialog/pick-folder
   // — all registered in routes-system.ts.
   registerSystemRoutes(app, pipeline, httpServer);
+  registerResearchRoutes(app, pipeline);
 
   // Durable AI/index work survives page navigation and process restarts.
   registerBackgroundJobRoutes(app, pipeline);
@@ -65,7 +75,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ---- Transcription setup wizard ----
   // /api/transcription/* — first-launch venv install, engine select, etc.
-  registerTranscriptionSetupRoutes(app);
+  registerTranscriptionSetupRoutes(app, pipeline);
 
   // ---- Standalone media tools ----
   // /api/tools/extract-audio (+ /download) — pull the audio track out
