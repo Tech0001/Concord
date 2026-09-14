@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { visibleModels } from "@/lib/transcription-models";
+import { visibleModels, compatibleModelSelection } from "@/lib/transcription-models";
 import FolderInput from "@/components/FolderInput";
 import { useCategory } from "@/hooks/use-category";
 
@@ -118,7 +118,7 @@ export default function PipelineStatus() {
   const [newChannelKind, setNewChannelKind] = useState<"youtube" | "folder">("youtube");
   const [newChannelCategory, setNewChannelCategory] = useState<"personal" | "work">("personal");
   const [archiving, setArchiving] = useState<Record<string, boolean>>({});
-  const [retransModel, setRetransModel] = useState("large-v3");
+  const [retransModel, setRetransModel] = useState("");
   const [retranscribing, setRetranscribing] = useState<Record<string, boolean>>({});
   const [archiveMsg, setArchiveMsg] = useState<Record<string, string>>({});
   // "Virtual" channels — distinct channel_id strings in video_queue that
@@ -229,7 +229,9 @@ export default function PipelineStatus() {
   const fetchConfig = async () => {
     try {
       const r = await apiRequest("GET", "/api/pipeline/config");
-      setConfig(await r.json());
+      const loaded = await r.json() as Config;
+      setConfig(loaded);
+      setRetransModel(current => compatibleModelSelection(current, loaded.transcription.model));
     } catch {}
   };
 

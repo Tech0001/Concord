@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { PipelineConfig } from "./pipeline-types";
 import { resolveTranscriptionPython } from "./transcription-config";
-import { venvDir } from "./transcription-setup";
+import { detectGpu, venvDir } from "./transcription-setup";
 
 export interface SetupCheck {
   id: "storage" | "downloads" | "transcription";
@@ -54,6 +54,7 @@ function runtimeError(config: PipelineConfig, platform: NodeJS.Platform): string
   }
   if (!t.model || t.model.startsWith("fluid-")) return "Choose a transcription engine for this machine.";
   if (!["cpu", "cuda"].includes(t.device)) return "Choose CPU or NVIDIA GPU for transcription.";
+  if (t.device === "cuda" && !detectGpu().present) return "No NVIDIA GPU detected. Use CPU settings or install the recommended Whisper engine.";
   if (t.device === "cpu" && !["int8", "float32"].includes(t.computeType)) return "CPU transcription needs int8 or float32 compute.";
   const parakeet = t.model.includes("parakeet");
   const python = resolveTranscriptionPython(t, parakeet);

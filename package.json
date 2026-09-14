@@ -1,7 +1,7 @@
 {
   "name": "concord",
   "productName": "Concord",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "Concord — personal research archive for spoken-word media",
   "author": "mackers",
   "homepage": "https://github.com/mackers/concord",
@@ -15,7 +15,7 @@
     "build:server": "esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --define:process.env.NODE_ENV=\\\"production\\\" --outfile=dist/index.js",
     "build:electron": "esbuild electron/main.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/electron/main.js",
     "build": "pnpm run build:client && pnpm run build:server && pnpm run build:electron",
-    "test": "node --import tsx server/embedding-dimensions.test.ts && node --import tsx server/file-safety.test.ts && node --import tsx client/src/lib/ai-chat-persistence.test.ts && node --import tsx client/src/lib/compare-sources.test.ts && node --import tsx server/library-features.test.ts && node --import tsx server/child-process-registry.test.ts && node --import tsx server/runtime-logs.test.ts && node --import tsx server/pipeline-readiness.test.ts",
+    "test": "node --import tsx server/embedding-dimensions.test.ts && node --import tsx server/file-safety.test.ts && node --import tsx client/src/lib/ai-chat-persistence.test.ts && node --import tsx client/src/lib/compare-sources.test.ts && node --import tsx server/library-features.test.ts && node --import tsx server/child-process-registry.test.ts && node --import tsx server/runtime-logs.test.ts && node --import tsx server/pipeline-readiness.test.ts && node --import tsx server/first-run-config.test.ts && node --import tsx electron/native-picker.test.ts && node --import tsx client/src/lib/transcription-models.test.ts",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc",
     "electron:rebuild": "electron-builder install-app-deps",

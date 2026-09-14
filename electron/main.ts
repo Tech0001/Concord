@@ -1,4 +1,6 @@
-import { app, BrowserWindow, shell, Menu, nativeImage } from "electron";
+import { app, BrowserWindow, shell, Menu, nativeImage, dialog } from "electron";
+import { createNativePicker } from "./native-picker";
+import type { NativePicker } from "../server/native-picker";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -27,6 +29,7 @@ interface ServerHandle {
 type StartServer = (opts: {
   port?: number;
   fallbackToRandom?: boolean;
+  nativePicker?: NativePicker;
 }) => Promise<ServerHandle>;
 
 let serverHandle: ServerHandle | null = null;
@@ -268,6 +271,9 @@ async function ensureServer(): Promise<ServerHandle> {
     const handle = await module.startServer({
       port: pickServerPort(),
       fallbackToRandom: true,
+      nativePicker: createNativePicker(options => mainWindow && !mainWindow.isDestroyed()
+        ? dialog.showOpenDialog(mainWindow, options)
+        : dialog.showOpenDialog(options)),
     });
     serverHandle = handle;
     return handle;

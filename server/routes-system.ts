@@ -10,6 +10,7 @@ import os from "os";
 import crypto from "crypto";
 import { probeYtdlpHealth, userYtdlpPath } from "./yt-dlp-bin";
 import { PipelineSetupRequiredError } from "./pipeline-readiness";
+import type { NativePicker, PickerOpts, PickerResult } from "./native-picker";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,7 +26,7 @@ const execFileAsync = promisify(execFile);
  * cluttering the data-path routes. The `Server` arg is only needed for
  * /api/system/lan-url (which reads the bound port).
  */
-export function registerSystemRoutes(app: Express, pipeline: Pipeline, httpServer: Server): void {
+export function registerSystemRoutes(app: Express, pipeline: Pipeline, httpServer: Server, nativePicker?: NativePicker): void {
   app.get("/api/pipeline/setup", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json(pipeline.getSetupStatus());
@@ -141,14 +142,12 @@ export function registerSystemRoutes(app: Express, pipeline: Pipeline, httpServe
     });
   });
 
-  // Native folder picker. macOS uses AppleScript; Linux falls back to
-  // zenity (kdialog as backup for KDE). Lives server-side because the
-  // app runs locally on the user's machine, so the dialog appears on
-  // their desktop, not a remote one.
+  // The desktop app injects Electron's native dialog. Standalone web-server
+  // launches retain AppleScript / zenity / kdialog as a fallback.
   app.post("/api/dialog/pick-folder", async (req, res) => {
     const { prompt = "Choose folder", defaultPath } = req.body || {};
     try {
-      const pick = await openNativeFolderPicker({ prompt, defaultPath });
+      const pick = await (nativePicker ? nativePicker("directory", { prompt, defaultPath }) : openNativeFolderPicker({ prompt, defaultPath }));
       res.json(pick);
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string };
@@ -167,7 +166,7 @@ export function registerSystemRoutes(app: Express, pipeline: Pipeline, httpServe
   app.post("/api/dialog/pick-file", async (req, res) => {
     const { prompt = "Choose file", defaultPath } = req.body || {};
     try {
-      const pick = await openNativeFilePicker({ prompt, defaultPath });
+      const pick = await (nativePicker ? nativePicker("file", { prompt, defaultPath }) : openNativeFilePicker({ prompt, defaultPath }));
       res.json(pick);
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string };
@@ -183,16 +182,6 @@ export function registerSystemRoutes(app: Express, pipeline: Pipeline, httpServe
 }
 
 // ---- Native picker helpers ------------------------------------------------
-
-interface PickerOpts {
-  prompt: string;
-  defaultPath?: string;
-}
-
-interface PickerResult {
-  path?: string;
-  cancelled?: boolean;
-}
 
 class UnsupportedPickerError extends Error {
   code = "UNSUPPORTED" as const;

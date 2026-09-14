@@ -13,6 +13,7 @@ interface SetupStatus {
   python: { ok: boolean; path: string; version: string | null; error?: string };
   gpu: { present: boolean; name?: string; vramMb?: number; error?: string };
   recommendedEngine: "parakeet" | "whisper";
+  recommendedSettings: { model: string; device: string; computeType: string };
   venv: { path: string; exists: boolean; engine: "parakeet" | "whisper" | null };
   installed: boolean;
 }
@@ -191,12 +192,12 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
               detail={status.python.version || status.python.error || "not found"}
             />
             <DetectRow
-              label="GPU"
+              label="NVIDIA GPU"
               ok={status.gpu.present}
               detail={
                 status.gpu.present
                   ? `${status.gpu.name || "NVIDIA"} (${Math.round((status.gpu.vramMb ?? 0) / 1024)}GB)`
-                  : status.gpu.error || "no NVIDIA GPU"
+                  : "Not detected — CPU available"
               }
               neutral={!status.gpu.present}
             />
@@ -211,11 +212,13 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
             </div>
             <p className="mt-1 text-muted-foreground">
               {recommended === "parakeet"
-                ? "NVIDIA GPU detected with enough VRAM — parakeet is the fastest option (≈100x realtime)."
+                ? "NVIDIA GPU detected with at least 8GB VRAM — Parakeet will use this card."
                 : status.gpu.present
-                  ? "GPU is below the 8GB VRAM floor needed for parakeet — Whisper runs comfortably here."
-                  : "No NVIDIA GPU detected — Whisper runs on CPU. Slower but works on any machine."}
+                  ? "This GPU has less than 8GB VRAM — Whisper is recommended. Use a smaller model or CPU if GPU memory is limited."
+                  : "Whisper will use your CPU. Integrated AMD or Intel graphics are not used for transcription."}
             </p>
+            <p className="mt-2 font-medium">Installation will select: {status.recommendedSettings.model} · {status.recommendedSettings.device === "cuda" ? "NVIDIA GPU" : "CPU"}{recommended === "whisper" ? ` · ${status.recommendedSettings.computeType}` : ""}.</p>
+            <p className="mt-1 text-muted-foreground">Model & hardware settings become available after installation.</p>
           </div>
 
           {/* Python error gate */}

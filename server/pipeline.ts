@@ -39,6 +39,9 @@ import {
 import { channelFolderName, datedBaseName, replaceExtension } from "./naming";
 import { unlinkDerivedFile } from "./file-safety";
 import { pipelineSetupStatus, PipelineSetupRequiredError } from "./pipeline-readiness";
+import { detectGpu, pickRecommendedEngine } from "./transcription-setup";
+import { resolveTranscriptionPython, transcriptionDefaults } from "./transcription-config";
+import { firstRunConfigRepairs } from "./first-run-config";
 import {
   DailyCapReachedError,
   type PipelineConfig,
@@ -111,6 +114,12 @@ export class Pipeline extends EventEmitter {
 
   constructor(_configPath: string = "./pipeline.config.json") {
     super();
+    const stored = getConfigValues();
+    const legacyPython = resolveTranscriptionPython({
+      engine: stored["transcription.engine"], venvPath: stored["transcription.venvPath"], pythonVenv: stored["transcription.pythonVenv"],
+    }, (stored["transcription.model"] || "").includes("parakeet"));
+    const repairs = firstRunConfigRepairs(stored, !!getDb().prepare("SELECT 1 FROM video_queue LIMIT 1").get(), fs.existsSync, fs.existsSync(legacyPython));
+    if (Object.keys(repairs).length) setConfigValues(repairs);
     this.config = this.loadConfig();
     this.persistConfig(this.config);
     this.recoverStuckJobs();
@@ -227,14 +236,12 @@ export class Pipeline extends EventEmitter {
   // ---- Config ----
 
   private loadConfig(): PipelineConfig {
+    const gpu = process.platform === "darwin" ? { present: false } : detectGpu();
+    const recommended = transcriptionDefaults(pickRecommendedEngine(gpu), gpu.present, "", gpu.vramMb);
     const defaults: PipelineConfig = {
       channels: [],
       workingDir: "./downloads",
-      // Intentionally blank — old defaults pointed at a Linux-specific path
-      // (/media/pc/Maac/...) that doesn't exist on a fresh Mac install and
-      // would silently misroute downloads on a new machine. Force the user
-      // to pick a folder in Settings (the Pipeline page surfaces a banner
-      // when these are unset).
+      // Storage belongs to this installation. Choose folders during setup.
       videoSaveDir: "",
       transcriptDir: "",
       qmdVaultDir: null,
@@ -249,16 +256,12 @@ export class Pipeline extends EventEmitter {
       dailyDownloadCap: 200,
       lanAccess: false,
       transcription: {
-        // Platform-aware default. Mac uses FluidAudio (ships with the app);
-        // Linux uses NeMo Parakeet via Python. Whisper isn't a great default
-        // anywhere — it's slower than Parakeet on CUDA and not installed
-        // by default on Mac. The wizard / Settings can still switch.
         model: process.platform === "darwin"
           ? "fluid-parakeet-tdt-v3"
-          : "nvidia/parakeet-tdt-0.6b-v3",
+          : recommended.model,
         language: "en",
-        device: "cuda",
-        computeType: "float16",
+        device: recommended.device,
+        computeType: recommended.computeType,
         beamSize: 5,
         pythonVenv: "./venv/bin/python",
         engine: "",
@@ -274,7 +277,7 @@ export class Pipeline extends EventEmitter {
         keepVideo: true,
         keepAudio: false,
         waitForLiveToFinish: true,
-        diarizationEnabled: true,
+        diarizationEnabled: process.platform === "darwin" || recommended.engine === "parakeet",
         maxRetries: 3,
         retryDelayMinutes: 5,
       },
@@ -310,7 +313,7 @@ export class Pipeline extends EventEmitter {
         if (engine && modelEngine && engine !== modelEngine) {
           model = engine === "parakeet"
             ? (process.platform === "darwin" ? "fluid-parakeet-tdt-v3" : "nvidia/parakeet-tdt-0.6b-v3")
-            : "large-v3";
+            : transcriptionDefaults("whisper", gpu.present, "", gpu.vramMb).model;
         }
         return {
           model,

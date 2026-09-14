@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { VideoDrawer, type VideoDrawerEntry } from "@/components/VideoDrawer";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { visibleModels, defaultModelForPlatform } from "@/lib/transcription-models";
+import { visibleModels, compatibleModelSelection } from "@/lib/transcription-models";
 import {
   AlertCircle,
   CheckCircle,
@@ -222,7 +222,7 @@ export default function Library() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [channels, setChannels] = useState<Channel[]>([]);
   const [installedEngine, setInstalledEngine] = useState<"" | "parakeet" | "whisper">("");
-  const [model, setModel] = useState(savedSettings.model || "large-v3");
+  const [model, setModel] = useState(savedSettings.model || "");
   const [query, setQuery] = useState(savedSettings.query || "");
   const [status, setStatus] = useState(savedSettings.status || "all");
   const [channelId, setChannelId] = useState(savedSettings.channelId || "all");
@@ -264,12 +264,6 @@ export default function Library() {
       .then((r) => r.json())
       .then((d: { platform: NodeJS.Platform }) => {
         setPlatform(d.platform);
-        // Migrate users who never saved a preference off the legacy "large-v3"
-        // default onto whatever actually runs on their machine (FluidAudio on
-        // Mac, whisper-large on Linux). Skip if they explicitly picked something.
-        if (!savedSettings.model) {
-          setModel(defaultModelForPlatform(d.platform));
-        }
       })
       .catch(() => { /* leave null — selector shows all */ });
   }, []);
@@ -331,7 +325,7 @@ export default function Library() {
       setTotal(queue.total || 0);
       setChannels(config.channels || []);
       setInstalledEngine(config.transcription?.engine || "");
-      setModel(current => current || config.transcription?.model || "large-v3");
+      if (config.transcription?.model) setModel(current => compatibleModelSelection(current, config.transcription!.model!));
       // Best-effort batched speaker fetch — silently noop if the speakers
       // tables don't exist yet or the call fails. Doesn't block the page.
       const visible = (queue.recent || []).map(e => ({ videoId: e.video_id, channelId: e.channel_id }));

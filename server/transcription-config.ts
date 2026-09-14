@@ -7,12 +7,12 @@ export interface TranscriptionConfig {
 }
 
 /** Keep setup and execution in agreement, including on machines without CUDA. */
-export function transcriptionDefaults(engine: "parakeet" | "whisper", gpuPresent: boolean, venvPath: string) {
+export function transcriptionDefaults(engine: "parakeet" | "whisper", gpuPresent: boolean, venvPath: string, vramMb?: number) {
   return {
     engine,
     venvPath,
     pythonVenv: path.join(venvPath, "bin", "python"),
-    model: engine === "parakeet" ? "nvidia/parakeet-tdt-0.6b-v3" : gpuPresent ? "large-v3" : "small",
+    model: engine === "parakeet" ? "nvidia/parakeet-tdt-0.6b-v3" : gpuPresent && (vramMb === undefined || vramMb >= 8192) ? "large-v3" : "small",
     device: gpuPresent ? "cuda" : "cpu",
     computeType: gpuPresent ? "float16" : "int8",
   };

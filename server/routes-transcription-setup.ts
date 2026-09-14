@@ -26,7 +26,8 @@ import {
 export function registerTranscriptionSetupRoutes(app: Express, pipeline: Pipeline): void {
   let installing = false;
   const saveEngine = (engine: EngineId, directory: string) => {
-    const defaults = transcriptionDefaults(engine, detectGpu().present, directory);
+    const gpu = detectGpu();
+    const defaults = transcriptionDefaults(engine, gpu.present, directory, gpu.vramMb);
     setConfigValues({
       ...Object.fromEntries(Object.entries(defaults).map(([key, value]) => [`transcription.${key}`, value])),
       "processing.diarizationEnabled": engine === "parakeet",

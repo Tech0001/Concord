@@ -22,6 +22,7 @@ import { backgroundJobs } from "./background-jobs";
 import { registerResearchRoutes } from "./routes-research";
 import { registerRuntimeLogRoutes } from "./routes-runtime-logs";
 import { pipelineSetupGate } from "./pipeline-setup-gate";
+import type { NativePicker } from "./native-picker";
 
 /**
  * Top-level HTTP wire-up. Every actual endpoint lives in a sibling
@@ -30,7 +31,7 @@ import { pipelineSetupGate } from "./pipeline-setup-gate";
  * shutdown cleanup. Adding an endpoint = pick the right sibling
  * (or create a new one) — don't accumulate them here.
  */
-export async function registerRoutes(app: Express): Promise<Server> {
+export async function registerRoutes(app: Express, nativePicker?: NativePicker): Promise<Server> {
   const httpServer = createServer(app);
   const pipeline = getPipeline();
   app.use(pipelineSetupGate(() => pipeline.getSetupStatus()));
@@ -51,7 +52,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // /api/pipeline/status, /api/status, /api/pipeline/config (get+post),
   // /api/pipeline/ytdlp-health, /api/system/*, /api/dialog/pick-folder
   // — all registered in routes-system.ts.
-  registerSystemRoutes(app, pipeline, httpServer);
+  registerSystemRoutes(app, pipeline, httpServer, nativePicker);
   registerResearchRoutes(app, pipeline);
 
   // Durable AI/index work survives page navigation and process restarts.

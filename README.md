@@ -4,7 +4,7 @@ A personal research archive for spoken-word media. Save videos and audio, transc
 
 Concord combines an Electron desktop app with a React interface, a local Node server, and SQLite storage. Linux transcription uses NVIDIA NeMo Parakeet or faster-whisper; Apple Silicon builds use FluidAudio.
 
-**Download:** Open [GitHub Releases](https://github.com/Tech0001/Concord/releases/latest) and choose **Concord-2.4.2.AppImage** under Assets for Linux x86-64. This is the ready-to-run app; the source-code ZIP is for building it yourself. The private repository requires an authorized GitHub account to access downloads.
+**Download:** Open [GitHub Releases](https://github.com/Tech0001/Concord/releases/latest) and choose **Concord-2.4.3.AppImage** under Assets for Linux x86-64. This is the ready-to-run app; the source-code ZIP is for building it yourself. The private repository requires an authorized GitHub account to access downloads.
 
 **Instructions:** [User manual](MANUAL.md) · [PDF manual](Concord_MANUAL.pdf). Linux still needs Python for transcription; the manual covers first-run setup and NVIDIA/CPU choices.
 
@@ -54,7 +54,7 @@ Watch a video alongside its timestamped transcript, identify speakers, and save 
 | System | Transcription path | Setup notes |
 | --- | --- | --- |
 | Linux with NVIDIA GPU, including a single RTX 5090 | Parakeet v3 through NeMo/CUDA | The wizard recommends Parakeet when it detects at least 8 GB VRAM. See the RTX 5090 check below. |
-| Linux with Ryzen integrated graphics, or no NVIDIA GPU | faster-whisper on the CPU | Follow the CPU configuration step below. Integrated Radeon acceleration is not configured by Concord's installer. |
+| Linux with Ryzen integrated graphics, or no NVIDIA GPU | faster-whisper on the CPU | Setup automatically recommends Whisper with CPU processing; see below. Integrated Radeon acceleration is not configured by Concord's installer. |
 | Apple Silicon macOS | Parakeet through FluidAudio | Packaged builds bundle the transcription executable and skip Python setup. |
 
 The CPU brand does not determine CUDA support: an AMD Ryzen CPU can be paired with an NVIDIA GPU. A single compatible NVIDIA card is sufficient. CPU transcription speed depends on the processor, model, and recording length.
@@ -120,7 +120,7 @@ Choose your video and transcript folders, review the download defaults, and clic
 
 Run remains unavailable until setup is complete, and the server also rejects download/transcription requests while setup is incomplete. Completion is stored with your configuration, so it survives restarts and applies to every app window. Existing installations can review their current settings and finish without reinstalling an available engine. AI configuration is optional.
 
-The installer chooses CPU/GPU settings and saves the correct Python path. It creates a dedicated environment under `${XDG_DATA_HOME:-$HOME/.local/share}/concord/venv` and verifies that the engine imports. Recreate this environment on each machine rather than copying a `venv` directory.
+Setup detects the hardware before installation and previews the matching model and CPU/GPU settings. The Model & hardware form appears after an engine is available. The installer saves those settings and the correct Python path. It creates a dedicated environment under `${XDG_DATA_HOME:-$HOME/.local/share}/concord/venv` and verifies that the engine imports. Recreate this environment on each machine rather than copying a `venv` directory.
 
 Finishing setup does not start downloads. **Start / Stop / Check** are available in the header on every page. For a new YouTube source, use **Check** or **Full Scan** to create inventory before **Start**; the first check can queue its existing catalogue. Stop disables scheduled monitoring and does not cancel existing processing. See the [manual's control reference](MANUAL.md#header-controls-and-navigation).
 
@@ -128,7 +128,7 @@ Start with one short recording or video, open the finished transcript, and try a
 
 ### NVIDIA / RTX 5090
 
-Choose **Parakeet** and the `nvidia/parakeet-tdt-0.6b-v3` model. The normal pipeline defaults are `cuda` and `float16`. If this installation previously used CPU transcription, select **NVIDIA GPU** under **Pipeline → Setup → Model & hardware**, or apply the installed engine’s **Use recommended hardware settings** action.
+Choose **Parakeet** and the `nvidia/parakeet-tdt-0.6b-v3` model. On a detected NVIDIA card with at least 8GB VRAM, setup selects Parakeet with `cuda` and `float16`. If this installation previously used CPU transcription, select **NVIDIA GPU** under **Pipeline → Setup → Model & hardware**, or apply the installed engine’s **Use recommended hardware settings** action.
 
 RTX 5090 is a Blackwell GPU. PyTorch introduced Blackwell support in its 2.7 release with CUDA 12.8 wheels; the chosen PyTorch build must include Blackwell support and match the installed driver. See the [PyTorch release notes](https://pytorch.org/blog/pytorch-2-7/).
 
@@ -157,11 +157,13 @@ This checks a real CUDA operation. Follow it with a short Parakeet transcription
 
 Choose **Whisper** in the wizard. Start with `small`, or `tiny` for a quicker installation check. Larger models require more memory and processing time. The [faster-whisper documentation](https://github.com/SYSTRAN/faster-whisper#usage) supports CPU inference with `int8` compute.
 
-On a machine without NVIDIA, installing Whisper automatically selects `small`, CPU processing, `int8` compute, and the installed Python executable. Speaker diarization is disabled for Whisper because Concord's Whisper bridge does not provide it.
+On a machine without NVIDIA, setup previews and installing Whisper automatically selects `small`, CPU processing, `int8` compute, and the installed Python executable. Speaker diarization is disabled for Whisper because Concord's Whisper bridge does not provide it.
 
 For an existing installation, use **Pipeline → Setup → Model & hardware** to select CPU and `int8`, or apply **Use recommended hardware settings** in the installed-engine panel. You can choose another Whisper model in that same view.
 
 This machine is useful for testing installation, downloads, library features, and CPU transcription. It does not validate the NVIDIA/Parakeet path.
+
+Storage starts blank on a fresh installation. Choose folders on this computer in **Pipeline → Setup**. The AppImage uses its built-in native folder/file dialog; it does not require `zenity` or `kdialog`. Those helpers are only needed for browsing from a standalone web-server installation. Updating an AppImage keeps existing settings and library data.
 
 ## Optional AI features
 

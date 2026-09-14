@@ -5,6 +5,7 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { trackChildProcess } from "./child-process-registry";
+import { transcriptionDefaults } from "./transcription-config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -71,6 +72,7 @@ export interface SetupStatus {
   gpu: GpuInfo;
   /** Auto-pick: parakeet if NVIDIA + ≥8GB VRAM, otherwise whisper. */
   recommendedEngine: EngineId;
+  recommendedSettings: ReturnType<typeof transcriptionDefaults>;
   venv: VenvInfo;
   /** True iff a usable venv exists for SOME engine. */
   installed: boolean;
@@ -173,11 +175,19 @@ export function detectPython(): PythonInfo {
 
 /** Probe nvidia-smi. Returns present=false on every non-NVIDIA / non-CUDA
  *  machine — that's fine, the wizard then picks whisper. */
+let gpuCache: { at: number; info: GpuInfo } | undefined;
 export function detectGpu(): GpuInfo {
+  if (gpuCache && Date.now() - gpuCache.at < 30_000) return gpuCache.info;
+  const info = probeGpu();
+  gpuCache = { at: Date.now(), info };
+  return info;
+}
+
+function probeGpu(): GpuInfo {
   const r = spawnSync(
     "nvidia-smi",
     ["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
-    { encoding: "utf-8" },
+    { encoding: "utf-8", timeout: 5_000 },
   );
   if (r.status !== 0 || !r.stdout) {
     return { present: false, error: r.error?.message ?? "nvidia-smi not available" };
@@ -252,6 +262,7 @@ export function getSetupStatus(): SetupStatus {
       python: { ok: false, path: "python3", version: null, versionParts: null, error: "not applicable on macOS (FluidAudio bundled)" },
       gpu: { present: false, error: "not applicable on macOS" },
       recommendedEngine: "whisper", // unused when skipSetup is true
+      recommendedSettings: { ...transcriptionDefaults("whisper", false, ""), model: "fluid-parakeet-tdt-v3" },
       venv: { exists: false, path: venvDir(), engine: null },
       installed: false,
     };
@@ -266,6 +277,7 @@ export function getSetupStatus(): SetupStatus {
     python,
     gpu,
     recommendedEngine,
+    recommendedSettings: transcriptionDefaults(recommendedEngine, gpu.present, venv.path, gpu.vramMb),
     venv,
     installed: venv.exists && venv.engine !== null,
   };

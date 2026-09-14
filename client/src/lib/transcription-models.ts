@@ -40,12 +40,9 @@ export function visibleModels(
   });
 }
 
-/** Pick the sensible per-platform default when nothing is saved.
- *  Mac uses FluidAudio (ships with the app); Linux defaults to Parakeet
- *  since the wizard installs it. */
-export function defaultModelForPlatform(platform: NodeJS.Platform | null): string {
-  if (platform === "darwin") return "fluid-parakeet-tdt-v3";
-  return "nvidia/parakeet-tdt-0.6b-v3";
+/** Reuse a model preference only while it matches the configured engine. */
+export function compatibleModelSelection(current: string, configured: string): string {
+  return current && engineForModel(current) === engineForModel(configured) ? current : configured;
 }
 
 /** Lookup an option's engine family by model value. */

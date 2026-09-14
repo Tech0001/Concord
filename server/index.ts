@@ -6,6 +6,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic, log } from "./vite";
 import { getConfigValues } from "./db";
 import { shutdownManagedChildProcesses } from "./child-process-registry";
+import type { NativePicker } from "./native-picker";
 
 // Process-level safety nets. Without these, a single unhandled promise
 // rejection (or a synchronous throw inside an async callback) takes
@@ -104,6 +105,7 @@ export interface StartServerOptions {
   port?: number;
   /** Reuse this server on an OS-assigned port when the preferred port is busy. */
   fallbackToRandom?: boolean;
+  nativePicker?: NativePicker;
 }
 
 export interface ServerHandle {
@@ -121,7 +123,7 @@ export function startServer(opts: StartServerOptions = {}): Promise<ServerHandle
 }
 
 async function startServerOnce(opts: StartServerOptions): Promise<ServerHandle> {
-  const server = await registerRoutes(app);
+  const server = await registerRoutes(app, opts.nativePicker);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
