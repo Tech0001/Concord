@@ -1,6 +1,6 @@
 # Concord — User Manual
 
-For **Concord v2.4.3**. Reviewed against the app on **September 14, 2026**.
+For **Concord v2.4.4**. Reviewed against the app on **September 14, 2026**.
 
 Concord is a personal research archive for videos, audio recordings, and Markdown documents. Download or import media, create local transcripts, find passages, save notes, compare sources, and ask questions about your archive.
 
@@ -24,16 +24,16 @@ Your library is stored on your computer. Downloads, model installation, and YouT
 
 ### Linux / Omarchy
 
-1. Open [Concord Releases](https://github.com/Tech0001/Concord/releases).
-2. Expand **Assets** and download **Concord-2.4.3.AppImage**. The **Source code** ZIP and tarball contain the project files, not an installed application.
+1. Open [Concord Releases](https://github.com/GodsWildOnes/Concord/releases).
+2. Expand **Assets** and download **Concord-2.4.4.AppImage**. The **Source code** ZIP and tarball contain the project files, not an installed application.
 3. Put the AppImage somewhere you want to keep it, make it executable, and launch it:
 
    ```bash
-   chmod +x Concord-2.4.3.AppImage
-   ./Concord-2.4.3.AppImage
+   chmod +x Concord-2.4.4.AppImage
+   ./Concord-2.4.4.AppImage
    ```
 
-The v2.4.3 release provides a Linux **x86-64 AppImage**. You do not need to build the app, install Node.js, or clone the repository to use this file. It bundles the desktop runtime, FFmpeg, FFprobe, and yt-dlp. It still needs a compatible Linux system and the transcription prerequisites below; it is not a guarantee of compatibility with every distribution.
+The v2.4.4 release provides a Linux **x86-64 AppImage**. You do not need to build the app, install Node.js, or clone the repository to use this file. It bundles the desktop runtime, FFmpeg, FFprobe, and yt-dlp. It still needs a compatible Linux system and the transcription prerequisites below; it is not a guarantee of compatibility with every distribution.
 
 The repository is currently private. Sign into a GitHub account with access to see its releases. Sharing a private release link alone does not grant repository access.
 
@@ -45,7 +45,7 @@ If launch fails, see [Troubleshooting](#troubleshooting). To run or build from s
 
 ### Other packages
 
-The project also has build targets for a Linux `.deb` and an Apple Silicon macOS `.dmg`. Download one only if that asset is actually listed on the release you are using. The v2.4.3 release described here supplies the Linux AppImage; it does not supply an Intel Mac or Windows installer.
+The project also has build targets for a Linux `.deb` and an Apple Silicon macOS `.dmg`. Download one only if that asset is actually listed on the release you are using. The v2.4.4 release described here supplies the Linux AppImage; it does not supply an Intel Mac or Windows installer.
 
 For an Apple Silicon DMG build, open the DMG, drag Concord to Applications, and launch it. The macOS build bundles FluidAudio; its models download on first use. Allow microphone access when prompted if you want to record voice notes.
 
@@ -101,7 +101,7 @@ The sidebar contains the main pages. Collapse it to an icon rail with the top-le
 
 **Start, Stop, and Check are in the header on every page.** On smaller windows their text labels collapse to icons: play, square, and circular arrows. Hover for the action name. The adjacent status shows whether the pipeline is running, stopped, or checking.
 
-| Control | What it does in v2.4.3 |
+| Control | What it does in v2.4.4 |
 | --- | --- |
 | **Start** | Starts processing pending inventory and enables scheduled channel and Watcher checks. For a new YouTube source, run **Check** or **Full Scan** to create its initial inventory first. |
 | **Check** | Checks enabled sources now and queues discoveries. It does not start the processing loop by itself. The first check of a new YouTube source can queue its existing catalogue. |
@@ -262,7 +262,7 @@ Discover and Watchers use a separate YouTube Data API key. Ordinary Pipeline cha
 
 Create a Google Cloud project, enable **YouTube Data API v3**, create an API key restricted to that API, and save it in **Pipeline → AI & extras → YouTube Data API**. Google's [setup documentation](https://developers.google.com/youtube/v3/getting-started) describes the project and credentials steps.
 
-Check the project's actual limits and usage in Google Cloud Console. Google's current default includes 100 `search.list` calls per day; a multi-page Discover search can consume several calls. The quota estimates displayed in Concord v2.4.3 use older accounting, so use the [current Google quota documentation](https://developers.google.com/youtube/v3/getting-started) and your project's console for the authoritative limits.
+Check the project's actual limits and usage in Google Cloud Console. Google's current default includes 100 `search.list` calls per day; a multi-page Discover search can consume several calls. The quota estimates displayed in Concord v2.4.4 use older accounting, so use the [current Google quota documentation](https://developers.google.com/youtube/v3/getting-started) and your project's console for the authoritative limits.
 
 ## Voice notes
 
@@ -302,16 +302,18 @@ Check the version at the bottom of the sidebar. The menu may point to a differen
 First make the file executable and launch it from a terminal to see the error. For a FUSE/mount error, AppImage supports [extract-and-run](https://docs.appimage.org/user-guide/troubleshooting/fuse.html):
 
 ```bash
-./Concord-2.4.3.AppImage --appimage-extract-and-run
+./Concord-2.4.4.AppImage --appimage-extract-and-run
 ```
 
-An Electron sandbox error is different from a FUSE error. On systems where the trusted AppImage cannot initialize its sandbox, `./Concord-2.4.3.AppImage --no-sandbox` is a launch workaround. It disables Chromium's process sandbox, so prefer a working sandbox where your system supports one; see [Electron's explanation](https://www.electronjs.org/docs/latest/tutorial/sandbox). Do not apply a hard-coded `/opt/Concord/chrome-sandbox` ownership command to an AppImage mounted at a different path.
+An Electron sandbox error is different from a FUSE error. On systems where the trusted AppImage cannot initialize its sandbox, `./Concord-2.4.4.AppImage --no-sandbox` is a launch workaround. It disables Chromium's process sandbox, so prefer a working sandbox where your system supports one; see [Electron's explanation](https://www.electronjs.org/docs/latest/tutorial/sandbox). Do not apply a hard-coded `/opt/Concord/chrome-sandbox` ownership command to an AppImage mounted at a different path.
 
 ### Setup cannot find Python, or engine installation fails
 
 Install Python 3.12 with pip and venv support alongside the system interpreter and reopen Setup. A Python 3.14-only installation will not pass the current check. Review the install output and Terminal. Do not copy another machine's virtual environment; install it on this machine.
 
 ### Python path or model does not match the installed engine
+
+For `No module named pip`, update to v2.4.4 or later and retry the installation. Concord checks pip before installing an engine, restores it with Python’s bundled `ensurepip`, and rebuilds its managed environment if repair fails. This preserves the library and model caches. An installation failure now shows guidance for that failure; a valid Python 3.12 installation does not need replacing just because pip is missing.
 
 For an error such as `spawn ./venv/bin/python ENOENT`, open **Pipeline → Setup → Transcription**. Check the installed engine, apply **Use recommended hardware settings**, and review **Model & hardware**. Install or repair the engine if its environment is missing. The wizard saves its managed Python path; a model selection alone is not an engine installation.
 

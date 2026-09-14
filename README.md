@@ -4,7 +4,7 @@ A personal research archive for spoken-word media. Save videos and audio, transc
 
 Concord combines an Electron desktop app with a React interface, a local Node server, and SQLite storage. Linux transcription uses NVIDIA NeMo Parakeet or faster-whisper; Apple Silicon builds use FluidAudio.
 
-**Download:** Open [GitHub Releases](https://github.com/Tech0001/Concord/releases/latest) and choose **Concord-2.4.3.AppImage** under Assets for Linux x86-64. This is the ready-to-run app; the source-code ZIP is for building it yourself. The private repository requires an authorized GitHub account to access downloads.
+**Download:** Open [GitHub Releases](https://github.com/GodsWildOnes/Concord/releases/latest) and choose **Concord-2.4.4.AppImage** under Assets for Linux x86-64. This is the ready-to-run app; the source-code ZIP is for building it yourself. The private repository requires an authorized GitHub account to access downloads.
 
 **Instructions:** [User manual](MANUAL.md) · [PDF manual](Concord_MANUAL.pdf). Linux still needs Python for transcription; the manual covers first-run setup and NVIDIA/CPU choices.
 
@@ -77,7 +77,7 @@ FFmpeg and FFprobe are supplied through platform-specific Node dependencies. You
 ### Install and launch
 
 ```bash
-git clone https://github.com/Tech0001/Concord.git
+git clone https://github.com/GodsWildOnes/Concord.git
 cd Concord
 ```
 
@@ -210,6 +210,7 @@ Databases, media, virtual environments, build output, and local environment file
 
 - **Python not found or too new:** install Python 3.12 alongside the system Python, then reopen setup. With mise, `mise install python@3.12` makes an additional interpreter available to Concord's detector.
 - **CUDA unavailable, unsupported GPU architecture, or “no kernel image”:** run the NVIDIA checks above. Confirm the driver and the PyTorch build inside Concord's own environment support your GPU. A working system Python installation is not sufficient.
+- **Installation reports `No module named pip`:** update to v2.4.4 or later and retry. The installer repairs missing pip automatically, rebuilding only Concord’s Python environment if necessary.
 - **Whisper tries CUDA on a Ryzen system, or cannot find `./venv/bin/python`:** apply the CPU configuration in Pipeline setup as described above.
 - **NeMo warnings appear under `[parakeet:err]`:** this prefix labels stderr, which also carries warnings and progress bars. Check whether chunks continue completing and whether the job ultimately succeeds; a traceback or nonzero exit needs investigation.
 - **YouTube downloads fail:** check yt-dlp health and the update action in the Run pipeline view. Source runs need a usable system yt-dlp or Concord's managed copy.

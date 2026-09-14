@@ -25,7 +25,7 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<ProgressLine[]>([]);
-  const [done, setDone] = useState<{ ok: boolean; engine?: string; error?: string } | null>(null);
+  const [done, setDone] = useState<{ ok: boolean; engine?: "parakeet" | "whisper"; error?: string; hint?: string } | null>(null);
   const logBoxRef = useRef<HTMLDivElement | null>(null);
   // Power-user toggle to surface BOTH engine cards. Default off so the
   // common path is one button click on the recommended engine.
@@ -64,7 +64,8 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
         body: JSON.stringify({ engine }),
       });
       if (!res.ok || !res.body) {
-        throw new Error(`Install failed to start (HTTP ${res.status})`);
+        const failure = await res.json().catch(() => null);
+        throw new Error(failure?.error || `Install failed to start (HTTP ${res.status})`);
       }
 
       const reader = res.body.getReader();
@@ -86,7 +87,7 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
               const event = JSON.parse(line.slice(6));
               if (event.phase === "complete") {
                 completed = true;
-                setDone({ ok: !!event.ok, engine: event.engine, error: event.error });
+                setDone({ ok: !!event.ok, engine, error: event.error, hint: event.hint });
               } else {
                 setProgress(prev => [...prev, { phase: String(event.phase), line: String(event.line) }]);
               }
@@ -96,7 +97,7 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
       }
       if (!completed) throw new Error("The installation connection closed before completion. Check the engine status and retry if needed.");
     } catch (err: any) {
-      setDone({ ok: false, error: err.message });
+      setDone({ ok: false, engine, error: err.message });
     } finally {
       setInstalling(false);
       onBusyChange?.(false);
@@ -320,11 +321,9 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
                 <div className="font-medium">Install failed</div>
                 <p className="mt-1">{done.error}</p>
                 <p className="mt-2 text-[11px]">
-                  Parakeet requires Python 3.10–3.13. On Arch/Omarchy, install a compatible version with
-                  {" "}<code>mise install python@3.12</code>; on Ubuntu use
-                  {" "}<code>sudo apt install python3.12-venv libsndfile1</code>. Then retry.
+                  {done.hint || "Retry the installation. If it fails again, copy the last error lines from this log so the cause can be checked."}
                 </p>
-                <Button size="sm" variant="outline" className="mt-2" onClick={() => startInstall(recommended)}>
+                <Button size="sm" variant="outline" className="mt-2" onClick={() => startInstall(done.engine || recommended)}>
                   Retry
                 </Button>
               </div>

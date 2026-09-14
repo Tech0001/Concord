@@ -1,3 +1,6 @@
 # faster-whisper uses CTranslate2 for inference (no PyTorch dependency,
 # small footprint ~100MB). Works on CPU; auto-uses CUDA if available.
 faster-whisper==1.0.3
+# This version imports requests directly. Newer huggingface-hub releases
+# no longer bring it in transitively, so a clean install must include it.
+requests==2.34.2

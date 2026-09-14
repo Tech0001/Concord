@@ -292,32 +292,34 @@ export interface InstallProgress {
   line: string;
 }
 
-/** Build a venv at the locked path and pip-install the engine's
- *  requirements file. Streams every line of stdout/stderr through
- *  onProgress so the UI can render a live install log. Resolves with
- *  the final python binary path on success; rejects with a descriptive
- *  error on failure. */
-export async function installEngine(
-  engine: EngineId,
+export class TranscriptionSetupError extends Error {
+  constructor(message: string, readonly hint: string) { super(message); }
+}
+
+function hasUsablePip(pythonPath: string): boolean {
+  const result = spawnSync(pythonPath, ["-m", "pip", "--version"], { encoding: "utf8", timeout: 10_000 });
+  return result.status === 0 && !result.error;
+}
+
+/** Repair the managed environment before installing either engine. Python
+ *  can work even when an interrupted venv creation left pip missing. */
+export async function prepareTranscriptionEnvironment(
   python: PythonInfo,
   onProgress: (event: InstallProgress) => void,
-): Promise<{ pythonPath: string }> {
+): Promise<string> {
   if (!python.ok) {
     const msg = python.error || "python3 not available";
     onProgress({ phase: "error", line: msg });
-    throw new Error(msg);
+    throw new TranscriptionSetupError(msg, "Install Python 3.10–3.13, then retry. On Arch/Omarchy, use mise install python@3.12.");
   }
 
   const dir = venvDir();
   fs.mkdirSync(path.dirname(dir), { recursive: true });
-
-  // Step 1: create the venv. Virtual environments are not portable between
-  // operating-system installs: their interpreter links and console-script
-  // shebangs contain absolute paths. Remove only Concord's dependency venv
-  // when it is present but unusable; the database and model caches live
-  // outside this directory and are left untouched.
   const venvPython = path.join(dir, "bin", "python");
-  if (!isUsablePython(venvPython)) {
+  // An interrupted repair must not retain a successful install marker.
+  fs.rmSync(path.join(dir, ENGINE_MARKER), { force: true });
+
+  const createEnvironment = async () => {
     if (fs.existsSync(dir)) {
       onProgress({
         phase: "venv",
@@ -326,25 +328,62 @@ export async function installEngine(
       fs.rmSync(dir, { recursive: true, force: true });
     }
     onProgress({ phase: "venv", line: `Creating venv at ${dir}` });
-    await runStreaming(python.path, ["-m", "venv", dir], onProgress, "venv");
+    // Bootstrap pip explicitly, so a failure is diagnosed as a pip problem
+    // and the same repair path handles both fresh and reused environments.
+    await runStreaming(python.path, ["-m", "venv", "--without-pip", dir], onProgress, "venv");
     if (!isUsablePython(venvPython)) {
       const msg = `Virtual environment was created, but its Python interpreter is not usable: ${venvPython}`;
       onProgress({ phase: "error", line: msg });
       throw new Error(msg);
     }
-  } else {
-    onProgress({ phase: "venv", line: `Reusing existing venv at ${dir}` });
-  }
+  };
+  const bootstrapPip = async () => {
+    onProgress({ phase: "pip", line: "Restoring pip with Python's bundled ensurepip…" });
+    await runStreaming(venvPython, ["-m", "ensurepip", "--upgrade", "--default-pip"], onProgress, "pip");
+    if (!hasUsablePip(venvPython)) throw new Error(`pip is still unavailable in ${venvPython} after ensurepip.`);
+  };
 
-  // Step 2: pip install -r requirements
-  // An interrupted repair must not retain a successful install marker.
-  fs.rmSync(path.join(dir, ENGINE_MARKER), { force: true });
+  try {
+    const reused = isUsablePython(venvPython);
+    if (reused) onProgress({ phase: "venv", line: `Reusing existing venv at ${dir}` });
+    else await createEnvironment();
+    if (!hasUsablePip(venvPython)) {
+      onProgress({ phase: "pip", line: "pip is missing or broken; repairing the transcription environment." });
+      try { await bootstrapPip(); }
+      catch (error) {
+        if (!reused) throw error;
+        // A copied or damaged base Python may not have ensurepip. Recreate
+        // only Concord's dependency venv with the supported Python detected
+        // on this machine. Library data and model caches are outside it.
+        onProgress({ phase: "venv", line: "Could not repair the existing environment; recreating it with the detected Python." });
+        await createEnvironment();
+        await bootstrapPip();
+      }
+    }
+    onProgress({ phase: "pip", line: "pip is ready." });
+    return venvPython;
+  } catch (error) {
+    throw new TranscriptionSetupError(
+      `Could not prepare Concord's Python environment: ${error instanceof Error ? error.message : String(error)}`,
+      "Check the last error in the install log. If Python's venv or ensurepip module is missing, repair that Python installation. On Arch/Omarchy, reinstall Python 3.12 with mise; on Ubuntu, install the matching python3.12-venv package when using Python 3.12. Then retry.",
+    );
+  }
+}
+
+/** Prepare Python and pip, install the engine, and mark success only after
+ *  its runtime imports. Stream progress throughout the installation. */
+export async function installEngine(
+  engine: EngineId,
+  python: PythonInfo,
+  onProgress: (event: InstallProgress) => void,
+): Promise<{ pythonPath: string }> {
   const reqs = path.join(enginesDir(), `requirements-${engine}.txt`);
   if (!fs.existsSync(reqs)) {
     const msg = `Requirements file missing: ${reqs}`;
     onProgress({ phase: "error", line: msg });
     throw new Error(msg);
   }
+  const venvPython = await prepareTranscriptionEnvironment(python, onProgress);
   onProgress({ phase: "pip", line: `pip install -r ${reqs}` });
   await runStreaming(
     venvPython,
@@ -357,7 +396,7 @@ export async function installEngine(
   await runStreaming(venvPython, ["-c", engine === "parakeet" ? "import nemo.collections.asr" : "from faster_whisper import WhisperModel"], onProgress, "pip");
 
   // Step 3: write the marker only after the installed runtime imports.
-  fs.writeFileSync(path.join(dir, ENGINE_MARKER), engine + "\n");
+  fs.writeFileSync(path.join(venvDir(), ENGINE_MARKER), engine + "\n");
   onProgress({ phase: "marker", line: `Recorded engine: ${engine}` });
 
   onProgress({ phase: "done", line: `Installed ${engine}` });

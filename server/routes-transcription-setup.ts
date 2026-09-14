@@ -10,6 +10,7 @@ import {
   installEngine,
   uninstallEngine,
   venvDir,
+  TranscriptionSetupError,
   type EngineId,
   type InstallProgress,
 } from "./transcription-setup";
@@ -83,7 +84,7 @@ export function registerTranscriptionSetupRoutes(app: Express, pipeline: Pipelin
       send({ phase: "complete", ok: true, pythonPath: result.pythonPath, engine });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      send({ phase: "complete", ok: false, error: msg });
+      send({ phase: "complete", ok: false, engine, error: msg, hint: err instanceof TranscriptionSetupError ? err.hint : undefined });
     } finally {
       installing = false;
       setRuntimeInstalling(false);
