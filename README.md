@@ -4,6 +4,10 @@ A personal research archive for spoken-word media. Save videos and audio, transc
 
 Concord combines an Electron desktop app with a React interface, a local Node server, and SQLite storage. Linux transcription uses NVIDIA NeMo Parakeet or faster-whisper; Apple Silicon builds use FluidAudio.
 
+**Download:** Open [GitHub Releases](https://github.com/Tech0001/Concord/releases/latest) and choose **Concord-2.4.2.AppImage** under Assets for Linux x86-64. This is the ready-to-run app; the source-code ZIP is for building it yourself. The private repository requires an authorized GitHub account to access downloads.
+
+**Instructions:** [User manual](MANUAL.md) · [PDF manual](Concord_MANUAL.pdf). Linux still needs Python for transcription; the manual covers first-run setup and NVIDIA/CPU choices.
+
 ![Concord Library showing saved videos, speaker labels, and processing status](docs/screenshots/library.png)
 
 ## What you can do
@@ -118,7 +122,9 @@ Run remains unavailable until setup is complete, and the server also rejects dow
 
 The installer chooses CPU/GPU settings and saves the correct Python path. It creates a dedicated environment under `${XDG_DATA_HOME:-$HOME/.local/share}/concord/venv` and verifies that the engine imports. Recreate this environment on each machine rather than copying a `venv` directory.
 
-Finishing setup does not start downloads. Start with one short recording or video, open the finished transcript, and try a timestamp link before queuing a whole channel. Models download on first use, so that first transcription takes longer.
+Finishing setup does not start downloads. **Start / Stop / Check** are available in the header on every page. For a new YouTube source, use **Check** or **Full Scan** to create inventory before **Start**; the first check can queue its existing catalogue. Stop disables scheduled monitoring and does not cancel existing processing. See the [manual's control reference](MANUAL.md#header-controls-and-navigation).
+
+Start with one short recording or video, open the finished transcript, and try a timestamp link before queuing a whole channel. Models download on first use, so that first transcription takes longer.
 
 ### NVIDIA / RTX 5090
 
