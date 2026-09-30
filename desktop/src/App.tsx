@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import "./style.css";
 import {
   Library,
   Search,

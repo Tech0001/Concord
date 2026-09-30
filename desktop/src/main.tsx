@@ -4,9 +4,8 @@ import "./fonts/fonts.css";
 import "./theme/concord.css";
 import "./theme/tokens.css";
 import "./theme/base.css";
-import "./style.css";
+import "./ui/ui.css";
 import { applyAppearance, injectThemes, loadAppearance, saveAppearance } from "./theme/theme.ts";
-import App from "./App";
 
 async function boot() {
   const params = new URLSearchParams(location.search);
@@ -25,7 +24,8 @@ async function boot() {
   }
   injectThemes();
   applyAppearance(loadAppearance());
-  const Root = import.meta.env.DEV && params.has("gallery") ? (await import("./dev/Gallery.tsx")).default : App;
+  const Root =
+    import.meta.env.DEV && params.has("gallery") ? (await import("./dev/Gallery.tsx")).default : (await import("./App.tsx")).default;
   createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <Root />
