@@ -7,6 +7,7 @@ import { api } from "./lib/ipc.ts";
 import { count } from "./lib/format.ts";
 import { useRoute } from "./lib/router.ts";
 import { useStoredState } from "./lib/storage.ts";
+import { useShortcuts } from "./lib/shortcuts.ts";
 import { PHONE, RAIL, useMediaQuery } from "./lib/media-query.ts";
 import { ToastProvider, useToast } from "./ui/Toasts.tsx";
 import { Empty } from "./ui/Empty.tsx";
@@ -79,16 +80,7 @@ function Shell() {
     };
   }, [available, refresh, toast]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  useShortcuts([{ key: "k", mod: true, global: true, run: () => setPaletteOpen((v) => !v) }]);
 
   const pageKey = route.page === "recording" ? `recording:${route.id}` : route.page === "documents" ? `documents:${route.id ?? ""}` : route.page;
   useEffect(() => {
