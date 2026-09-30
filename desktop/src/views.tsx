@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { api } from "./lib/ipc.ts";
 import {
   AudioLines,
   Library,
@@ -33,7 +33,8 @@ import type {
   Note,
   Research,
   Runtime,
-} from "./types";
+  SearchHit,
+} from "./lib/types.ts";
 export const time = (n: number) => {
   const v = Math.max(0, Math.floor(n || 0));
   return v >= 3600
@@ -101,9 +102,10 @@ function RecordingCover({ media, index }: { media: Media; index: number }) {
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting)) return;
         observer.disconnect();
-        void invoke<string | null>("thumbnail_file", { id: media.id })
-          .then((path) => {
-            if (alive && path) setSource(convertFileSrc(path));
+        void api
+          .thumbnail(media.id)
+          .then((url) => {
+            if (alive && url) setSource(url);
           })
           .catch(() => {});
       },
@@ -162,11 +164,8 @@ export function LibraryView({
     setLoading(true);
     const timer = setTimeout(
       () =>
-        invoke<{
-          items: Media[];
-          total: number;
-          channels: { channel: string }[];
-        }>("library", { query, channel, offset })
+        api
+          .libraryLegacy(query, channel, offset)
           .then((r) => {
             if (alive) {
               setItems(r.items);
@@ -452,7 +451,8 @@ export function Player({
   const video = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     let alive = true;
-    invoke<Recording>("recording", { id })
+    api
+      .recording(id)
       .then((v) => {
         if (alive) setData(v);
       })
@@ -466,7 +466,8 @@ export function Player({
     setSource("");
     setMediaError("");
     setClock(at);
-    invoke<string>("media_file", { id })
+    api
+      .mediaUrl(id)
       .then((path) => {
         if (alive) setSource(path);
       })
@@ -670,11 +671,8 @@ export function Player({
                 className="primary"
                 disabled={!name.trim()}
                 onClick={() =>
-                  invoke("assign_speaker", {
-                    id,
-                    local: assigning.local_id,
-                    name,
-                  })
+                  api
+                    .assignSpeaker(id, assigning.local_id, name)
                     .then(() => {
                       setAssigning(null);
                       onRefresh();
@@ -705,23 +703,15 @@ export function SearchView({
   onOpen: (id: string, at: number) => void;
   onError: (s: string) => void;
 }) {
-  const [hits, setHits] = useState<
-    {
-      id: string;
-      title: string;
-      channel: string;
-      text: string;
-      start: number;
-      speaker: string;
-    }[]
-  >([]);
+  const [hits, setHits] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     let alive = true;
     setLoading(true);
     const timer = setTimeout(
       () =>
-        invoke<typeof hits>("search", { query })
+        api
+          .search(query)
           .then((r) => {
             if (alive) setHits(r);
           })
@@ -812,7 +802,8 @@ export function SpeakerView({
   const [items, setItems] = useState<Speaker[]>([]);
   const [query, setQuery] = useState("");
   useEffect(() => {
-    invoke<Speaker[]>("speakers")
+    api
+      .speakers()
       .then(setItems)
       .catch((e) => onError(String(e)));
   }, [revision]);
@@ -912,9 +903,8 @@ export function Documents({
               className="document-row panel"
               key={d.id}
               onClick={() =>
-                invoke<{ title: string; body: string }>("document", {
-                  id: d.id,
-                })
+                api
+                  .document(d.id)
                   .then(setDoc)
                   .catch((e) => onError(String(e)))
               }
@@ -1067,7 +1057,8 @@ export function Settings({
 }) {
   const [runtime, setRuntime] = useState<Runtime>();
   const check = () =>
-    invoke<Runtime>("speech_status")
+    api
+      .speechStatus()
       .then(setRuntime)
       .catch((e) => onError(String(e)));
   useEffect(() => {

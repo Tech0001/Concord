@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "desktop": "tauri dev",
     "package": "bash ../scripts/package-next-linux.sh",
-    "test": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:ts": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",

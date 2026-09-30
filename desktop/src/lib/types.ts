@@ -1,0 +1,128 @@
+export type ReviewState = "unreviewed" | "in_review" | "reviewed";
+export type LibrarySort = "newest" | "oldest" | "opened" | "words" | "title" | "longest";
+export type SpeakerSummary = { name: string; color: string | null; airtime: number };
+export type Media = {
+  id: string;
+  title: string;
+  channel: string;
+  date: string;
+  duration: number;
+  path: string | null;
+  transcript: string | null;
+  words: number;
+  status: string;
+  kind: "audio" | "video";
+  starred: number;
+  review_state: ReviewState;
+  position: number;
+  opened_at: string | null;
+  speaker_count?: number;
+  speakers?: SpeakerSummary[];
+  speaker_total?: number;
+  /** Transitional: returned by the pre-filter library query until the Library rebuild. */
+  speaker_names?: string | null;
+};
+export type Segment = { start: number; end: number; text: string; speaker?: string | null };
+export type Assignment = {
+  local_id: string;
+  speaker_id: string | null;
+  name: string | null;
+  color: string | null;
+  airtime: number;
+};
+export type NoteMarker = { id: string; title: string; start: number; end: number | null };
+export type Recording = {
+  media: Media;
+  segments: Segment[];
+  assignments: Assignment[];
+  notes: NoteMarker[];
+  model: string;
+};
+export type LibraryFilter = {
+  query: string;
+  channel: string;
+  kind: "" | "audio" | "video";
+  transcribed: "" | "yes" | "no";
+  starred: boolean;
+  review: "" | ReviewState;
+  sort: LibrarySort;
+  offset: number;
+  limit: 60 | 120 | 240;
+};
+export type LibraryPage = {
+  items: Media[];
+  total: number;
+  transcribed: number;
+  channels: { channel: string }[];
+};
+export type Overview = {
+  media: number;
+  speakers: number;
+  notes: number;
+  docs: number;
+  dataRoot: string;
+  legacyDatabase: string;
+};
+export type Speaker = {
+  id: string;
+  name: string;
+  color: string | null;
+  notes: string | null;
+  recordings: number;
+  airtime: number;
+};
+export type Note = {
+  id?: string;
+  title: string;
+  body: string;
+  quote?: string;
+  media_id?: string | null;
+  media_title?: string | null;
+  start?: number | null;
+  end?: number | null;
+  created_at?: string;
+};
+export type Research = {
+  notes: Note[];
+  links: { source: string; target: string; kind: string }[];
+  docs: { id: string; title: string; length: number }[];
+};
+export type Job = {
+  id: string;
+  media_id: string;
+  title: string;
+  status: string;
+  message: string;
+  created_at?: string;
+};
+export type Runtime = {
+  ready: boolean;
+  device: string;
+  gpu?: string;
+  modelsReady: boolean;
+  voiceMatchingReady: boolean;
+  model: string;
+  models: string;
+  python: string;
+};
+export type SearchHit = {
+  id: string;
+  title: string;
+  channel: string;
+  date: string;
+  text: string;
+  marked: string;
+  start: number;
+  speaker: string | null;
+  speaker_name: string | null;
+  speaker_color: string | null;
+};
+export type PaletteResults = {
+  recordings: { id: string; title: string; channel: string; date: string }[];
+  speakers: { id: string; name: string; color: string | null }[];
+  notes: { id: string; title: string; media_id: string | null; start: number | null }[];
+  documents: { id: string; title: string }[];
+};
+export type MediaFormat = "m4a" | "mp3" | "mp4-fast" | "mp4-accurate";
+export type TextFormat = "txt" | "md" | "srt";
+export type DocumentBody = { id: string; title: string; body: string };

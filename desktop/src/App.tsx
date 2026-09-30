@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   Library,
   Search,
@@ -19,7 +17,9 @@ import {
 } from "lucide-react";
 import icon from "../../assets/brand/concord-icon.svg";
 import wordmark from "../../assets/brand/concord-wordmark.svg";
-import type { Overview, Note, Research, Job } from "./types";
+import type { Note, Research, Job } from "./lib/types.ts";
+import type { Overview } from "./lib/types.ts";
+import { api } from "./lib/ipc.ts";
 import {
   LibraryView,
   Player,
@@ -79,24 +79,27 @@ export default function App() {
     }
   };
   useEffect(() => {
-    if (!isTauri()) {
+    if (!api.available()) {
       setError(
         "Open Concord Next as a desktop app with pnpm --dir desktop desktop.",
       );
       return;
     }
-    invoke<Overview>("overview")
+    api
+      .overview()
       .then(setOverview)
       .catch((e) => setError(String(e)));
-    invoke<Research>("research")
+    api
+      .research()
       .then(setResearch)
       .catch((e) => setError(String(e)));
   }, [revision]);
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!api.available()) return;
     let alive = true;
     const poll = () =>
-      invoke<Job[]>("jobs")
+      api
+        .jobs()
         .then((data) => {
           if (!alive) return;
           setJobs(data);
@@ -126,51 +129,18 @@ export default function App() {
   };
   const addMedia = () =>
     act(async () => {
-      const result = await open({
-        multiple: true,
-        title: "Add recordings",
-        filters: [
-          {
-            name: "Audio and video",
-            extensions: [
-              "mp4",
-              "mkv",
-              "webm",
-              "mov",
-              "ogg",
-              "wav",
-              "mp3",
-              "m4a",
-              "flac",
-              "aac",
-              "opus",
-            ],
-          },
-        ],
-      });
-      if (!result) return;
-      const count = await invoke<number>("import_media", {
-        paths: Array.isArray(result) ? result : [result],
-      });
+      const result = await api.pickMedia();
+      if (!result.length) return;
+      const count = await api.importMedia(result);
       refresh();
       go("library");
       setNotice(`${count} recordings added`);
     });
   const importLegacy = (path?: string) =>
     act(async () => {
-      const chosen =
-        path ||
-        (await open({
-          title: "Choose your Concord library database",
-          filters: [
-            {
-              name: "Concord library",
-              extensions: ["db", "sqlite", "sqlite3"],
-            },
-          ],
-        }));
-      if (!chosen || Array.isArray(chosen)) return;
-      const result = await invoke<Overview>("import_legacy", { path: chosen });
+      const chosen = path || (await api.pickDatabase())[0];
+      if (!chosen) return;
+      const result = await api.importLegacy(chosen);
       setOverview(result);
       refresh();
       setNotice(
@@ -179,14 +149,14 @@ export default function App() {
     });
   const start = (id: string) =>
     act(async () => {
-      await invoke("transcribe", { id, device });
+      await api.transcribe(id, device);
       setJobOpen(true);
       setNotice("Transcription started");
     });
   const saveNote = () =>
     act(async () => {
       if (!note) return;
-      await invoke("save_note", { note });
+      await api.saveNote(note);
       setNote(null);
       refresh();
       setNotice("Note saved");
@@ -370,19 +340,9 @@ export default function App() {
                   onError={setError}
                   onImport={() =>
                     act(async () => {
-                      const paths = await open({
-                        multiple: true,
-                        filters: [
-                          {
-                            name: "Text and Markdown",
-                            extensions: ["md", "txt", "markdown"],
-                          },
-                        ],
-                      });
-                      if (paths) {
-                        await invoke("import_documents", {
-                          paths: Array.isArray(paths) ? paths : [paths],
-                        });
+                      const paths = await api.pickDocuments();
+                      if (paths.length) {
+                        await api.importDocuments(paths);
                         refresh();
                       }
                     })
@@ -437,7 +397,7 @@ export default function App() {
                   onOpen={setNote}
                   onLink={(source, target) =>
                     act(async () => {
-                      await invoke("link_notes", { source, target });
+                      await api.linkNotes(source, target);
                       refresh();
                     })
                   }
@@ -486,7 +446,7 @@ export default function App() {
                   className="ghost"
                   onClick={() =>
                     act(async () => {
-                      await invoke("cancel_transcription");
+                      await api.cancelTranscription();
                     })
                   }
                 >
