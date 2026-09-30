@@ -10,7 +10,38 @@ Runtime revision: `4c101bc7113f49101a3e11d2c994c519f41939f6`.
 Model revision: `f667ed73aee57d40cc39428eb768b4fd87a0a29e`.
 Model file: 107,012,128 bytes (about 102 MiB).
 
-## Native inference
+## Primary test: unchanged Concord pipeline, Nemotron turn detector
+
+`concord_pipeline.py` calls the production `diarize()` function unchanged,
+substituting only the turn-detection model object in the test process. The
+usual chunking, overlap deduplication, full-turn embeddings, 0.65 greedy
+grouping, short-turn continuation, minor-speaker cleanup, and profile generation
+all run in the existing code. Only the isolated lab database is written.
+
+| Recording | Saved Concord profiles / named people | New groups | Reference people represented | Full pipeline seconds |
+| --- | ---: | ---: | ---: | ---: |
+| 2h 15m, 10 people | 10 / 10 | 12 | 10 / 10 | 44.28 |
+| 2h 59m, 11 people | 12 / 11 | 11 | 11 / 11 | 58.06 |
+
+The new model works with Concord's existing approach to exceed eight global
+speaker identities. The 11-person recording yields 11 groups, each dominated
+by a different existing reference name. The first recording retains groups
+corresponding to all 10 names but has two extra groups to review. One extra
+group has very little overlap with the old transcript, so its identity cannot
+be established from the reference alone. No mixed group meets the report's
+substantial-mixing criterion. These are comparisons with saved labels, not a
+fresh old-model speed benchmark or a hand-labelled accuracy measurement.
+
+Native turn detection took 28.64 / 41.58 seconds and used 173 MiB of sampled
+worker VRAM. TitaNet's peak PyTorch reserved memory was 1,644 / 1,070 MiB;
+allocator figures exclude CUDA context overhead and are not total pipeline
+memory. Each run also emitted Concord's normal 192-dimensional speaker
+profiles in `concord.diar.json`.
+
+These results supersede the earlier alternative-grouping tests below for
+assessing a model replacement. A real 16-person recording remains untested.
+
+## Earlier standalone native inference
 
 | Recording | Native seconds | Output identities | Sampled worker VRAM | Sampled worker RAM |
 | --- | ---: | ---: | ---: | ---: |
@@ -26,7 +57,7 @@ streaming, but full-file host memory is not constant.
 The 60-second smoke test produced identical timestamps and speaker IDs on
 CPU and Vulkan. This does not establish whole-recording CPU/GPU equivalence.
 
-## Windowed inference and global voice grouping
+## Earlier windowed inference with alternative voice grouping
 
 Sessions reset every 120 seconds, with 10 seconds of overlap. TitaNet supplies
 192-dimensional voice embeddings. The candidate averages embeddings per
@@ -58,17 +89,18 @@ tracks, while the second merges two reference voices. A single more permissive
 threshold is therefore not a reliable fix. Earlier per-turn greedy grouping
 fragmented voices even more; its outputs remain available for comparison.
 
-## Decision before the app rebuild
+## Limitations of the earlier alternative grouping
 
-The small native diarizer is a promising backend for the rebuild. The
-windowed/global-grouping architecture can represent more than eight voices,
-but this experiment does not yet deliver clean 10/11-person identities.
+The small native diarizer is a promising backend for the rebuild. These
+earlier experiments changed grouping and cleanup as well as the model;
+their results did not establish how a direct replacement would behave.
+The alternative-grouping runs did not deliver clean 10/11-person identities.
 It should not be advertised as validated 16-person recognition. A synthetic
 16-profile test verifies grouping capacity only; a real 16-person recording
 and listening review would be needed to assess that claim.
 
-Next work should improve voice grouping and review the listening samples,
-including short speakers and overlapping speech. Hand-labelled reference
+Listening review should include short speakers and overlapping speech.
+Hand-labelled reference
 intervals are needed for a meaningful diarization error rate. The local report
 contains playable examples and all raw outputs for that review. No application
 UI, production database, or transcription backend was changed.

@@ -372,7 +372,7 @@ def report(args):
     rows = db.execute(query).fetchall()
     content = ['<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Concord diarization lab</title>',
                '<style>body{font:16px system-ui;max-width:1200px;margin:30px auto;padding:0 20px;background:#15171c;color:#eee}table{border-collapse:collapse;width:100%}td,th{padding:10px;border-bottom:1px solid #444;text-align:left}audio{width:230px}small{color:#bbc}summary{cursor:pointer;padding:12px 0}h2{margin-top:35px}a{color:#9bd0ff}.scroll{overflow-x:auto}details{margin:16px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>',
-               '<h1>Concord diarization lab</h1><p>Native Nemotron has eight speaker slots. Windowed inference plus TitaNet groups voices across the recording without forcing a speaker count. This is a model experiment; the application has not been rebuilt.</p>',
+               '<h1>Concord diarization lab</h1><p><strong>Current test: Concord’s existing pipeline with Nemotron replacing the turn-detection model.</strong> Chunking, voice matching, and cleanup use Concord’s existing code. This is running in the isolated test environment.</p>',
                '<p>The old transcript is an automatic comparison reference, not hand-labelled ground truth. Matching counts or labels does not establish accuracy. Listen for merged people, split voices, brief speakers, and overlap.</p>',
                '<p>“Substantial” means at least 15 seconds of detected speech, solely to make review manageable. Brief and unresolved tracks are retained in the raw output. An unresolved track is not an identified person. Native worker memory excludes TitaNet, transcription, and the desktop application.</p>']
 
@@ -392,15 +392,27 @@ def report(args):
             content.append(f"<tr><td><a href=\"#{html.escape(row['id'])}\">{html.escape(row['case_id'])} / {html.escape(label)}</a></td><td>{row['expected_speakers']}</td><td>{substantial} / {m['speaker_count']}</td><td>{m.get('unresolved_tracks', 0)}</td><td>{ref['people_dominant_in_a_track_of_at_least_15_seconds']} / {ref['named_people_in_old_transcript']}</td><td>{mixed} tracks / {split} people</td><td>{native.get('native_seconds','—')}</td><td>{native.get('sampled_peak_native_vram_mib','—')} / {native.get('sampled_peak_native_rss_mib','—')}</td></tr>")
         content.append('</table></div>')
 
-    candidates = [r for r in rows if r['mode'] == 'native' or json.loads(r['config']).get('grouping_strategy') == 'tracks']
+    candidates = [r for r in rows if r['mode'] == 'concord-pipeline']
+    if candidates:
+        content.append('<h2>Same Concord processing, new model</h2><p>A speaker label is the program’s guess at one person. Compare the expected number of people with the output labels, then listen to the samples to check that each label stays with the same person.</p>')
+        content.append('<table><tr><th>Recording</th><th>People you reported</th><th>Saved Concord speaker groups</th><th>New speaker groups</th><th>People from existing labels represented</th><th>Full pipeline seconds</th></tr>')
+        for row in candidates:
+            m = json.loads(row['metrics'])
+            ref = m['reference_comparison']
+            profiles = db.execute('SELECT baseline_profiles FROM cases WHERE id=?', (row['case_id'],)).fetchone()[0]
+            saved_groups = len(json.loads(profiles))
+            content.append(f"<tr><td><a href=\"#{html.escape(row['id'])}\">{html.escape(row['case_id'])}</a></td><td>{row['expected_speakers']}</td><td>{saved_groups}</td><td>{m['speaker_count']}</td><td>{ref['people_dominant_in_a_track_of_at_least_15_seconds']} / {ref['named_people_in_old_transcript']}</td><td>{m.get('wall_seconds', '—')}</td></tr>")
+        content.append('</table><details><summary>Processing measurements</summary>')
     summary_table(candidates)
-    content.append('<details><summary>Earlier turn-by-turn grouping and ungrouped windows</summary>')
+    if candidates:
+        content.append('</details>')
+    content.append('<details><summary>Earlier experiments using different processing</summary><p>These earlier tests changed voice grouping and cleanup. Use the existing-pipeline results above to assess the model replacement.</p>')
     summary_table([r for r in rows if r not in candidates])
     content.append('</details>')
     for row in rows:
         metrics, config = json.loads(row['metrics']), json.loads(row['config'])
         folder = root / 'runs' / row['id']
-        featured = row['mode'] == 'native' or (config.get('grouping_strategy') == 'tracks' and config.get('cosine_distance_threshold') == 0.65)
+        featured = row['mode'] == 'concord-pipeline'
         ref = metrics['reference_comparison']
         content.append(f'<details id="{html.escape(row["id"])}"'+(' open' if featured else '')+f'><summary><strong>{html.escape(row["id"])}</strong></summary>')
         content.append(f"<p>Expected: {row['expected_speakers']} people · Output: {metrics['speaker_count']} tracks · {html.escape(metrics.get('count_kind', 'clustered identities'))}</p>")

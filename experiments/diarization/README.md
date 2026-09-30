@@ -42,7 +42,34 @@ changed file requires a new case. `--root /path/to/lab` precedes the subcommand
 and selects a separate lab directory. The harness rejects archive aliases and
 production-schema databases at its output path.
 
-## Run native and extended experiments
+## Use Concord's existing pipeline with Nemotron
+
+This is the primary replacement test. It calls the existing production
+`diarize()` function with a process-local adapter for the turn-detection model:
+
+```bash
+~/.local/share/concord/venv/bin/python experiments/diarization/concord_pipeline.py \
+  --cases meeting-10 meeting-11 --device vulkan:0
+```
+
+The existing function performs its usual 120-second chunking, 10-second
+overlap deduplication, full-turn TitaNet embeddings, 0.65 greedy grouping,
+previous-speaker handling for short turns, minor-speaker cleanup, and voice
+profile generation. The adapter only translates native Nemotron output into
+the per-chunk format that function already consumes. The production script
+is imported unchanged; the model substitution ends with the scoped test call.
+Only the isolated lab database and lab files are written.
+
+Each run records the production script's hash and saves its normal
+`concord.diar.json`, including the same 192-dimensional speaker profiles.
+The native worker's RAM/VRAM and PyTorch embedding allocator memory are measured
+separately. Their accounting is different and neither is total app memory.
+
+## Earlier native and alternative-grouping experiments
+
+These exploratory tests changed grouping and cleanup behavior as well as the
+turn detector. They are retained for reference, but are not the direct
+replacement test above.
 
 ```bash
 python experiments/diarization/lab.py run --case meeting-10 --mode native --device vulkan:0
