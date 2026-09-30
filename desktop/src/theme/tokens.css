@@ -1,0 +1,52 @@
+/* App tokens derived from the theme. Themes never define these. */
+:root {
+  --font-ui: var(--font-sans);
+  --font-reading: var(--font-serif);
+  --font-code: var(--font-mono);
+  --text-xs: 11px;
+  --text-sm: 12.5px;
+  --text-md: 13.5px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  --reading-size: 15.5px;
+  --r-1: clamp(3px, calc(var(--radius) * 0.4), 6px);
+  --r-2: clamp(5px, calc(var(--radius) * 0.75), 10px);
+  --r-3: clamp(8px, var(--radius), 16px);
+  --hover: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --active: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --selected: color-mix(in oklab, var(--primary) 16%, transparent);
+  --current-line: color-mix(in oklab, var(--primary) 9%, transparent);
+  --range-fill: color-mix(in oklab, var(--primary) 20%, transparent);
+  --mark: color-mix(in oklab, var(--primary) 38%, transparent);
+  --overlay: color-mix(in oklab, #05070b 60%, transparent);
+  --shadow-float: 0 1px 2px rgb(27 34 48 / 0.08), 0 12px 32px -8px rgb(27 34 48 / 0.2);
+  --control-h: 32px;
+  --row-h: 36px;
+  --hit: 32px;
+  --sidebar-w: 232px;
+  --rail-w: 56px;
+  --topbar-h: 52px;
+  --tabbar-h: 60px;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur: 150ms;
+}
+:root.dark {
+  --shadow-float: 0 1px 2px rgb(0 0 0 / 0.3), 0 16px 40px -8px rgb(0 0 0 / 0.55);
+}
+:root[data-reading="sans"] {
+  --font-reading: var(--font-sans);
+  --reading-size: 14.5px;
+}
+@media (pointer: coarse) {
+  :root {
+    --control-h: 44px;
+    --row-h: 48px;
+    --hit: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur: 0ms;
+  }
+}
