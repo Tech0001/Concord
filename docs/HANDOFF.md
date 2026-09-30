@@ -1,13 +1,14 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri` at `8b1e271`.
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.2.0**
+(Delivery 1: foundation, polish pass, and player ranges).
 
 The working Electron application has been moved onto the tested Nemotron speech
-stack and preserved on its own branch. We have now started the Linux-first
-Rust/Tauri rebuild, installed beside it as **Concord Next**. Continue from this
-working preview, with user-driven UI refinement and simpler installation as the
-next focus. This is a first native implementation, not full feature parity or a
-public release ready for every machine.
+stack and preserved on its own branch. The Linux-first Rust/Tauri rebuild is
+installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
+themeable, phone-ready design system and restored the player's range tools
+(select, loop, copy, export, save as note). It is still a preview, not full parity
+with the Electron app; see the delivery plan below.
 
 ## What the user wants
 
@@ -39,6 +40,33 @@ The user prefers concrete implementation and installed builds to try. Preserve
 the working lane while developing the next one. They specifically asked that model
 experiments first run with a separate database and the same proven Concord
 grouping pipeline, rather than replacing several parts of the algorithm at once.
+
+## Delivery plan (agreed September 30, 2026)
+
+The Electron app is the reference: the user liked it and wants the same
+capabilities rebuilt in Tauri and **more polished**, not reinvented. Each area
+reaches Electron parity, then gets polished. Order:
+
+1. **Foundation, polish pass, and player ranges** — done in 0.2.0. Spec:
+   `docs/superpowers/specs/2026-09-30-next-foundation-polish-design.md`; plan:
+   `docs/superpowers/plans/2026-09-30-next-foundation-polish.md`.
+2. **Speakers** — rebuild to the Electron page: edit, recolor, merge, noise,
+   rescan/find matches, unidentified queue, the full label dialog. Appearances
+   ("where they spoke") and speaker notes already shipped in 0.2.0. Needs
+   `speakers.is_noise` and `sample_count`.
+3. **Notes** — multi-anchor notes (ranges and document passages), tags, typed links,
+   a real Notes page, range notes from the player.
+4. **Search and AI** — one search experience (words, meaning, chat); embedding and
+   chat providers and models configured separately (local, OpenRouter, …).
+5. **Map** — Electron parity, then better (explicit user control, persisted layouts).
+6. **Channels and pipeline** — subscriptions, downloads, a durable batch
+   re-transcription queue. No Watchers.
+
+Decisions from the user: range selection is line-level, not word-level. Every
+screen must work on a phone (the UI is ready; serving it to a phone is a later
+decision). Legacy data top-up/sync is deferred, because the whole archive will be
+re-transcribed on the new engine; add schema fields fresh as features need them.
+The user prefers building over long planning and few questions.
 
 ## Branches and completed stages
 
@@ -118,25 +146,42 @@ Detailed evidence:
 
 ## What Concord Next currently does
 
-- Imports the old library into its own SQLite database, including saved voice
-  fingerprints, transcript search rows, document text, notes, and note links.
-- Browses collections and recording titles, opens local audio/video, and seeks
-  from transcript timestamps. Imports local media through a native file picker.
-- Transcribes through the tested NeMo coordinator; shows job activity, permits
-  cancellation, merges speaker labels, matches saved voices, and publishes a
-  versioned transcript atomically into the new library.
-- Searches transcript words with SQLite FTS5. Semantic search is not implemented.
-- Names voices, reads documents, imports Markdown/plain text, saves passage notes,
-  and connects notes on a simple interactive map.
-- Uses the supplied icon and wordmark in the UI and installed launcher.
-- Reuses existing video thumbnails in a separate cache, or extracts missing
-  thumbnails with FFmpeg. Audio-only recordings keep an audio cover.
-- Has a draggable video/transcript divider. The video defaults to 64% where space
-  permits; minimum pane widths preserve readability. The split is saved in local
-  storage under `player-video-width`. Arrow keys adjust it; double-click or Enter
-  restores the default. The old 360-pixel video-height cap was also increased.
+- **Design system.** Tokens use tweakcn/shadcn names. The Concord brand theme comes
+  in dark (default) and light, plus the 12 tweakcn themes from the Electron app
+  (Settings → Appearance). Fonts are vendored: Inter, Source Serif 4 (titles,
+  transcripts, documents; a Serif/Sans switch is in Settings), and JetBrains Mono.
+- **Shell.** A grouped sidebar collapses to an icon rail under 1200px; phones get a
+  bottom tab bar. There is a Ctrl+K command palette (recordings, speakers, notes,
+  documents, actions), toasts with actions, an Activity panel, and hash routes
+  (`#/recording/<id>?t=…`, `#/search?q=…`, …).
+- **Library.** Grid and list views, filters (collection, type, transcript, review,
+  starred), six sorts, page sizes of 60/120/240, stars, review state, resume
+  progress, colored speaker chips, and a ⋮ menu (open, resume, (re)transcribe,
+  review, star, show in folder, copy path). Settings persist.
+- **Player.**
+  - Custom transport with speed and volume, and a timeline with a waveform (audio),
+    speaker lanes, saved-note markers, and a playhead.
+  - Resume, previous/next, speaker panel with naming, and keyboard control (`?`
+    lists shortcuts).
+  - Transcript follow-along with "Back to playback", and find with highlighted
+    matches.
+  - **Ranges:** shift-click, select text across lines, or press I/O, then drag the
+    timeline handles to fine-tune. Loop, copy, save as note, and export as M4A,
+    MP3, MP4 (accurate or fast), TXT, Markdown, or SRT via the save dialog, with
+    "Show in folder".
+- **Search.** Word search grouped by recording, with highlighted matches and
+  speaker names. Semantic search and AI are not implemented yet.
+- **Speakers** lists voices by speaking time. A row expands to show the speaker's
+  notes (saved on blur) and every recording they appear in; play opens the
+  recording at their longest turn. Edit, rescan, merge, noise, and the unidentified
+  queue remain for Delivery 2.
+- **Documents** render Markdown. Notes and Map are restyled; their rebuilds are
+  Deliveries 3 and 5.
+- Imports the old library into its own SQLite database, transcribes through the
+  tested NeMo coordinator, and streams media over loopback, all unchanged from 0.1.
 
-Navigation is Library, Search, Speakers, Documents, Notes, Map, and Settings.
+Schema version 2 adds `media.starred`, `review_state`, `position`, and `opened_at`
+(an idempotent migration, safe with the 0.1 app still running).
 The imported snapshot contains **2,020 recordings, 49 saved voices, 595 documents,
 5 notes, and 957,728 transcript search rows**. Counts are a snapshot, not constants.
 
@@ -144,11 +189,16 @@ The imported snapshot contains **2,020 recordings, 49 saved voices, 595 document
 
 | File or directory | Responsibility |
 | --- | --- |
-| `desktop/src/App.tsx` | Navigation, selection, imports, activity, note dialogs |
-| `desktop/src/views.tsx` | Library, player, divider, search, speakers, documents, notes/map, settings |
-| `desktop/src/style.css` | Layout and supplied brand palette |
+| `desktop/src/App.tsx` | Shell, routing, app context, job polling |
+| `desktop/src/lib/` | Typed IPC seam (`ipc.ts`), formatting, routing, ranges, time store, shortcuts, search helpers (tested with `node --test`) |
+| `desktop/src/theme/`, `desktop/src/fonts/` | Brand theme, tokens, tweakcn theme scoping, vendored fonts |
+| `desktop/src/ui/` | Primitives on Radix: buttons, menus, dialogs/sheets, selects, toasts |
+| `desktop/src/shell/`, `library/`, `player/`, `search/`, `documents/`, `notes/`, `speakers/`, `map/`, `settings/` | Feature folders with co-located CSS |
+| `desktop/src/dev/`, `desktop/scripts/screens.mjs` | Dev-only mock host (`?mock`) and headless screenshot runner |
 | `desktop/src-tauri/src/lib.rs` | Tauri IPC commands, app state, single-instance behavior, shutdown |
-| `desktop/src-tauri/src/db.rs` | SQLite schema, isolated import, search, speaker assignment |
+| `desktop/src-tauri/src/db.rs` | SQLite schema and migration, import, library filters, palette, search, speaker assignment |
+| `desktop/src-tauri/src/export.rs` | Range excerpts, TXT/MD/SRT rendering, ffmpeg media export with progress and cancel |
+| `desktop/src-tauri/src/waveform.rs`, `system.rs` | Cached audio peaks; show in folder (D-Bus FileManager1, xdg-open fallback) |
 | `desktop/src-tauri/src/speech.rs` | Runtime discovery, model verification, jobs, process groups, publication |
 | `desktop/src-tauri/src/transcript.rs` | Word/turn merging, short-turn cleanup, cosine matching |
 | `desktop/src-tauri/src/playback.rs` | Loopback media streaming and byte-range handling |
@@ -230,7 +280,7 @@ For the installed build on this PC:
 
 ```sh
 PATH="$HOME/.cache/concord-build-tools:$PATH" pnpm --dir desktop package
-bash scripts/install-next-local.sh
+bash scripts/install-next-local.sh   # installs the newest bundle in target/release/bundle/appimage
 "$HOME/.local/opt/concord-next/Concord-Next.AppImage"
 ```
 
@@ -247,73 +297,86 @@ atomically replaces only the Next AppImage and installs the supplied icon and a
 separate launcher. Close/reopen Next to use a new build; check for an active job
 or unsaved work before restarting it.
 
-Latest bundles are under `desktop/src-tauri/target/release/bundle/`: approximately
-170.39 MiB AppImage and 58.50 MiB Debian package, excluding model weights and the
+Latest bundles (0.2.0) are under `desktop/src-tauri/target/release/bundle/`: approximately
+171.81 MiB AppImage and 59.94 MiB Debian package, excluding model weights and the
 Python environment. Only the AppImage has been installed and exercised here.
 Build-host compatibility still needs broader testing. Do not edit a packaging
 shell script while an invocation of that same script is running.
 
 ## Verification completed and remaining
 
-- Frontend TypeScript checks and Vite builds passed, including the divider change.
-- Rust suite passed: eight tests, plus one optional real-speech test ignored by
-  default. Coverage includes isolated migration/search, speaker IDs above eight,
-  short-turn merging, thumbnail reuse, and playback range/access behavior.
-- The optional real-speech test was run separately on the ten-minute October 7
-  excerpt and passed in 46.55 seconds on this PC. It exercised actual ASR,
-  diarization, transcript publication, saved assignments, and search in a temporary
-  library. This is not a full-meeting benchmark of the Rust app.
-- Clippy passed with warnings denied. No Rust code changed for the final UI divider.
-- AppImage and Debian bundles built. The installed AppImage launched and loaded
-  the imported library. The formerly failing AV1/Opus video loaded after the
-  streaming fix, and native UI state showed playback advancing and pausing.
-- The latest installed UI exposes the resize separator with default value 64.
-  Full pointer-drag, keyboard, and restart-persistence smoke checks remain useful;
-  do not describe those interactions as comprehensively tested.
+Delivery 1 (0.2.0), verified on this PC:
+
+- **Tests.** 31 TypeScript unit tests (`pnpm --dir desktop test:ts`: formatting,
+  routes, ranges, time store, shortcuts, search, themes, voices) and 30 Rust tests
+  plus 1 ignored real-speech test. The Rust tests cover:
+  - migration v2 on a v1 database;
+  - library filters and sorts;
+  - star, review, and position;
+  - palette, search highlighting, speaker order, appearances, and notes;
+  - TXT/MD/SRT rendering;
+  - real ffmpeg exports of M4A, MP3, and MP4 (accurate and fast), checked with ffprobe
+    (±0.2 s), plus cancellation and the missing-media error;
+  - waveform peaks and cache.
+- **Lint and build.** Clippy passes with warnings denied, and the tsc/Vite build
+  passes.
+- **Visual review.** The screenshot matrix (12 pages × desktop/960/tablet/phone ×
+  dark/light) and three tweakcn themes were reviewed in headless Chromium with the
+  mock host.
+- **Interaction probes** over CDP:
+  - resume at `?t=`, Space/arrow shortcuts, Space ignored in fields, follow-pill;
+  - click-to-seek, shift-click ranges, text selection mapped to lines, I/O, play
+    range stopping at its end, loop;
+  - export flow and toast, Save note prefill.
+- **Real WebKitGTK window** (review build, copy of the real library):
+  - the migration ran (schema version 2);
+  - Library loaded 2,020 recordings;
+  - starring persisted through IPC;
+  - Speakers listed 49 voices by airtime.
+
+Not yet verified in the real window: media playback of the new player, the native
+save dialog and a real export from the UI, "Show in folder" (D-Bus FileManager1),
+clipboard copy in WebKitGTK, and phone-width behavior on an actual phone.
 
 Reproduction commands:
 
 ```sh
+pnpm --dir desktop test:ts
 pnpm --dir desktop build
 cargo test --manifest-path desktop/src-tauri/Cargo.toml
 cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-CONCORD_TEST_AUDIO="$HOME/.local/share/concord-diarization-lab/asr/clips/2025-10-07-1020s-600s.wav" \
-  cargo test --manifest-path desktop/src-tauri/Cargo.toml \
-  real_speech_job_publishes_only_to_new_library -- --ignored
+pnpm --dir desktop dev   # then open http://127.0.0.1:1420/?mock for the mock host
+node desktop/scripts/screens.mjs <outdir> [name-filter]
 ```
 
-Native UI inspection worked with `orca-ide computer` accessibility commands.
-The current provider has no screenshots/window focus support; indexes become
-stale when the user interacts or the layout changes. Refresh state before using
-them, and avoid fighting the user's live interactions. Outside Orca-managed
-terminals, do not run bare `orca`, which is the GNOME screen reader on this PC.
+Native UI inspection works with `orca-ide computer` accessibility commands. The
+Linux provider has no screenshots and indexes go stale after re-renders, so refresh
+state before every click. `grim` captures only the visible workspace, so never grab
+a window on a hidden workspace. Outside Orca-managed terminals, do not run bare
+`orca`, which is the GNOME screen reader on this PC.
 
 ## Remaining work and suggested continuation
 
-The user is actively trying the installed preview. Address their concrete feedback
-first and keep delivering updates to **Concord Next**, leaving the parked app
-available. Suggested next work, not a separately approved release plan:
+Follow the delivery plan above: **Speakers** next (Delivery 2), then Notes, Search
+and AI, Map, and Channels/pipeline. Keep delivering installed builds of Concord Next
+and leave the parked Electron app available. Each delivery gets a short spec and a
+plan under `docs/superpowers/`, with TDD, the mock screenshot matrix, and a
+real-window check.
 
-1. Finish player/UI polish: verify divider dragging and persistence, audio-only
-   playback, transcript seeking, window-size extremes, and long recordings.
-2. Port a self-contained speech installer and model management. Today Next needs
-   the original app's managed environment. Improve dependency checks and error
-   recovery; benchmark the selected multilingual configuration on CPU.
-3. Restore channel subscriptions/downloads with simpler setup and a durable queue.
-   Current jobs run one at a time; interrupted jobs are marked on startup and are
-   not automatically resumed.
-4. Design one understandable search experience, then add semantic indexing and
-   separately configured embedding/chat providers. Chat, OpenRouter, and account
-   login are not implemented in Next.
-5. Improve research tools. Documents currently expose cached searchable text and
-   plain-text/Markdown imports, not full original formatting or rich editing.
-   Notes retain primary passages and links; complete anchors/tags are not ported.
-   The map is a simple interactive note/link view, not the final design.
-6. Prepare public installation: fresh-machine setup, packaging on supported Linux
-   bases, CI, dependency/license review, and clearer contributor documentation.
-   Root package scripts and legacy source still contain the old application.
-7. Add macOS, then Windows builds and actual device validation. Native inference
-   portability does not yet establish application or packaging support.
+Carry-overs from Delivery 1:
+- Verify the real-window items listed above: playback, the save dialog, reveal, and
+  the clipboard.
+- **Speech setup.** Port a self-contained speech installer and model management;
+  today Next needs the original app's managed environment. Benchmark the
+  multilingual configuration on CPU.
+- **Batch re-transcription** of the whole archive (planned with Delivery 6). Jobs run
+  one at a time and are not resumed after restart. Preserve manual speaker labels
+  across re-transcription by matching old labelled voices to new ones by time
+  overlap.
+- **Public release preparation:** fresh-machine setup, packaging on supported Linux
+  bases, CI, dependency and license review. The root package scripts and legacy
+  source still contain the old application.
+- **macOS, then Windows** builds and on-device validation.
 
 Keep model improvements separate from speaker-count claims, and evaluate future
 model changes through the working end-to-end pipeline. The current choice is the

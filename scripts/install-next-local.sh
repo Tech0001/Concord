@@ -6,7 +6,8 @@ if [[ "$(uname -s)" != Linux ]]; then
   echo 'This preview installer currently supports Linux.' >&2
   exit 1
 fi
-image="${1:-desktop/src-tauri/target/release/bundle/appimage/Concord Next_0.1.0_amd64.AppImage}"
+# Default to the newest AppImage bundle, whatever version it carries.
+image="${1:-$(ls -t desktop/src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -n 1)}"
 if [[ ! -f "$image" ]]; then
   echo 'Build first with: pnpm --dir desktop package' >&2
   exit 1
