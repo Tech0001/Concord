@@ -88,6 +88,11 @@ async fn search(state: State<'_, AppState>, query: String) -> Result<Vec<Value>,
     work(move || db::search(&root, &query)).await
 }
 #[tauri::command]
+async fn palette(state: State<'_, AppState>, query: String) -> Result<Value, String> {
+    let root = state.root.clone();
+    work(move || db::palette(&root, &query)).await
+}
+#[tauri::command]
 async fn speakers(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     let root = state.root.clone();
     work(move || db::speakers(&root)).await
@@ -252,7 +257,7 @@ pub fn run() {
         db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'",[])?;
         app.manage(AppState {root:root.clone(),runtime:speech::Runtime::resolve(app.path().resource_dir().ok()),control:control.clone(),thumbnail_generator:Arc::new(std::sync::Mutex::new(())),playback:Arc::new(playback::Playback::start()?)});Ok(())
       })
-      .invoke_handler(tauri::generate_handler![overview,import_legacy,library,recording,media_file,thumbnail_file,search,speakers,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,research,document,import_documents,save_note,link_notes])
+      .invoke_handler(tauri::generate_handler![overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,speakers,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,research,document,import_documents,save_note,link_notes])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
       .run(move|_,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();}});
 }

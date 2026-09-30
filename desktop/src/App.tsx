@@ -1,519 +1,301 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./style.css";
-import {
-  Library,
-  Search,
-  Users,
-  FileText,
-  NotebookPen,
-  Network,
-  Settings2,
-  Plus,
-  Play,
-  Check,
-  X,
-  LoaderCircle,
-  ChevronRight,
-  CircleAlert,
-} from "lucide-react";
+import "./shell/shell.css";
+import { Library, NotebookPen, Plus } from "lucide-react";
 import icon from "../../assets/brand/concord-icon.svg";
-import wordmark from "../../assets/brand/concord-wordmark.svg";
-import type { Note, Research, Job } from "./lib/types.ts";
-import type { Overview } from "./lib/types.ts";
+import type { Job, Note, Overview, Research } from "./lib/types.ts";
 import { api } from "./lib/ipc.ts";
-import {
-  LibraryView,
-  Player,
-  SearchView,
-  SpeakerView,
-  Documents,
-  MapView,
-  Settings,
-  PageHeading,
-  Empty,
-} from "./views";
-
-type Page =
-  "library" | "search" | "speakers" | "docs" | "notes" | "map" | "settings";
-const navigation = [
-  { id: "library", name: "Library", icon: Library },
-  { id: "search", name: "Search", icon: Search },
-  { id: "speakers", name: "Speakers", icon: Users },
-  { id: "docs", name: "Documents", icon: FileText },
-  { id: "notes", name: "Notes", icon: NotebookPen },
-  { id: "map", name: "Map", icon: Network },
-] as const;
+import { count } from "./lib/format.ts";
+import { useRoute } from "./lib/router.ts";
+import { useStoredState } from "./lib/storage.ts";
+import { PHONE, RAIL, useMediaQuery } from "./lib/media-query.ts";
+import { ToastProvider, useToast } from "./ui/Toasts.tsx";
+import { Empty } from "./ui/Empty.tsx";
+import { Button } from "./ui/Button.tsx";
+import { AppContext, type AppContextValue } from "./shell/AppContext.tsx";
+import { Sidebar } from "./shell/Sidebar.tsx";
+import { TabBar } from "./shell/TabBar.tsx";
+import { Topbar } from "./shell/Topbar.tsx";
+import { CommandPalette } from "./shell/CommandPalette.tsx";
+import { ActivityPanel } from "./shell/ActivityPanel.tsx";
+import { NoteEditor } from "./notes/NoteEditor.tsx";
+import { LibraryView, Player, SearchView, SpeakerView, Documents, MapView, Settings, PageHeading } from "./views";
 
 export default function App() {
-  const [page, setPage] = useState<Page>("library");
+  return (
+    <ToastProvider>
+      <Shell />
+    </ToastProvider>
+  );
+}
+
+function Shell() {
+  const toast = useToast();
+  const { route, navigate, back } = useRoute();
   const [overview, setOverview] = useState<Overview>();
+  const [research, setResearch] = useState<Research>({ notes: [], links: [], docs: [] });
   const [revision, setRevision] = useState(0);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [selected, setSelected] = useState<{ id: string; at: number } | null>(
-    null,
-  );
-  const [query, setQuery] = useState("");
+  const refresh = useCallback(() => setRevision((v) => v + 1), []);
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [research, setResearch] = useState<Research>({
-    notes: [],
-    links: [],
-    docs: [],
-  });
+  const [device, setDevice] = useStoredState<string>("speech-device", "auto", (v) => typeof v === "string");
   const [note, setNote] = useState<Note | null>(null);
-  const [device, setDevice] = useState(
-    () => localStorage.getItem("speech-device") || "auto",
-  );
-  const [jobOpen, setJobOpen] = useState(false);
-  const lastJobStates = useRef("");
-  const refresh = () => setRevision((v) => v + 1);
-  const act = async (fn: () => Promise<void>) => {
-    setError("");
-    setBusy(true);
-    try {
-      await fn();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [pageTitle, setPageTitle] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useStoredState("sidebar-collapsed-v1", false, (v) => typeof v === "boolean");
+  const narrow = useMediaQuery(RAIL);
+  const phone = useMediaQuery(PHONE);
+  const available = api.available();
+  const lastJobs = useRef("");
+
   useEffect(() => {
-    if (!api.available()) {
-      setError(
-        "Open Concord Next as a desktop app with pnpm --dir desktop desktop.",
-      );
-      return;
-    }
-    api
-      .overview()
-      .then(setOverview)
-      .catch((e) => setError(String(e)));
-    api
-      .research()
-      .then(setResearch)
-      .catch((e) => setError(String(e)));
-  }, [revision]);
+    if (!available) return;
+    api.overview().then(setOverview).catch(toast.error);
+    api.research().then(setResearch).catch(toast.error);
+  }, [available, revision, toast]);
+
+  // Poll quickly while a job runs, slowly otherwise; refresh data when job states change.
   useEffect(() => {
-    if (!api.available()) return;
+    if (!available) return;
     let alive = true;
-    const poll = () =>
-      api
-        .jobs()
-        .then((data) => {
-          if (!alive) return;
-          setJobs(data);
-          const signature = data.map((j) => j.id + j.status).join();
-          if (lastJobStates.current && signature !== lastJobStates.current)
-            refresh();
-          lastJobStates.current = signature;
-        })
-        .catch((e) => {
-          if (alive) setError(String(e));
-        });
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const data = await api.jobs();
+        if (!alive) return;
+        setJobs(data);
+        const signature = data.map((j) => j.id + j.status).join();
+        if (lastJobs.current && signature !== lastJobs.current) refresh();
+        lastJobs.current = signature;
+        timer = window.setTimeout(poll, data.some((j) => j.status === "running") ? 1500 : 5000);
+      } catch (e) {
+        if (alive) toast.error(e);
+      }
+    };
     void poll();
-    const timer = setInterval(poll, 1500);
     return () => {
       alive = false;
-      clearInterval(timer);
+      clearTimeout(timer);
     };
-  }, []);
+  }, [available, refresh, toast]);
+
   useEffect(() => {
-    if (!notice) return;
-    const timer = setTimeout(() => setNotice(""), 5500);
-    return () => clearTimeout(timer);
-  }, [notice]);
-  const go = (p: Page) => {
-    setPage(p);
-    setSelected(null);
-  };
-  const addMedia = () =>
-    act(async () => {
-      const result = await api.pickMedia();
-      if (!result.length) return;
-      const count = await api.importMedia(result);
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const pageKey = route.page === "recording" ? `recording:${route.id}` : route.page === "documents" ? `documents:${route.id ?? ""}` : route.page;
+  useEffect(() => {
+    if (route.page !== "library") window.scrollTo(0, 0);
+  }, [pageKey, route.page]);
+
+  const activeJob = jobs.find((j) => j.status === "running");
+  const transcribe = useCallback(
+    async (id: string) => {
+      try {
+        await api.transcribe(id, device);
+        toast.info("Transcription started", { label: "Activity", run: () => setActivityOpen(true) });
+        refresh();
+      } catch (e) {
+        toast.error(e);
+      }
+    },
+    [device, refresh, toast],
+  );
+  const addRecordings = useCallback(async () => {
+    try {
+      const paths = await api.pickMedia();
+      if (!paths.length) return;
+      const n = await api.importMedia(paths);
       refresh();
-      go("library");
-      setNotice(`${count} recordings added`);
-    });
-  const importLegacy = (path?: string) =>
-    act(async () => {
-      const chosen = path || (await api.pickDatabase())[0];
-      if (!chosen) return;
-      const result = await api.importLegacy(chosen);
-      setOverview(result);
-      refresh();
-      setNotice(
-        `Imported ${result.media.toLocaleString()} recordings and ${result.speakers} saved voices`,
+      navigate({ page: "library" });
+      toast.success(`${count(n, "recording")} added`);
+    } catch (e) {
+      toast.error(e);
+    }
+  }, [navigate, refresh, toast]);
+  const importLegacy = useCallback(
+    async (path?: string) => {
+      try {
+        const chosen = path || (await api.pickDatabase())[0];
+        if (!chosen) return;
+        const result = await api.importLegacy(chosen);
+        setOverview(result);
+        refresh();
+        toast.success(`Imported ${count(result.media, "recording")} and ${count(result.speakers, "saved voice")}`);
+      } catch (e) {
+        toast.error(e);
+      }
+    },
+    [refresh, toast],
+  );
+
+  const context = useMemo<AppContextValue>(
+    () => ({
+      route,
+      navigate,
+      back,
+      overview,
+      revision,
+      refresh,
+      jobs,
+      activeJob,
+      device,
+      setDevice,
+      transcribe,
+      openNote: setNote,
+      openPalette: () => setPaletteOpen(true),
+      openActivity: () => setActivityOpen(true),
+      pageTitle,
+      setPageTitle,
+    }),
+    [route, navigate, back, overview, revision, refresh, jobs, activeJob, device, setDevice, transcribe, pageTitle],
+  );
+
+  if (!available)
+    return (
+      <div className="unavailable">
+        <Empty icon={Library} title="Open Concord Next as a desktop app" text="Run it with pnpm --dir desktop desktop, or add ?mock to preview with sample data." />
+      </div>
+    );
+
+  const onError = (e: string) => toast.error(e);
+  let page: React.ReactNode;
+  switch (route.page) {
+    case "recording":
+      page = (
+        <Player
+          id={route.id}
+          at={route.at ?? 0}
+          revision={revision}
+          onBack={back}
+          onError={onError}
+          onTranscribe={() => void transcribe(route.id)}
+          disabled={!!activeJob}
+          onRefresh={refresh}
+          onNote={setNote}
+        />
       );
-    });
-  const start = (id: string) =>
-    act(async () => {
-      await api.transcribe(id, device);
-      setJobOpen(true);
-      setNotice("Transcription started");
-    });
-  const saveNote = () =>
-    act(async () => {
-      if (!note) return;
-      await api.saveNote(note);
-      setNote(null);
-      refresh();
-      setNotice("Note saved");
-    });
-  const active = jobs.find((j) => j.status === "running");
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <a
-          className="brand"
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            go("library");
+      break;
+    case "search":
+      page = (
+        <SearchView
+          query={route.q}
+          setQuery={(q) => navigate({ page: "search", q }, { replace: true })}
+          revision={revision}
+          onOpen={(id, at) => navigate({ page: "recording", id, at })}
+          onError={onError}
+        />
+      );
+      break;
+    case "speakers":
+      page = <SpeakerView revision={revision} onError={onError} />;
+      break;
+    case "documents":
+      page = (
+        <Documents
+          data={research.docs}
+          onError={onError}
+          onImport={async () => {
+            try {
+              const paths = await api.pickDocuments();
+              if (!paths.length) return;
+              await api.importDocuments(paths);
+              refresh();
+            } catch (e) {
+              toast.error(e);
+            }
           }}
-        >
-          <img src={wordmark} alt="Concord" />
-          <span className="edition">NEXT · PREVIEW</span>
-        </a>
-        <div className="nav-label">YOUR ARCHIVE</div>
-        <nav>
-          {navigation.map((n) => (
-            <button
-              key={n.id}
-              className={page === n.id ? "nav active" : "nav"}
-              onClick={() => go(n.id)}
-            >
-              <n.icon size={18} />
-              <span>{n.name}</span>
-              {n.id === "library" && overview && (
-                <small>{overview.media.toLocaleString()}</small>
-              )}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <button className="nav" onClick={() => setJobOpen(!jobOpen)}>
-            {active ? (
-              <LoaderCircle size={18} className="spin" />
-            ) : (
-              <Check size={18} />
-            )}
-            <span>{active ? "Processing recording" : "All activity"}</span>
-          </button>
-          <button
-            className={page === "settings" ? "nav active" : "nav"}
-            onClick={() => go("settings")}
-          >
-            <Settings2 size={18} />
-            <span>Settings</span>
-          </button>
-          <div className="local-status">
-            <i className="live-dot" /> Local archive <span>v0.1</span>
-          </div>
-        </div>
-      </aside>
-      <main className="main">
-        <header className="topbar">
-          <div className="breadcrumb">
-            Your archive <ChevronRight size={14} />
-            <b>{navigation.find((n) => n.id === page)?.name || "Settings"}</b>
-          </div>
-          <form
-            className="global-search"
-            onSubmit={(e) => {
-              e.preventDefault();
-              go("search");
-            }}
-          >
-            <Search size={16} />
-            <input
-              aria-label="Search transcripts"
-              placeholder="Find a passage in your archive…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <kbd>↵</kbd>
-          </form>
-          <button className="primary" onClick={addMedia} disabled={busy}>
-            <Plus size={16} /> Add recordings
-          </button>
-        </header>
-        {error && (
-          <div className="alert error" role="alert">
-            <CircleAlert size={18} />
-            <span>{error}</span>
-            <button aria-label="Dismiss error" onClick={() => setError("")}>
-              <X size={16} />
-            </button>
-          </div>
-        )}
-        {notice && (
-          <div className="toast" role="status">
-            <Check size={16} />
-            {notice}
-          </div>
-        )}
-        {busy && (
-          <div className="busy-line" role="status">
-            <LoaderCircle size={14} className="spin" /> Working…
-          </div>
-        )}
-        <div className="page">
-          {selected ? (
-            <Player
-              id={selected.id}
-              at={selected.at}
-              revision={revision}
-              onBack={() => setSelected(null)}
-              onError={setError}
-              onTranscribe={() => start(selected.id)}
-              disabled={!!active || busy}
-              onRefresh={refresh}
-              onNote={setNote}
-            />
-          ) : (
-            <>
-              {page === "library" && (
-                <>
-                  <PageHeading
-                    eyebrow="A PLACE FOR EVERY CONVERSATION"
-                    title="Your library"
-                    description="Listen again. Find the words that matter."
-                  />
-                  {overview?.media === 0 ? (
-                    <section className="welcome panel">
-                      <img src={icon} alt="Concord" />
-                      <h2>Bring your archive along.</h2>
-                      <p>
-                        Import your existing Concord library and saved voices,
-                        or start with a recording.
-                      </p>
-                      <p className="muted">
-                        Concord Next keeps its own library. Your original app
-                        and files stay available.
-                      </p>
-                      <div className="actions">
-                        <button
-                          className="primary"
-                          disabled={busy}
-                          onClick={() => importLegacy(overview.legacyDatabase)}
-                        >
-                          <Library size={17} /> Import Concord library
-                        </button>
-                        <button
-                          className="secondary"
-                          disabled={busy}
-                          onClick={() => importLegacy()}
-                        >
-                          Choose database…
-                        </button>
-                        <button className="ghost" onClick={addMedia}>
-                          Add a recording
-                        </button>
-                      </div>
-                    </section>
-                  ) : (
-                    <LibraryView
-                      revision={revision}
-                      onOpen={(id) => setSelected({ id, at: 0 })}
-                      onError={setError}
-                    />
-                  )}
-                </>
-              )}
-              {page === "search" && (
-                <SearchView
-                  query={query}
-                  setQuery={setQuery}
-                  revision={revision}
-                  onOpen={(id, at) => setSelected({ id, at })}
-                  onError={setError}
-                />
-              )}
-              {page === "speakers" && (
-                <SpeakerView revision={revision} onError={setError} />
-              )}
-              {page === "docs" && (
-                <Documents
-                  data={research.docs}
-                  onError={setError}
-                  onImport={() =>
-                    act(async () => {
-                      const paths = await api.pickDocuments();
-                      if (paths.length) {
-                        await api.importDocuments(paths);
-                        refresh();
-                      }
-                    })
-                  }
-                />
-              )}
-              {page === "notes" && (
-                <>
-                  <PageHeading
-                    eyebrow="COLLECT YOUR THINKING"
-                    title="Notes"
-                    description="Keep a thought, a passage, or a connection."
-                    action={
-                      <button
-                        className="primary"
-                        onClick={() => setNote({ title: "", body: "" })}
-                      >
-                        <Plus size={16} /> New note
-                      </button>
-                    }
-                  />
-                  <div className="note-grid">
-                    {research.notes.map((n) => (
-                      <button
-                        className="note-card panel"
-                        key={n.id}
-                        onClick={() => setNote(n)}
-                      >
-                        <NotebookPen size={21} />
-                        <h3>{n.title}</h3>
-                        <p>{n.body || n.quote || "Open note"}</p>
-                        {n.media_id && (
-                          <span className="subtle-tag">
-                            Linked to a recording
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                  {!research.notes.length && (
-                    <Empty
-                      icon={NotebookPen}
-                      title="A little space to think."
-                      text="Save a passage from a transcript, or start a note here."
-                    />
-                  )}
-                </>
-              )}
-              {page === "map" && (
-                <MapView
-                  data={research}
-                  onOpen={setNote}
-                  onLink={(source, target) =>
-                    act(async () => {
-                      await api.linkNotes(source, target);
-                      refresh();
-                    })
-                  }
-                />
-              )}
-              {page === "settings" && (
-                <Settings
-                  overview={overview}
-                  device={device}
-                  setDevice={(v) => {
-                    setDevice(v);
-                    localStorage.setItem("speech-device", v);
-                  }}
-                  onImport={() => importLegacy()}
-                  onError={setError}
-                />
-              )}
-            </>
-          )}
-        </div>
-      </main>
-      {jobOpen && (
-        <aside className="activity panel">
-          <div className="row">
-            <h3>Activity</h3>
-            <button
-              className="icon-button"
-              aria-label="Close activity"
-              onClick={() => setJobOpen(false)}
-            >
-              <X size={18} />
-            </button>
-          </div>
-          {!jobs.length && (
-            <p className="muted">New transcription jobs will appear here.</p>
-          )}
-          {jobs.map((j) => (
-            <div className="job" key={j.id}>
-              <div className="row">
-                <b>{j.title}</b>
-                <span className={`badge ${j.status}`}>{j.status}</span>
-              </div>
-              <p>{j.message}</p>
-              {j.status === "running" && (
-                <button
-                  className="ghost"
-                  onClick={() =>
-                    act(async () => {
-                      await api.cancelTranscription();
-                    })
-                  }
-                >
-                  Cancel processing
-                </button>
-              )}
-            </div>
-          ))}
-        </aside>
-      )}
-      {note && (
-        <div className="modal-backdrop" onClick={() => setNote(null)}>
-          <section
-            className="note-editor panel"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Edit note"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="row">
-              <span className="eyebrow">RESEARCH NOTE</span>
-              <button
-                className="icon-button"
-                aria-label="Close note"
-                onClick={() => setNote(null)}
-              >
-                <X size={18} />
+        />
+      );
+      break;
+    case "notes":
+      page = (
+        <>
+          <PageHeading
+            eyebrow="COLLECT YOUR THINKING"
+            title="Notes"
+            description="Keep a thought, a passage, or a connection."
+            action={
+              <Button variant="primary" icon={Plus} onClick={() => setNote({ title: "", body: "" })}>
+                New note
+              </Button>
+            }
+          />
+          <div className="note-grid">
+            {research.notes.map((n) => (
+              <button className="note-card panel" key={n.id} onClick={() => setNote(n)}>
+                <NotebookPen size={21} />
+                <h3>{n.title}</h3>
+                <p>{n.body || n.quote || "Open note"}</p>
               </button>
-            </div>
-            <input
-              className="note-title"
-              aria-label="Note title"
-              placeholder="Give this thought a title"
-              value={note.title}
-              onChange={(e) => setNote({ ...note, title: e.target.value })}
-            />
-            {note.quote && <blockquote>{note.quote}</blockquote>}
-            <textarea
-              aria-label="Note body"
-              placeholder="What stands out to you?"
-              value={note.body}
-              onChange={(e) => setNote({ ...note, body: e.target.value })}
-            />
+            ))}
+          </div>
+        </>
+      );
+      break;
+    case "map":
+      page = (
+        <MapView
+          data={research}
+          onOpen={setNote}
+          onLink={async (source, target) => {
+            try {
+              await api.linkNotes(source, target);
+              refresh();
+            } catch (e) {
+              toast.error(e);
+            }
+          }}
+        />
+      );
+      break;
+    case "settings":
+      page = <Settings overview={overview} device={device} setDevice={setDevice} onImport={() => void importLegacy()} onError={onError} />;
+      break;
+    default:
+      page =
+        overview?.media === 0 ? (
+          <section className="welcome panel">
+            <img src={icon} alt="Concord" />
+            <h2>Bring your archive along.</h2>
+            <p>Import your existing Concord library and saved voices, or start with a recording.</p>
             <div className="actions">
-              {note.media_id && (
-                <button
-                  className="secondary"
-                  onClick={() => {
-                    setSelected({ id: note.media_id!, at: note.start || 0 });
-                    setNote(null);
-                  }}
-                >
-                  <Play size={15} /> Open source
-                </button>
-              )}
-              <button
-                className="primary"
-                disabled={!note.title.trim() || busy}
-                onClick={saveNote}
-              >
-                Save note
-              </button>
+              <Button variant="primary" onClick={() => void importLegacy(overview.legacyDatabase)}>
+                Import Concord library
+              </Button>
+              <Button onClick={() => void importLegacy()}>Choose database…</Button>
+              <Button variant="ghost" onClick={() => void addRecordings()}>
+                Add a recording
+              </Button>
             </div>
           </section>
-        </div>
-      )}
-    </div>
+        ) : (
+          <LibraryView revision={revision} onOpen={(id) => navigate({ page: "recording", id })} onError={onError} />
+        );
+  }
+
+  return (
+    <AppContext.Provider value={context}>
+      <div className="shell" data-rail={!phone && (collapsed || narrow)}>
+        {!phone && <Sidebar rail={collapsed || narrow} canCollapse={!narrow} onToggle={() => setCollapsed((v) => !v)} />}
+        <main className="main">
+          <Topbar onAdd={() => void addRecordings()} />
+          <div className="page" key={pageKey}>
+            {page}
+          </div>
+        </main>
+        {phone && <TabBar />}
+      </div>
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onAdd={() => void addRecordings()} />
+      <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} />
+      {note && <NoteEditor note={note} onClose={() => setNote(null)} />}
+    </AppContext.Provider>
   );
 }

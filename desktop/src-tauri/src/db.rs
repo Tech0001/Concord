@@ -42,7 +42,7 @@ pub fn legacy_root() -> PathBuf {
 
 pub fn open(root: &Path) -> Result<Connection> {
     std::fs::create_dir_all(root)?;
-    let db = Connection::open(root.join("library.db"))?;
+    let mut db = Connection::open(root.join("library.db"))?;
     db.busy_timeout(std::time::Duration::from_secs(10))?;
     db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS media (
@@ -61,9 +61,50 @@ pub fn open(root: &Path) -> Result<Connection> {
       CREATE TABLE IF NOT EXISTS docs (id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL DEFAULT '');
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY,media_id TEXT REFERENCES media(id),title TEXT NOT NULL,
-        status TEXT NOT NULL,message TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT (datetime('now')));
-      PRAGMA user_version=1;")?;
+        status TEXT NOT NULL,message TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT (datetime('now')));")?;
+    migrate(&mut db)?;
     Ok(db)
+}
+
+/// Columns added in schema version 2 (library state). Applied idempotently.
+const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
+    ("starred", "starred INTEGER NOT NULL DEFAULT 0"),
+    ("review_state", "review_state TEXT NOT NULL DEFAULT 'unreviewed'"),
+    ("position", "position REAL NOT NULL DEFAULT 0"),
+    ("opened_at", "opened_at TEXT"),
+];
+
+fn migrate(db: &mut Connection) -> Result<()> {
+    let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= 2 {
+        return Ok(());
+    }
+    // Immediate: two windows opening at once must not both add the columns.
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for (name, ddl) in MEDIA_COLUMNS_V2 {
+        let present: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('media') WHERE name = ?1)",
+            [name],
+            |r| r.get(0),
+        )?;
+        if !present {
+            tx.execute_batch(&format!("ALTER TABLE media ADD COLUMN {ddl}"))?;
+        }
+    }
+    tx.execute_batch("PRAGMA user_version = 2")?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// LIKE pattern that treats the user's text literally.
+pub fn like_pattern(query: &str) -> String {
+    format!(
+        "%{}%",
+        query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    )
 }
 
 pub fn rows(db: &Connection, sql: &str, args: impl rusqlite::Params) -> Result<Vec<Value>> {
@@ -151,13 +192,7 @@ pub fn import_legacy(root: &Path, source: &Path) -> Result<Value> {
 
 pub fn library(root: &Path, query: &str, channel: &str, offset: u32) -> Result<Value> {
     let db = open(root)?;
-    let filter = format!(
-        "%{}%",
-        query
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
-    );
+    let filter = like_pattern(query);
     let total: i64 = db.query_row(
         "SELECT count(*) FROM media WHERE title LIKE ?1 ESCAPE '\\' AND (?2='' OR channel=?2)",
         params![filter, channel],
@@ -213,6 +248,23 @@ pub fn search(root: &Path, query: &str) -> Result<Vec<Value>> {
         .collect::<Vec<_>>()
         .join(" AND ");
     rows(&open(root)?,"SELECT m.id,m.title,m.channel,s.text,CAST(s.start AS REAL) AS start,s.speaker FROM segments s JOIN media m ON m.id=s.media_id WHERE segments MATCH ?1 ORDER BY rank LIMIT 100",[fts])
+}
+
+/// Quick-jump results for the command palette.
+pub fn palette(root: &Path, query: &str) -> Result<Value> {
+    let db = open(root)?;
+    let q = query.trim();
+    if q.is_empty() {
+        let recent = rows(&db, "SELECT id,title,channel,date FROM media WHERE opened_at IS NOT NULL ORDER BY opened_at DESC LIMIT 6", [])?;
+        return Ok(json!({"recordings": recent, "speakers": [], "notes": [], "documents": []}));
+    }
+    let p = like_pattern(q);
+    Ok(json!({
+        "recordings": rows(&db, "SELECT id,title,channel,date FROM media WHERE title LIKE ?1 ESCAPE '\\' OR channel LIKE ?1 ESCAPE '\\' ORDER BY opened_at IS NULL, opened_at DESC, date DESC LIMIT 6", [&p])?,
+        "speakers": rows(&db, "SELECT id,name,color FROM speakers WHERE name LIKE ?1 ESCAPE '\\' ORDER BY name COLLATE NOCASE LIMIT 6", [&p])?,
+        "notes": rows(&db, "SELECT id,title,media_id,start FROM notes WHERE title LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\' OR quote LIKE ?1 ESCAPE '\\' ORDER BY created_at DESC LIMIT 6", [&p])?,
+        "documents": rows(&db, "SELECT id,title FROM docs WHERE title LIKE ?1 ESCAPE '\\' ORDER BY title COLLATE NOCASE LIMIT 6", [&p])?,
+    }))
 }
 
 pub fn speakers(root: &Path) -> Result<Vec<Value>> {
@@ -360,5 +412,51 @@ mod tests {
         std::fs::write(&bad, b"not media").unwrap();
         assert!(import_files(&root, &[bad.to_string_lossy().into_owned()]).is_err());
         assert_eq!(stats(&root).unwrap()["media"], 1);
+    }
+
+    #[test]
+    fn migration_adds_library_state_to_existing_v1_database() {
+        let tmp = tempfile::tempdir().unwrap();
+        let v1 = Connection::open(tmp.path().join("library.db")).unwrap();
+        v1.execute_batch(
+            "CREATE TABLE media (id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL DEFAULT '',
+               channel TEXT NOT NULL DEFAULT 'Imports', date TEXT NOT NULL DEFAULT '', duration REAL NOT NULL DEFAULT 0,
+               path TEXT, transcript TEXT, words INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'ready');
+             INSERT INTO media(id,title) VALUES ('a','Old');
+             PRAGMA user_version=1;",
+        )
+        .unwrap();
+        drop(v1);
+        let db = open(tmp.path()).unwrap();
+        let row = &rows(&db, "SELECT starred, review_state, position, opened_at FROM media WHERE id='a'", []).unwrap()[0];
+        assert_eq!(row["starred"], 0);
+        assert_eq!(row["review_state"], "unreviewed");
+        assert_eq!(row["position"], 0.0);
+        assert!(row["opened_at"].is_null());
+        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+        drop(db);
+        open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
+    }
+    #[test]
+    fn palette_groups_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("next");
+        open(&root)
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO media(id,title,channel) VALUES ('a','Alpha meeting','Meetings');
+                 INSERT INTO speakers(id,name) VALUES ('s','Sarah');
+                 INSERT INTO notes(id,title,body) VALUES ('n','Alpha thoughts','');
+                 INSERT INTO docs(id,title,body) VALUES ('d','Alpha paper','x');",
+            )
+            .unwrap();
+        let r = palette(&root, "alpha").unwrap();
+        assert_eq!(r["recordings"][0]["id"], "a");
+        assert_eq!(r["notes"][0]["id"], "n");
+        assert_eq!(r["documents"][0]["id"], "d");
+        assert_eq!(palette(&root, "sar").unwrap()["speakers"][0]["name"], "Sarah");
+        assert!(palette(&root, "  ").unwrap()["recordings"].as_array().unwrap().is_empty());
+        open(&root).unwrap().execute("UPDATE media SET opened_at=datetime('now')", []).unwrap();
+        assert_eq!(palette(&root, "").unwrap()["recordings"][0]["id"], "a");
     }
 }

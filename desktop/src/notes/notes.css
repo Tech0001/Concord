@@ -1,0 +1,44 @@
+.note-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.note-title-input {
+  height: auto;
+  padding: 4px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  font-weight: 600;
+}
+.note-title-input:focus-visible {
+  outline: none;
+  border-bottom-color: var(--ring);
+}
+.note-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-sm);
+}
+.note-quote {
+  padding: 10px 14px;
+  border-left: 3px solid var(--primary);
+  border-radius: 0 var(--r-2) var(--r-2) 0;
+  background: var(--muted);
+  font-family: var(--font-reading);
+  font-size: var(--reading-size);
+  line-height: 1.6;
+}
+.note-body-input {
+  min-height: 160px;
+  font-family: var(--font-reading);
+  font-size: var(--reading-size);
+  line-height: 1.6;
+}
+.note-source-btn {
+  margin-right: auto;
+}

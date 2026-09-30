@@ -1,0 +1,25 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { parseRoute, formatRoute, type Route } from "./router.ts";
+
+test("recording ids with JSON, slashes, ? and # round-trip", () => {
+  const route: Route = { page: "recording", id: '["UC-x","a/b?c#d"]', at: 12.5 };
+  const hash = formatRoute(route);
+  assert.ok(!hash.slice(2).includes("#"));
+  assert.deepEqual(parseRoute(hash), route);
+});
+
+test("search keeps its query; documents keep their id", () => {
+  assert.deepEqual(parseRoute(formatRoute({ page: "search", q: "harbour lights & more" })), { page: "search", q: "harbour lights & more" });
+  assert.deepEqual(parseRoute("#/documents/doc%3A1"), { page: "documents", id: "doc:1" });
+  assert.equal(formatRoute({ page: "documents" }), "#/documents");
+});
+
+test("unknown, empty and malformed routes fall back to the library", () => {
+  assert.deepEqual(parseRoute(""), { page: "library" });
+  assert.deepEqual(parseRoute("#/nope"), { page: "library" });
+  assert.deepEqual(parseRoute("#/recording/"), { page: "library" });
+  assert.deepEqual(parseRoute("#/recording/abc?t=-3"), { page: "recording", id: "abc" });
+  assert.deepEqual(parseRoute("#/recording/abc?t=x"), { page: "recording", id: "abc" });
+  assert.deepEqual(parseRoute("#/speakers"), { page: "speakers" });
+});
