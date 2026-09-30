@@ -40,6 +40,7 @@ case "$OS_NAME" in
     echo "    $(du -h "$BINARIES_DIR/fluidaudiocli" | cut -f1)"
     ;;
   Linux)
+    bash scripts/stage-nemo-runtime.sh
     # FluidAudio is Apple-only. Remove a stale macOS artifact so a build tree
     # reused across platforms cannot accidentally ship it in a Linux package.
     rm -f "$BINARIES_DIR/fluidaudiocli"

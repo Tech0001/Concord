@@ -4,7 +4,7 @@
 // fail at spawn time (wrong platform, or the wizard didn't install
 // that engine's runtime).
 
-export type TranscriptionEngine = "parakeet" | "whisper" | "fluid";
+export type TranscriptionEngine = "nemo" | "parakeet" | "whisper" | "fluid";
 
 export interface TranscriptionOption {
   value: string;
@@ -14,6 +14,7 @@ export interface TranscriptionOption {
 }
 
 export const TRANSCRIPTION_OPTIONS: TranscriptionOption[] = [
+  { value: "nvidia/nemotron-3.5-asr-streaming-0.6b", label: "Nemotron 3.5 (multilingual · native)", platforms: ["linux"], engine: "nemo" },
   { value: "fluid-parakeet-tdt-v3",        label: "Parakeet v3 (Apple Neural Engine, fastest on Mac)", platforms: ["darwin"], engine: "fluid" },
   { value: "nvidia/parakeet-tdt-0.6b-v3",  label: "parakeet-v3 (multilingual, fastest on CUDA)",       platforms: ["linux"],  engine: "parakeet" },
   { value: "large-v3",                     label: "whisper large-v3 (multilingual)",                   platforms: ["linux"],  engine: "whisper" },

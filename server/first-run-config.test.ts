@@ -74,17 +74,17 @@ for (const scenario of ["cpu", "5090", "small-gpu", "upgrade", "existing"] as co
             assert.equal(config.transcription.model, status.recommendedSettings.model);
             assert.equal(config.transcription.device, status.recommendedSettings.device);
             assert.equal(config.transcription.computeType, status.recommendedSettings.computeType);
-            assert.equal(status.recommendedEngine, scenario === '5090' ? 'parakeet' : 'whisper');
-            assert.equal(config.transcription.model, scenario === '5090' ? 'nvidia/parakeet-tdt-0.6b-v3' : 'small');
-            assert.equal(config.transcription.device, scenario === '5090' || scenario === 'small-gpu' ? 'cuda' : 'cpu');
-            assert.equal(config.processing.diarizationEnabled, scenario === '5090');
+            assert.equal(status.recommendedEngine, 'nemo');
+            assert.equal(config.transcription.model, 'nvidia/nemotron-3.5-asr-streaming-0.6b');
+            assert.equal(config.transcription.device, 'auto');
+            assert.equal(config.processing.diarizationEnabled, true);
             const setup = await fetch(base + '/api/pipeline/setup').then(r => r.json());
             assert.equal(setup.ready, false);
             const finish = await fetch(base + '/api/pipeline/setup/complete', {method: 'POST'});
             assert.equal(finish.status, 409);
             if (scenario === 'cpu') {
               pipeline.updateConfig({transcription: {...config.transcription, device: 'cuda'}});
-              assert.match(pipeline.getSetupStatus().checks[2].detail, /No NVIDIA GPU detected/);
+              assert.match(pipeline.getSetupStatus().checks[2].detail, /Install Nemotron/);
             }
           }
           const folder = await fetch(base + '/api/dialog/pick-folder', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({prompt:'Save videos', defaultPath:'/missing/parent'})});

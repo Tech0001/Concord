@@ -403,7 +403,7 @@ def extract_turn_embeddings(waveform, sample_rate, turns, titanet, device, min_t
 
 
 def diarize(audio_path: str, output_path: str, model_name: str, device: str,
-            chunk_sec: float, overlap_sec: float, embedding_threshold: float):
+            chunk_sec: float, overlap_sec: float, embedding_threshold: float, turn_detector=None):
     from nemo.collections.asr.models import SortformerEncLabelModel, EncDecSpeakerLabelModel
     import tempfile
     import shutil
@@ -419,13 +419,18 @@ def diarize(audio_path: str, output_path: str, model_name: str, device: str,
     # even when the same person disappears for entire chunks and reappears.
     print(f"[diarize-sortformer] Loading models on {device}...")
     t_start = time.time()
-    sortformer = SortformerEncLabelModel.from_pretrained(model_name=model_name)
-    sortformer.train(False)  # `.eval()` rewritten — JS-eval scanners trip on the literal
+    sortformer = turn_detector
+    if sortformer is None:
+        sortformer = SortformerEncLabelModel.from_pretrained(model_name=model_name)
+        sortformer.train(False)  # `.eval()` rewritten — JS-eval scanners trip on the literal
     titanet = EncDecSpeakerLabelModel.from_pretrained(model_name="titanet_large")
     titanet.train(False)
     if device == "cuda":
-        sortformer = sortformer.cuda()
+        if turn_detector is None:
+            sortformer = sortformer.cuda()
         titanet = titanet.cuda()
+    else:
+        titanet = titanet.cpu()
     t_load = time.time() - t_start
     print(f"[diarize-sortformer] Models loaded in {t_load:.1f}s")
 

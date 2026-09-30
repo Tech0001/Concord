@@ -85,13 +85,14 @@ interface Config {
   youtubeSpeedPreset: "fast" | "balanced" | "conservative";
   dailyDownloadCap: number;
   lanAccess: boolean;
-  transcription: { model: string; language: string; device: string; engine?: "" | "parakeet" | "whisper" };
+  transcription: { model: string; language: string; device: string; engine?: "" | "nemo" | "parakeet" | "whisper" };
   processing: { keepVideo: boolean; keepAudio: boolean; waitForLiveToFinish: boolean; diarizationEnabled: boolean };
 }
 
 function transcribingLabel(model: string | undefined, device = "cuda"): string {
   if (!model) return "Transcribing…";
   const m = model.toLowerCase();
+  if (m.includes("nemotron")) return `Transcribing with Nemotron 3.5 (${device === "cpu" ? "CPU" : "native acceleration"})…`;
   // Check fluid- prefix BEFORE the parakeet substring match — the Mac
   // engine is "fluid-parakeet-tdt-v3", which contains "parakeet" but runs
   // through FluidAudio on the Apple Neural Engine, not NeMo on CUDA.

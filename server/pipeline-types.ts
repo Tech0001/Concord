@@ -59,11 +59,9 @@ export interface PipelineConfig {
     computeType: string;
     beamSize: number;
     pythonVenv: string;
-    /** Engine the wizard installed. Empty string before the wizard has
-     *  run; "parakeet" or "whisper" once chosen. Read by transcribe.ts
-     *  to route between the GPU NeMo path and the CPU faster-whisper
-     *  path independently of model name heuristics. */
-    engine: "parakeet" | "whisper" | "";
+    /** Native Nemotron is the default on this Linux branch. Legacy engine
+     *  selections remain usable for rollback and existing installations. */
+    engine: "nemo" | "parakeet" | "whisper" | "";
     /** Absolute path to the wizard-installed venv directory (the dir,
      *  not the python binary). Empty string falls back to the legacy
      *  cwd-relative resolution. */

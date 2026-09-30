@@ -83,7 +83,7 @@ interface QueueResponse {
 
 interface ConfigResponse {
   channels: Channel[];
-  transcription?: { model?: string; engine?: "" | "parakeet" | "whisper" };
+  transcription?: { model?: string; engine?: "" | "nemo" | "parakeet" | "whisper" };
 }
 
 const LIBRARY_SETTINGS_KEY = "concord-library-settings-v1";
@@ -199,7 +199,7 @@ function modelSelector(
   platform: NodeJS.Platform | null,
   value: string,
   onChange: (value: string) => void,
-  installedEngine: "" | "parakeet" | "whisper" | null | undefined,
+  installedEngine: "" | "nemo" | "parakeet" | "whisper" | null | undefined,
 ) {
   return (
     <Select value={value} onValueChange={onChange}>
@@ -221,7 +221,7 @@ export default function Library() {
   const [entries, setEntries] = useState<QueueEntry[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [installedEngine, setInstalledEngine] = useState<"" | "parakeet" | "whisper">("");
+  const [installedEngine, setInstalledEngine] = useState<"" | "nemo" | "parakeet" | "whisper">("");
   const [model, setModel] = useState(savedSettings.model || "");
   const [query, setQuery] = useState(savedSettings.query || "");
   const [status, setStatus] = useState(savedSettings.status || "all");

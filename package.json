@@ -1,7 +1,7 @@
 {
   "name": "concord",
   "productName": "Concord",
-  "version": "2.4.4",
+  "version": "2.5.0-nemo.1",
   "description": "Concord — personal research archive for spoken-word media",
   "author": "mackers",
   "homepage": "https://github.com/GodsWildOnes/Concord",
@@ -15,7 +15,7 @@
     "build:server": "esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --define:process.env.NODE_ENV=\\\"production\\\" --outfile=dist/index.js",
     "build:electron": "esbuild electron/main.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/electron/main.js",
     "build": "pnpm run build:client && pnpm run build:server && pnpm run build:electron",
-    "test": "node --import tsx server/embedding-dimensions.test.ts && node --import tsx server/file-safety.test.ts && node --import tsx client/src/lib/ai-chat-persistence.test.ts && node --import tsx client/src/lib/compare-sources.test.ts && node --import tsx server/library-features.test.ts && node --import tsx server/child-process-registry.test.ts && node --import tsx server/runtime-logs.test.ts && node --import tsx server/pipeline-readiness.test.ts && node --import tsx server/first-run-config.test.ts && node --import tsx electron/native-picker.test.ts && node --import tsx client/src/lib/transcription-models.test.ts && node --import tsx server/transcription-environment.test.ts",
+    "test": "node --import tsx server/embedding-dimensions.test.ts && node --import tsx server/file-safety.test.ts && node --import tsx client/src/lib/ai-chat-persistence.test.ts && node --import tsx client/src/lib/compare-sources.test.ts && node --import tsx server/library-features.test.ts && node --import tsx server/child-process-registry.test.ts && node --import tsx server/runtime-logs.test.ts && node --import tsx server/pipeline-readiness.test.ts && node --import tsx server/first-run-config.test.ts && node --import tsx electron/native-picker.test.ts && node --import tsx client/src/lib/transcription-models.test.ts && node --import tsx server/transcription-environment.test.ts && node --import tsx server/nemo-runtime.test.ts && python3 -m unittest discover -s server/transcription-engines -p test_native_adapter.py",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc",
     "electron:rebuild": "electron-builder install-app-deps",
@@ -89,7 +89,7 @@
     "extraResources": [
       { "from": "build/icon-src/icon_1024.png", "to": "icon.png" },
       { "from": "server/transcription-engines", "to": "transcription-engines" },
-      { "from": "build/binaries", "to": "binaries", "filter": ["yt-dlp", "fluidaudiocli"] }
+      { "from": "build/binaries", "to": "binaries", "filter": ["yt-dlp", "fluidaudiocli", "nemo/**/*"] }
     ],
     "asar": true,
     "asarUnpack": [

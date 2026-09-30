@@ -41,6 +41,7 @@ import { unlinkDerivedFile } from "./file-safety";
 import { pipelineSetupStatus, PipelineSetupRequiredError } from "./pipeline-readiness";
 import { detectGpu, pickRecommendedEngine } from "./transcription-setup";
 import { resolveTranscriptionPython, transcriptionDefaults } from "./transcription-config";
+import { NEMO_MODEL } from "./nemo-runtime";
 import { firstRunConfigRepairs } from "./first-run-config";
 import {
   DailyCapReachedError,
@@ -72,9 +73,10 @@ export type { PipelineConfig, PipelineJob, PipelineState, PipelineStatus };
 /** Map a model name to its engine family. Used by loadConfig to detect
  *  stale (engine, model) pairings — e.g. wizard installed Parakeet but
  *  the saved model is `large-v3` — and migrate to a compatible default. */
-function inferModelEngine(model: string): "parakeet" | "whisper" | "fluid" | null {
+function inferModelEngine(model: string): "nemo" | "parakeet" | "whisper" | "fluid" | null {
   if (!model) return null;
   const m = model.toLowerCase();
+  if (m === NEMO_MODEL) return "nemo";
   if (m.startsWith("fluid-")) return "fluid";
   if (m.includes("parakeet")) return "parakeet";
   // The whisper family — large-v3, large-v3-turbo, medium, small, tiny.
@@ -264,7 +266,7 @@ export class Pipeline extends EventEmitter {
         computeType: recommended.computeType,
         beamSize: 5,
         pythonVenv: "./venv/bin/python",
-        engine: "",
+        engine: process.platform === "linux" ? "nemo" : "",
         venvPath: "",
       },
       llm: {
@@ -277,7 +279,7 @@ export class Pipeline extends EventEmitter {
         keepVideo: true,
         keepAudio: false,
         waitForLiveToFinish: true,
-        diarizationEnabled: process.platform === "darwin" || recommended.engine === "parakeet",
+        diarizationEnabled: process.platform === "darwin" || recommended.engine === "parakeet" || recommended.engine === "nemo",
         maxRetries: 3,
         retryDelayMinutes: 5,
       },
@@ -303,7 +305,7 @@ export class Pipeline extends EventEmitter {
       dailyDownloadCap: parseConfigNumber(stored.dailyDownloadCap, defaults.dailyDownloadCap),
       lanAccess: parseConfigBoolean(stored.lanAccess, defaults.lanAccess),
       transcription: (() => {
-        const engine = (stored["transcription.engine"] as "parakeet" | "whisper" | "") || (defaults.transcription.engine ?? "");
+        const engine = (stored["transcription.engine"] as "nemo" | "parakeet" | "whisper" | "") || (defaults.transcription.engine ?? "");
         let model = stored["transcription.model"] || defaults.transcription.model;
         // Heal stale config: if the wizard installed Parakeet but the
         // saved model is a Whisper variant (or vice versa), the spawn
@@ -311,7 +313,7 @@ export class Pipeline extends EventEmitter {
         // default for the installed engine so retranscribe just works.
         const modelEngine = inferModelEngine(model);
         if (engine && modelEngine && engine !== modelEngine) {
-          model = engine === "parakeet"
+          model = engine === "nemo" ? NEMO_MODEL : engine === "parakeet"
             ? (process.platform === "darwin" ? "fluid-parakeet-tdt-v3" : "nvidia/parakeet-tdt-0.6b-v3")
             : transcriptionDefaults("whisper", gpu.present, "", gpu.vramMb).model;
         }

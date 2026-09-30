@@ -1,4 +1,5 @@
 import path from "node:path";
+import { NEMO_MODEL } from "./nemo-runtime";
 
 export interface TranscriptionConfig {
   engine?: string;
@@ -7,14 +8,14 @@ export interface TranscriptionConfig {
 }
 
 /** Keep setup and execution in agreement, including on machines without CUDA. */
-export function transcriptionDefaults(engine: "parakeet" | "whisper", gpuPresent: boolean, venvPath: string, vramMb?: number) {
+export function transcriptionDefaults(engine: "nemo" | "parakeet" | "whisper", gpuPresent: boolean, venvPath: string, vramMb?: number) {
   return {
     engine,
     venvPath,
     pythonVenv: path.join(venvPath, "bin", "python"),
-    model: engine === "parakeet" ? "nvidia/parakeet-tdt-0.6b-v3" : gpuPresent && (vramMb === undefined || vramMb >= 8192) ? "large-v3" : "small",
-    device: gpuPresent ? "cuda" : "cpu",
-    computeType: gpuPresent ? "float16" : "int8",
+    model: engine === "nemo" ? NEMO_MODEL : engine === "parakeet" ? "nvidia/parakeet-tdt-0.6b-v3" : gpuPresent && (vramMb === undefined || vramMb >= 8192) ? "large-v3" : "small",
+    device: engine === "nemo" ? "auto" : gpuPresent ? "cuda" : "cpu",
+    computeType: engine === "nemo" ? "q8_0" : gpuPresent ? "float16" : "int8",
   };
 }
 

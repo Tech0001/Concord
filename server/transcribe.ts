@@ -7,6 +7,8 @@ import { transcribeWithParakeet } from "./transcribe-parakeet";
 import { enginesDir } from "./transcription-setup";
 import { trackChildProcess } from "./child-process-registry";
 import { resolveTranscriptionPython } from "./transcription-config";
+import { transcribeWithNemo } from "./transcribe-nemo";
+import { NEMO_MODEL } from "./nemo-runtime";
 
 export interface TranscriptionOptions {
   model?: string;
@@ -115,6 +117,10 @@ export function transcribeAudio(
     videoId,
     channelId,
   } = options;
+
+  if (model === NEMO_MODEL) {
+    return withTranscriptionLock(() => transcribeWithNemo(audioPath, outputMdPath, options));
+  }
 
   if (isFluidModel(model)) {
     return withTranscriptionLock(() =>

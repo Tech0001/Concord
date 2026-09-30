@@ -636,10 +636,12 @@ export function backfillVideoSpeakerMetadata(
  *  potentially-stale rows than nuke real data on a misread).
  *
  *  Returns the number of orphan rows removed. */
-export function pruneOrphanedAssignmentsForVideo(videoId: string, channelId: string): number {
-  const entry = getQueueEntry(videoId, channelId);
-  if (!entry?.md_path) return 0;
-  const segments = parseTranscriptSegments(entry.md_path);
+export function pruneOrphanedAssignmentsForVideo(videoId: string, channelId: string, transcriptPath?: string): number {
+  // Re-transcription may stage a replacement before publishing it. Use that
+  // completed transcript rather than the previous path still stored in the DB.
+  const mdPath = transcriptPath ?? getQueueEntry(videoId, channelId)?.md_path;
+  if (!mdPath) return 0;
+  const segments = parseTranscriptSegments(mdPath);
   const validLocals = new Set<string>();
   for (const s of segments) {
     if (s.speaker) validLocals.add(s.speaker);

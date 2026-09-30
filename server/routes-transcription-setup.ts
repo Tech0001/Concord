@@ -31,7 +31,7 @@ export function registerTranscriptionSetupRoutes(app: Express, pipeline: Pipelin
     const defaults = transcriptionDefaults(engine, gpu.present, directory, gpu.vramMb);
     setConfigValues({
       ...Object.fromEntries(Object.entries(defaults).map(([key, value]) => [`transcription.${key}`, value])),
-      "processing.diarizationEnabled": engine === "parakeet",
+      "processing.diarizationEnabled": engine === "parakeet" || engine === "nemo",
     });
     clearRuntimeChecks();
     pipeline.reloadConfig();
@@ -45,8 +45,8 @@ export function registerTranscriptionSetupRoutes(app: Express, pipeline: Pipelin
   // a JSON body so we can carry the engine choice; the response is text/event-stream.
   app.post("/api/transcription/install", async (req: Request, res: Response) => {
     const engine = req.body?.engine as EngineId | undefined;
-    if (engine !== "parakeet" && engine !== "whisper") {
-      return res.status(400).json({ error: "engine must be 'parakeet' or 'whisper'" });
+    if (engine !== "nemo" && engine !== "parakeet" && engine !== "whisper") {
+      return res.status(400).json({ error: "Unknown transcription engine" });
     }
 
     if (installing) return res.status(409).json({ error: "Transcription installation is already running." });
@@ -97,12 +97,13 @@ export function registerTranscriptionSetupRoutes(app: Express, pipeline: Pipelin
   app.post("/api/transcription/select", (req: Request, res: Response) => {
     const engine = req.body?.engine as EngineId | undefined;
     const venvPath = typeof req.body?.venvPath === "string" ? req.body.venvPath : null;
-    if (engine !== "parakeet" && engine !== "whisper") {
-      return res.status(400).json({ error: "engine must be 'parakeet' or 'whisper'" });
+    if (engine !== "nemo" && engine !== "parakeet" && engine !== "whisper") {
+      return res.status(400).json({ error: "Unknown transcription engine" });
     }
     if (installing) return res.status(409).json({ error: "Wait for the transcription installation to finish." });
     const status = getSetupStatus();
-    if (!venvPath && (!status.venv.exists || status.venv.engine !== engine)) {
+    if (engine === "nemo" && !status.installed) return res.status(400).json({ error: "Install Nemotron and voice matching first." });
+    if (engine !== "nemo" && !venvPath && (!status.venv.exists || status.venv.engine !== engine)) {
       return res.status(400).json({ error: "Install this engine first." });
     }
     saveEngine(engine, venvPath || venvDir());

@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import type { PipelineConfig } from "./pipeline-types";
 import { resolveTranscriptionPython } from "./transcription-config";
 import { detectGpu, venvDir } from "./transcription-setup";
+import { NEMO_MODEL, nemoStatus } from "./nemo-runtime";
 
 export interface SetupCheck {
   id: "storage" | "downloads" | "transcription";
@@ -46,6 +47,16 @@ export function setRuntimeInstalling(value: boolean): void { runtimeInstalling =
 
 function runtimeError(config: PipelineConfig, platform: NodeJS.Platform): string | null {
   const t = config.transcription;
+  if (t.model === NEMO_MODEL) {
+    const native = nemoStatus();
+    if (!native.installed) return "Install Nemotron in Pipeline → Setup.";
+    if (!["auto", "cpu", "vulkan:0", "metal"].includes(t.device)) return "Choose automatic, CPU, or a supported native GPU device.";
+    if (t.device !== "auto" && t.device !== "cpu" && native.device !== t.device) return "The selected native GPU is unavailable. Choose Automatic or CPU.";
+    const python = process.env.CONCORD_SPEAKER_PYTHON || path.join(venvDir(), "bin/python");
+    const check = config.processing?.diarizationEnabled ? "import importlib.util; assert importlib.util.find_spec('nemo')" : "import wave, json";
+    const probe = spawnSync(python, ["-c", check], { timeout: 10_000, encoding: "utf8" });
+    return probe.status === 0 ? null : "Prepare voice matching in Pipeline → Setup to retain saved speaker identities.";
+  }
   if (platform === "darwin") {
     const bundled = typeof process.resourcesPath === "string" ? path.join(process.resourcesPath, "binaries/fluidaudiocli") : "";
     const binary = process.env.FLUIDAUDIO_BIN || (bundled && fs.existsSync(bundled) ? bundled : path.join(os.homedir(), "GitHub/FluidAudio/.build/release/fluidaudiocli"));

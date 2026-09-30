@@ -6,6 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { trackChildProcess } from "./child-process-registry";
 import { transcriptionDefaults } from "./transcription-config";
+import { installNemoModels, nemoStatus } from "./nemo-runtime";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,7 +27,7 @@ function isPackagedElectron(): boolean {
 
 // ---- Types ----------------------------------------------------------------
 
-export type EngineId = "parakeet" | "whisper";
+export type EngineId = "nemo" | "parakeet" | "whisper";
 
 export interface PythonInfo {
   /** True when a Python supported by the transcription dependency stack is available. */
@@ -65,6 +66,7 @@ export interface VenvInfo {
 }
 
 export interface SetupStatus {
+  native?: ReturnType<typeof nemoStatus>;
   platform: NodeJS.Platform;
   /** True on Mac (FluidAudio is bundled — no Python needed). */
   skipSetup: boolean;
@@ -79,8 +81,6 @@ export interface SetupStatus {
 }
 
 // ---- Locked paths ---------------------------------------------------------
-
-const PARAKEET_VRAM_FLOOR_MB = 8 * 1024;
 
 /** XDG-style data root for our user data. ~/.local/share/concord on Linux. */
 function dataRoot(): string {
@@ -236,14 +236,9 @@ function isUsablePython(pythonPath: string): boolean {
   return major === 3 && minor >= 10 && minor <= 13;
 }
 
-/** The auto-pick rule: parakeet only when there's a real NVIDIA GPU
- *  with enough VRAM to load parakeet-tdt-0.6b-v3 + activations. Anything
- *  smaller (or no GPU at all) falls back to faster-whisper, which runs
- *  on CPU. */
-export function pickRecommendedEngine(gpu: GpuInfo): EngineId {
-  if (!gpu.present) return "whisper";
-  if ((gpu.vramMb ?? 0) < PARAKEET_VRAM_FLOOR_MB) return "whisper";
-  return "parakeet";
+/** This branch uses the same native multilingual model on CPU and GPU. */
+export function pickRecommendedEngine(_gpu: GpuInfo): EngineId {
+  return "nemo";
 }
 
 /** Top-level status — what the UI needs to render the wizard / Settings
@@ -270,6 +265,7 @@ export function getSetupStatus(): SetupStatus {
   const python = detectPython();
   const gpu = detectGpu();
   const venv = detectVenv();
+  const native = nemoStatus();
   const recommendedEngine = pickRecommendedEngine(gpu);
   return {
     platform: process.platform,
@@ -279,7 +275,8 @@ export function getSetupStatus(): SetupStatus {
     recommendedEngine,
     recommendedSettings: transcriptionDefaults(recommendedEngine, gpu.present, venv.path, gpu.vramMb),
     venv,
-    installed: venv.exists && venv.engine !== null,
+    native,
+    installed: native.installed && venv.exists && venv.engine === "parakeet",
   };
 }
 
@@ -377,6 +374,18 @@ export async function installEngine(
   python: PythonInfo,
   onProgress: (event: InstallProgress) => void,
 ): Promise<{ pythonPath: string }> {
+  if (engine === "nemo") {
+    await installNemoModels(line => onProgress({ phase: "marker", line }));
+    const existing = detectVenv();
+    const pythonPath = path.join(existing.path, "bin", "python");
+    const probe = spawnSync(pythonPath, ["-c", "import importlib.util; assert importlib.util.find_spec('nemo')"], { timeout: 10_000 });
+    if (probe.status !== 0 || existing.engine !== "parakeet") {
+      onProgress({ phase: "pip", line: "Preparing voice fingerprint matching for saved speaker identities…" });
+      return installEngine("parakeet", python, onProgress);
+    }
+    onProgress({ phase: "done", line: "Nemotron ASR, diarization, and voice matching are ready." });
+    return { pythonPath };
+  }
   const reqs = path.join(enginesDir(), `requirements-${engine}.txt`);
   if (!fs.existsSync(reqs)) {
     const msg = `Requirements file missing: ${reqs}`;

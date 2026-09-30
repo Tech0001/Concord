@@ -12,10 +12,11 @@ interface SetupStatus {
   skipSetup: boolean;
   python: { ok: boolean; path: string; version: string | null; error?: string };
   gpu: { present: boolean; name?: string; vramMb?: number; error?: string };
-  recommendedEngine: "parakeet" | "whisper";
+  recommendedEngine: "nemo" | "parakeet" | "whisper";
   recommendedSettings: { model: string; device: string; computeType: string };
-  venv: { path: string; exists: boolean; engine: "parakeet" | "whisper" | null };
+  venv: { path: string; exists: boolean; engine: "nemo" | "parakeet" | "whisper" | null };
   installed: boolean;
+  native?: { available: boolean; installed: boolean; device: string; gpuName?: string };
 }
 
 interface ProgressLine { phase: string; line: string }
@@ -25,7 +26,7 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<ProgressLine[]>([]);
-  const [done, setDone] = useState<{ ok: boolean; engine?: "parakeet" | "whisper"; error?: string; hint?: string } | null>(null);
+  const [done, setDone] = useState<{ ok: boolean; engine?: "nemo" | "parakeet" | "whisper"; error?: string; hint?: string } | null>(null);
   const logBoxRef = useRef<HTMLDivElement | null>(null);
   // Power-user toggle to surface BOTH engine cards. Default off so the
   // common path is one button click on the recommended engine.
@@ -49,7 +50,7 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  const startInstall = async (engine: "parakeet" | "whisper") => {
+  const startInstall = async (engine: "nemo" | "parakeet" | "whisper") => {
     setInstalling(true);
     onBusyChange?.(true);
     setProgress([]);
@@ -137,18 +138,18 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-              {done?.engine || status.venv.engine || "Transcription engine"} installed
+              {done?.engine || (status.native?.installed ? "Nemotron" : status.venv.engine) || "Transcription engine"} installed
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
-            <p>The engine is installed. Models download on first use. Review the model and device settings below before finishing setup.</p>
+            <p>Multilingual transcription, speaker-turn detection, and saved voice matching are ready. Review the model and device settings below before finishing setup.</p>
             <p className="text-xs text-muted-foreground">
-              Recommended hardware settings select CPU automatically when no NVIDIA GPU is detected.
+              Automatic processing uses the native GPU backend when available and CPU otherwise. Existing transcripts stay available until you choose to re-transcribe them.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={async () => {
                 try {
-                  await apiRequest("POST", "/api/transcription/select", { engine: done?.engine || status.venv.engine });
+                  await apiRequest("POST", "/api/transcription/select", { engine: done?.engine || (status.native?.installed ? "nemo" : status.venv.engine) });
                   onInstalled?.();
                   toast({ title: "Recommended hardware settings applied" });
                 } catch (error) {
@@ -188,19 +189,16 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
           {/* Detection summary */}
           <div className="grid gap-2 text-xs sm:grid-cols-2">
             <DetectRow
-              label="Python"
+              label="Voice matching Python"
               ok={status.python.ok}
               detail={status.python.version || status.python.error || "not found"}
             />
             <DetectRow
-              label="NVIDIA GPU"
-              ok={status.gpu.present}
+              label="Native runtime"
+              ok={Boolean(status.native?.available)}
               detail={
-                status.gpu.present
-                  ? `${status.gpu.name || "NVIDIA"} (${Math.round((status.gpu.vramMb ?? 0) / 1024)}GB)`
-                  : "Not detected — CPU available"
+                status.native?.available ? status.native.gpuName || "CPU available" : "Install the Concord NeMo build"
               }
-              neutral={!status.gpu.present}
             />
           </div>
 
@@ -212,13 +210,13 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
               <Badge variant="secondary">{recommended}</Badge>
             </div>
             <p className="mt-1 text-muted-foreground">
-              {recommended === "parakeet"
+              {recommended === "nemo" ? "Nemotron 3.5 transcribes multiple languages on CPU or supported GPUs. Nemotron Diarization detects speaker turns; voice matching links people across the recording and your saved profiles." : recommended === "parakeet"
                 ? "NVIDIA GPU detected with at least 8GB VRAM — Parakeet will use this card."
                 : status.gpu.present
                   ? "This GPU has less than 8GB VRAM — Whisper is recommended. Use a smaller model or CPU if GPU memory is limited."
                   : "Whisper will use your CPU. Integrated AMD or Intel graphics are not used for transcription."}
             </p>
-            <p className="mt-2 font-medium">Installation will select: {status.recommendedSettings.model} · {status.recommendedSettings.device === "cuda" ? "NVIDIA GPU" : "CPU"}{recommended === "whisper" ? ` · ${status.recommendedSettings.computeType}` : ""}.</p>
+            <p className="mt-2 font-medium">Installation will select: {status.recommendedSettings.model} · {recommended === "nemo" ? "Automatic CPU / GPU" : status.recommendedSettings.device === "cuda" ? "NVIDIA GPU" : "CPU"}{recommended === "whisper" ? ` · ${status.recommendedSettings.computeType}` : ""}.</p>
             <p className="mt-1 text-muted-foreground">Model & hardware settings become available after installation.</p>
           </div>
 
@@ -238,7 +236,8 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
               recommended engine; two side-by-side cards when the user
               has opted into the manual override. */}
           {showAllEngines ? (
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <EngineCard engine="nemo" size="~810 MiB models + voice matching" speed="CPU or GPU" requirements="Bundled native runtime; Python for saved voice matching" disabled={!status.python.ok || !status.native?.available || installing} installing={installing} isRecommended={true} onInstall={() => startInstall("nemo")} />
               <EngineCard
                 engine="parakeet"
                 size="~5GB"
@@ -264,25 +263,25 @@ export default function TranscriptionSetup({ onInstalled, onBusyChange }: { onIn
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Button
                 size="lg"
-                disabled={!status.python.ok || installing}
+                disabled={!status.python.ok || installing || (recommended === "nemo" && !status.native?.available)}
                 onClick={() => startInstall(recommended)}
               >
                 {installing
                   ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Installing {recommended}…</>
-                  : <>Install {recommended} ({recommended === "parakeet" ? "~5GB" : "~1.5GB"})</>}
+                  : <>Install {recommended} ({recommended === "nemo" ? "~810 MiB models" : recommended === "parakeet" ? "~5GB" : "~1.5GB"})</>}
               </Button>
             </div>
           )}
 
           <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>Will install to <code>{status.venv.path}</code>. First-time install pulls wheels from PyPI; needs internet.</span>
+            <span>Models are downloaded once. Existing voice matching is reused; a fresh voice-matching setup also needs Python packages.</span>
             <button
               type="button"
               className="underline-offset-2 hover:underline"
               onClick={() => setShowAllEngines((v) => !v)}
               disabled={installing}
             >
-              {showAllEngines ? "Use recommended only" : "Show both engines"}
+              {showAllEngines ? "Use recommended only" : "Show legacy engines"}
             </button>
           </div>
         </CardContent>
@@ -357,7 +356,7 @@ function DetectRow({ label, ok, detail, neutral }: { label: string; ok: boolean;
 }
 
 interface EngineCardProps {
-  engine: "parakeet" | "whisper";
+  engine: "nemo" | "parakeet" | "whisper";
   size: string;
   speed: string;
   requirements: string;

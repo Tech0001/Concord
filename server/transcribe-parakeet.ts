@@ -164,7 +164,7 @@ function runPython(pythonPath: string, args: string[], tag: string): Promise<voi
   });
 }
 
-function postProcess(args: {
+export function postProcess(args: {
   jsonPath: string;
   diarPath: string;
   outputMdPath: string;
@@ -230,7 +230,7 @@ function postProcess(args: {
   // weren't given video/channel IDs (e.g. CLI smoke tests) or if the
   // Python side didn't include a profiles rollup (older versions).
   if (diarize && videoId && channelId && speakerProfiles && speakerProfiles.length > 0) {
-    persistSpeakerProfiles(speakerProfiles, videoId, channelId);
+    persistSpeakerProfiles(speakerProfiles, videoId, channelId, outputMdPath);
   }
 
   // The .diar.json is fully merged into the main JSON now. Drop it so we
@@ -261,6 +261,7 @@ function persistSpeakerProfiles(
   profiles: NonNullable<SortformerJSON["speakerProfiles"]>,
   videoId: string,
   channelId: string,
+  transcriptPath: string,
 ): void {
   let matched = 0;
   let unidentified = 0;
@@ -287,7 +288,7 @@ function persistSpeakerProfiles(
   // as chips in the drawer (no segment to render) but DO show up in
   // the unidentified list — confusing because the user sees nothing
   // to label.
-  const removed = pruneOrphanedAssignmentsForVideo(videoId, channelId);
+  const removed = pruneOrphanedAssignmentsForVideo(videoId, channelId, transcriptPath);
   if (removed > 0) console.log(`[parakeet] Pruned ${removed} orphan speaker assignment${removed === 1 ? "" : "s"} from previous diarization`);
   if (matched > 0 || unidentified > 0) {
     console.log(

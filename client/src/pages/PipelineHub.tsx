@@ -97,7 +97,7 @@ export default function PipelineHub({ section = "run" }: { section?: "run" | "se
   );
 }
 
-interface RuntimeConfig { model: string; device: string; computeType: string; engine?: "" | "parakeet" | "whisper" }
+interface RuntimeConfig { model: string; device: string; computeType: string; engine?: "" | "nemo" | "parakeet" | "whisper" }
 
 function RuntimeSettings({ onSaved, disabled, runtimeReady }: { onSaved: () => void; disabled: boolean; runtimeReady: boolean }) {
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
@@ -109,7 +109,7 @@ function RuntimeSettings({ onSaved, disabled, runtimeReady }: { onSaved: () => v
   useEffect(() => {
     let cancelled = false;
     Promise.all([apiRequest("GET", "/api/pipeline/config").then(r => r.json()), apiRequest("GET", "/api/transcription/status").then(r => r.json())])
-      .then(([data, system]) => { if (!cancelled) { setConfig(data.transcription); setPlatform(system.platform); setGpuPresent(system.gpu.present); setInstalled(system.installed || system.skipSetup); } })
+      .then(([data, system]) => { if (!cancelled) { setConfig(data.transcription); setPlatform(system.platform); setGpuPresent(data.transcription.engine === "nemo" ? system.native?.device !== "cpu" && !!system.native?.available : system.gpu.present); setInstalled(system.installed || system.skipSetup); } })
       .catch(() => { if (!cancelled) setError("Could not load transcription settings. Use Check again to retry."); });
     return () => { cancelled = true; };
   }, []);
@@ -129,12 +129,12 @@ function RuntimeSettings({ onSaved, disabled, runtimeReady }: { onSaved: () => v
   return <Card>
     <CardHeader><CardTitle className="text-sm">Model & hardware</CardTitle></CardHeader>
     <CardContent className="space-y-4">
-      {platform !== "darwin" && !gpuPresent && <p className="text-xs text-muted-foreground">No NVIDIA GPU detected. Use CPU processing on this computer.</p>}
+      {platform !== "darwin" && !gpuPresent && <p className="text-xs text-muted-foreground">CPU processing is available on this computer.</p>}
       <div className="grid gap-4 sm:grid-cols-3">
         <div><label className="mb-2 block text-xs" htmlFor="pipeline-model">Model</label><Select value={config.model} onValueChange={model => setConfig({ ...config, model })} disabled={disabled}><SelectTrigger id="pipeline-model"><SelectValue /></SelectTrigger><SelectContent>{visibleModels(platform, config.model, config.engine).map(model => <SelectItem key={model.value} value={model.value}>{model.label}</SelectItem>)}</SelectContent></Select></div>
         {platform !== "darwin" && <>
-          <div><label className="mb-2 block text-xs" htmlFor="pipeline-device">Process on</label><Select value={config.device} onValueChange={device => setConfig({ ...config, device, computeType: device === "cpu" ? "int8" : "float16" })} disabled={disabled}><SelectTrigger id="pipeline-device"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="cpu">CPU</SelectItem><SelectItem value="cuda" disabled={!gpuPresent}>NVIDIA GPU{!gpuPresent ? " (not detected)" : ""}</SelectItem></SelectContent></Select></div>
-          <div><label className="mb-2 block text-xs" htmlFor="pipeline-compute">Compute type (Whisper)</label><Select value={config.computeType} onValueChange={computeType => setConfig({ ...config, computeType })} disabled={disabled || config.model.includes("parakeet")}><SelectTrigger id="pipeline-compute"><SelectValue /></SelectTrigger><SelectContent>{(config.device === "cpu" ? ["int8", "float32"] : ["float16", "int8", "float32"]).map(type => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent></Select></div>
+          <div><label className="mb-2 block text-xs" htmlFor="pipeline-device">Process on</label><Select value={config.device} onValueChange={device => setConfig({ ...config, device, computeType: config.engine === "nemo" ? "q8_0" : device === "cpu" ? "int8" : "float16" })} disabled={disabled}><SelectTrigger id="pipeline-device"><SelectValue /></SelectTrigger><SelectContent>{config.engine === "nemo" && <SelectItem value="auto">Automatic</SelectItem>}<SelectItem value="cpu">CPU</SelectItem><SelectItem value={config.engine === "nemo" ? "vulkan:0" : "cuda"} disabled={!gpuPresent}>{config.engine === "nemo" ? "GPU (Vulkan)" : "NVIDIA GPU"}{!gpuPresent ? " (not detected)" : ""}</SelectItem></SelectContent></Select></div>
+          {config.engine !== "nemo" && <div><label className="mb-2 block text-xs" htmlFor="pipeline-compute">Compute type (Whisper)</label><Select value={config.computeType} onValueChange={computeType => setConfig({ ...config, computeType })} disabled={disabled || config.model.includes("parakeet")}><SelectTrigger id="pipeline-compute"><SelectValue /></SelectTrigger><SelectContent>{(config.device === "cpu" ? ["int8", "float32"] : ["float16", "int8", "float32"]).map(type => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent></Select></div>}
         </>}
       </div>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
