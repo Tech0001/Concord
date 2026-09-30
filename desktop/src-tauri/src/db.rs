@@ -403,7 +403,7 @@ pub fn palette(root: &Path, query: &str) -> Result<Value> {
 }
 
 pub fn speakers(root: &Path) -> Result<Vec<Value>> {
-    rows(&open(root)?,"SELECT s.id,s.name,s.color,s.notes,count(DISTINCT a.media_id) AS recordings,coalesce(sum(a.airtime),0) AS airtime FROM speakers s LEFT JOIN assignments a ON a.speaker_id=s.id GROUP BY s.id ORDER BY s.name COLLATE NOCASE",[])
+    rows(&open(root)?,"SELECT s.id,s.name,s.color,s.notes,count(DISTINCT a.media_id) AS recordings,coalesce(sum(a.airtime),0) AS airtime FROM speakers s LEFT JOIN assignments a ON a.speaker_id=s.id GROUP BY s.id ORDER BY airtime DESC, s.name COLLATE NOCASE",[])
 }
 
 pub fn assign(root: &Path, media_id: &str, local_id: &str, name: &str) -> Result<()> {
@@ -708,5 +708,15 @@ mod tests {
         let gamma = hits.iter().find(|h| h["id"] == "c").unwrap();
         assert!(gamma["speaker_name"].is_null());
         assert!(search(&root, "\" OR *").unwrap().is_empty());
+    }
+
+    #[test]
+    fn speakers_are_listed_by_speaking_time() {
+        let (_tmp, root) = library_fixture();
+        let list = speakers(&root).unwrap();
+        assert_eq!(list[0]["name"], "Tom");
+        assert_eq!(list[1]["name"], "Sarah");
+        assert_eq!(list[1]["airtime"], 400.0);
+        assert_eq!(list[1]["recordings"], 1);
     }
 }

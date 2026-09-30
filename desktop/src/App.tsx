@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import "./style.css";
 import "./shell/shell.css";
-import { Library, NotebookPen, Plus } from "lucide-react";
-import type { Job, Note, Overview, Research } from "./lib/types.ts";
+import { Library } from "lucide-react";
+import type { Job, Note, Overview } from "./lib/types.ts";
 import { api } from "./lib/ipc.ts";
 import { count } from "./lib/format.ts";
 import { useRoute } from "./lib/router.ts";
@@ -11,7 +10,6 @@ import { useShortcuts } from "./lib/shortcuts.ts";
 import { PHONE, RAIL, useMediaQuery } from "./lib/media-query.ts";
 import { ToastProvider, useToast } from "./ui/Toasts.tsx";
 import { Empty } from "./ui/Empty.tsx";
-import { Button } from "./ui/Button.tsx";
 import { AppContext, type AppContextValue } from "./shell/AppContext.tsx";
 import { Sidebar } from "./shell/Sidebar.tsx";
 import { TabBar } from "./shell/TabBar.tsx";
@@ -22,7 +20,11 @@ import { NoteEditor } from "./notes/NoteEditor.tsx";
 import { LibraryPage } from "./library/LibraryPage.tsx";
 import { PlayerPage } from "./player/PlayerPage.tsx";
 import { SearchPage } from "./search/SearchPage.tsx";
-import { SpeakerView, Documents, MapView, Settings, PageHeading } from "./views";
+import { SpeakersPage } from "./speakers/SpeakersPage.tsx";
+import { DocumentsPage } from "./documents/DocumentsPage.tsx";
+import { NotesPage } from "./notes/NotesPage.tsx";
+import { MapPage } from "./map/MapPage.tsx";
+import { SettingsPage } from "./settings/SettingsPage.tsx";
 
 export default function App() {
   return (
@@ -36,7 +38,6 @@ function Shell() {
   const toast = useToast();
   const { route, navigate, back } = useRoute();
   const [overview, setOverview] = useState<Overview>();
-  const [research, setResearch] = useState<Research>({ notes: [], links: [], docs: [] });
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -54,7 +55,6 @@ function Shell() {
   useEffect(() => {
     if (!available) return;
     api.overview().then(setOverview).catch(toast.error);
-    api.research().then(setResearch).catch(toast.error);
   }, [available, revision, toast]);
 
   // Poll quickly while a job runs, slowly otherwise; refresh data when job states change.
@@ -161,7 +161,6 @@ function Shell() {
       </div>
     );
 
-  const onError = (e: string) => toast.error(e);
   let page: React.ReactNode;
   switch (route.page) {
     case "recording":
@@ -171,69 +170,19 @@ function Shell() {
       page = <SearchPage q={route.q} />;
       break;
     case "speakers":
-      page = <SpeakerView revision={revision} onError={onError} />;
+      page = <SpeakersPage />;
       break;
     case "documents":
-      page = (
-        <Documents
-          data={research.docs}
-          onError={onError}
-          onImport={async () => {
-            try {
-              const paths = await api.pickDocuments();
-              if (!paths.length) return;
-              await api.importDocuments(paths);
-              refresh();
-            } catch (e) {
-              toast.error(e);
-            }
-          }}
-        />
-      );
+      page = <DocumentsPage id={route.id} />;
       break;
     case "notes":
-      page = (
-        <>
-          <PageHeading
-            eyebrow="COLLECT YOUR THINKING"
-            title="Notes"
-            description="Keep a thought, a passage, or a connection."
-            action={
-              <Button variant="primary" icon={Plus} onClick={() => setNote({ title: "", body: "" })}>
-                New note
-              </Button>
-            }
-          />
-          <div className="note-grid">
-            {research.notes.map((n) => (
-              <button className="note-card panel" key={n.id} onClick={() => setNote(n)}>
-                <NotebookPen size={21} />
-                <h3>{n.title}</h3>
-                <p>{n.body || n.quote || "Open note"}</p>
-              </button>
-            ))}
-          </div>
-        </>
-      );
+      page = <NotesPage />;
       break;
     case "map":
-      page = (
-        <MapView
-          data={research}
-          onOpen={setNote}
-          onLink={async (source, target) => {
-            try {
-              await api.linkNotes(source, target);
-              refresh();
-            } catch (e) {
-              toast.error(e);
-            }
-          }}
-        />
-      );
+      page = <MapPage />;
       break;
     case "settings":
-      page = <Settings overview={overview} device={device} setDevice={setDevice} onImport={() => void importLegacy()} onError={onError} />;
+      page = <SettingsPage />;
       break;
     default:
       page = <LibraryPage />;

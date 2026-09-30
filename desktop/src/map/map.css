@@ -1,0 +1,54 @@
+.map-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.map-canvas {
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in oklab, var(--foreground) 10%, transparent) 1px, transparent 0) 0 0 / 24px 24px,
+    var(--card);
+}
+.map-canvas svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: calc(100dvh - 260px);
+}
+.map-link {
+  stroke: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+  stroke-width: 1.5;
+}
+.map-node {
+  cursor: pointer;
+  outline: none;
+}
+.map-node rect {
+  fill: var(--popover);
+  stroke: var(--border);
+  stroke-width: 1;
+  transition: stroke var(--dur) var(--ease);
+}
+.map-node:hover rect,
+.map-node:focus-visible rect {
+  stroke: var(--primary);
+  stroke-width: 1.5;
+}
+.map-node circle {
+  fill: var(--primary);
+}
+.map-node text {
+  fill: var(--foreground);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+}
+@media (max-width: 639px) {
+  .map-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

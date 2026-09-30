@@ -42,3 +42,67 @@
 .note-source-btn {
   margin-right: auto;
 }
+.notes-page {
+  max-width: 960px;
+}
+.notes-filter {
+  max-width: 360px;
+  margin-bottom: 12px;
+}
+.note-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+.note-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.note-row:hover {
+  background: var(--hover);
+}
+.note-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.note-row-title {
+  font-weight: 600;
+}
+.note-row-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font-family: var(--font-reading);
+}
+.note-row-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+.note-row-source {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.note-row-date {
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+@media (max-width: 639px) {
+  .note-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+}

@@ -165,7 +165,7 @@ async fn jobs(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
 async fn research(state: State<'_, AppState>) -> Result<Value, String> {
     let root = state.root.clone();
     work(move||{
-    let db=db::open(&root)?;Ok(json!({"notes":db::rows(&db,"SELECT * FROM notes ORDER BY created_at DESC",[])?,"links":db::rows(&db,"SELECT * FROM links",[])?,"docs":db::rows(&db,"SELECT id,title,length(body) AS length FROM docs ORDER BY title",[])?}))
+    let db=db::open(&root)?;Ok(json!({"notes":db::rows(&db,"SELECT n.*, m.title AS media_title FROM notes n LEFT JOIN media m ON m.id = n.media_id ORDER BY n.created_at DESC",[])?,"links":db::rows(&db,"SELECT * FROM links",[])?,"docs":db::rows(&db,"SELECT id,title,length(body) AS length FROM docs ORDER BY title",[])?}))
 }).await
 }
 #[tauri::command]
