@@ -1,6 +1,8 @@
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OpenFlags};
+use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub fn data_root() -> PathBuf {
@@ -190,24 +192,139 @@ pub fn import_legacy(root: &Path, source: &Path) -> Result<Value> {
     stats(root)
 }
 
-pub fn library(root: &Path, query: &str, channel: &str, offset: u32) -> Result<Value> {
+pub const AUDIO_EXTENSIONS: [&str; 8] = ["ogg", "oga", "opus", "mp3", "m4a", "wav", "flac", "aac"];
+pub const REVIEW_STATES: [&str; 3] = ["unreviewed", "in_review", "reviewed"];
+
+/// SQL expression classifying `m` as audio or video by file extension.
+fn kind_sql() -> String {
+    let tests: Vec<String> = AUDIO_EXTENSIONS
+        .iter()
+        .map(|e| format!("lower(coalesce(m.path,'')) LIKE '%.{e}'"))
+        .collect();
+    format!("CASE WHEN {} THEN 'audio' ELSE 'video' END", tests.join(" OR "))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LibraryFilter {
+    pub query: String,
+    pub channel: String,
+    pub kind: String,
+    pub transcribed: String,
+    pub starred: bool,
+    pub review: String,
+    pub sort: String,
+    pub offset: u32,
+    pub limit: u32,
+}
+
+fn order_by(sort: &str) -> &'static str {
+    match sort {
+        "oldest" => "m.date ASC, m.title COLLATE NOCASE",
+        "opened" => "m.opened_at IS NULL, m.opened_at DESC, m.date DESC",
+        "words" => "m.words DESC, m.date DESC",
+        "title" => "m.title COLLATE NOCASE, m.date DESC",
+        "longest" => "m.duration DESC, m.date DESC",
+        _ => "m.date DESC, m.title COLLATE NOCASE",
+    }
+}
+
+pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
     let db = open(root)?;
-    let filter = like_pattern(query);
-    let total: i64 = db.query_row(
-        "SELECT count(*) FROM media WHERE title LIKE ?1 ESCAPE '\\' AND (?2='' OR channel=?2)",
-        params![filter, channel],
-        |r| r.get(0),
+    let kind = kind_sql();
+    let query = f.query.trim();
+    let pattern = like_pattern(query);
+    let filter = format!(
+        "(?1 = '' OR m.title LIKE ?2 ESCAPE '\\' OR m.channel LIKE ?2 ESCAPE '\\' OR coalesce(m.path,'') LIKE ?2 ESCAPE '\\')
+         AND (?3 = '' OR m.channel = ?3)
+         AND (?4 = '' OR {kind} = ?4)
+         AND (?5 = '' OR (?5 = 'yes') = (m.transcript IS NOT NULL))
+         AND (?6 = 0 OR m.starred = 1)
+         AND (?7 = '' OR m.review_state = ?7)"
+    );
+    let args: [&dyn rusqlite::ToSql; 7] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review];
+    let (total, transcribed): (i64, i64) = db.query_row(
+        &format!("SELECT count(*), coalesce(sum(m.transcript IS NOT NULL), 0) FROM media m WHERE {filter}"),
+        &args[..],
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    let items=rows(&db,"SELECT m.*,(SELECT count(*) FROM assignments a WHERE a.media_id=m.id) AS speaker_count,
-      (SELECT group_concat(DISTINCT s.name) FROM assignments a JOIN speakers s ON s.id=a.speaker_id WHERE a.media_id=m.id) AS speaker_names
-      FROM media m WHERE title LIKE ?1 ESCAPE '\\' AND (?2='' OR channel=?2) ORDER BY date DESC,title LIMIT 60 OFFSET ?3",params![filter,channel,offset])?;
-    Ok(
-        json!({"items":items,"total":total,"channels":rows(&db,"SELECT DISTINCT channel FROM media ORDER BY channel",[]) ?}),
+    let limit = if [60, 120, 240].contains(&f.limit) { f.limit } else { 60 };
+    let paged: [&dyn rusqlite::ToSql; 8] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.offset];
+    let mut items = rows(
+        &db,
+        &format!(
+            "SELECT m.*, {kind} AS kind, (SELECT count(*) FROM assignments a WHERE a.media_id = m.id) AS speaker_count
+             FROM media m WHERE {filter} ORDER BY {} LIMIT {limit} OFFSET ?8",
+            order_by(&f.sort)
+        ),
+        &paged[..],
+    )?;
+    attach_speakers(&db, &mut items)?;
+    Ok(json!({
+        "items": items,
+        "total": total,
+        "transcribed": transcribed,
+        "channels": rows(&db, "SELECT DISTINCT channel FROM media ORDER BY channel COLLATE NOCASE", [])?,
+    }))
+}
+
+/// Named voices per recording, loudest first; the Library shows the top three.
+fn attach_speakers(db: &Connection, items: &mut [Value]) -> Result<()> {
+    let ids: Vec<&str> = items.iter().filter_map(|m| m["id"].as_str()).collect();
+    let found = rows(
+        db,
+        "SELECT a.media_id, s.name, s.color, sum(a.airtime) AS airtime
+         FROM assignments a JOIN speakers s ON s.id = a.speaker_id
+         WHERE a.media_id IN (SELECT value FROM json_each(?1))
+         GROUP BY a.media_id, s.id ORDER BY a.media_id, airtime DESC",
+        [serde_json::to_string(&ids)?],
+    )?;
+    let mut by_media: HashMap<String, Vec<Value>> = HashMap::new();
+    for row in found {
+        let id = row["media_id"].as_str().unwrap_or_default().to_owned();
+        by_media
+            .entry(id)
+            .or_default()
+            .push(json!({"name": row["name"], "color": row["color"], "airtime": row["airtime"]}));
+    }
+    for item in items {
+        let list = by_media.remove(item["id"].as_str().unwrap_or_default()).unwrap_or_default();
+        item["speaker_total"] = json!(list.len());
+        item["speakers"] = json!(list.into_iter().take(3).collect::<Vec<_>>());
+    }
+    Ok(())
+}
+
+fn update_media(root: &Path, sql: &str, args: impl rusqlite::Params) -> Result<()> {
+    let changed = open(root)?.execute(sql, args)?;
+    anyhow::ensure!(changed == 1, "Recording not found");
+    Ok(())
+}
+
+pub fn set_starred(root: &Path, id: &str, starred: bool) -> Result<()> {
+    update_media(root, "UPDATE media SET starred = ?1 WHERE id = ?2", params![starred, id])
+}
+
+pub fn set_review(root: &Path, id: &str, state: &str) -> Result<()> {
+    anyhow::ensure!(REVIEW_STATES.contains(&state), "Unknown review state: {state}");
+    update_media(root, "UPDATE media SET review_state = ?1 WHERE id = ?2", params![state, id])
+}
+
+pub fn save_position(root: &Path, id: &str, seconds: f64) -> Result<()> {
+    anyhow::ensure!(seconds.is_finite(), "Invalid playback position");
+    update_media(
+        root,
+        "UPDATE media SET position = max(0, ?1), opened_at = datetime('now') WHERE id = ?2",
+        params![seconds, id],
     )
 }
 
 pub fn media(root: &Path, id: &str) -> Result<Value> {
-    rows(&open(root)?, "SELECT * FROM media WHERE id=?1", [id])?
+    rows(
+        &open(root)?,
+        &format!("SELECT m.*, {} AS kind FROM media m WHERE m.id = ?1", kind_sql()),
+        [id],
+    )?
         .pop()
         .context("Recording not found")
 }
@@ -234,7 +351,12 @@ pub fn transcript(root: &Path, id: &str) -> Result<Value> {
     if segments.is_empty() {
         segments=rows(&db,"SELECT CAST(start AS REAL) AS start,CAST(end AS REAL) AS end,speaker,text FROM segments WHERE media_id=?1 ORDER BY CAST(start AS REAL)",[id])?;
     }
-    Ok(json!({"media":item,"segments":segments,"assignments":assignments,"model":model}))
+    let notes = rows(
+        &db,
+        "SELECT id, title, start, end FROM notes WHERE media_id = ?1 AND start IS NOT NULL ORDER BY start",
+        [id],
+    )?;
+    Ok(json!({"media":item,"segments":segments,"assignments":assignments,"notes":notes,"model":model}))
 }
 
 pub fn search(root: &Path, query: &str) -> Result<Vec<Value>> {
@@ -458,5 +580,97 @@ mod tests {
         assert!(palette(&root, "  ").unwrap()["recordings"].as_array().unwrap().is_empty());
         open(&root).unwrap().execute("UPDATE media SET opened_at=datetime('now')", []).unwrap();
         assert_eq!(palette(&root, "").unwrap()["recordings"][0]["id"], "a");
+    }
+
+    fn library_fixture() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("next");
+        open(&root)
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO media(id,title,channel,date,duration,path,transcript,words) VALUES
+                   ('a','Alpha meeting','Meetings','20251007',8100,'/m/alpha.ogg','/t/alpha.md',9000),
+                   ('b','Beta interview','Interviews','20250102',1200,'/m/beta.mp4',NULL,0),
+                   ('c','Gamma talk','Meetings','20240505',600,'/m/gamma.webm','/t/gamma.md',500);
+                 INSERT INTO speakers(id,name,color) VALUES ('s1','Sarah','#ff0000'),('s2','Tom',NULL);
+                 INSERT INTO assignments(media_id,local_id,speaker_id,airtime) VALUES
+                   ('a','S0','s1',300),('a','S1','s2',900),('a','S2',NULL,50),('a','S3','s1',100);
+                 INSERT INTO notes(id,title,media_id,start,end) VALUES ('n1','Key moment','a',10,20),('n2','No time','a',NULL,NULL);",
+            )
+            .unwrap();
+        (tmp, root)
+    }
+
+    fn ids(v: &Value) -> Vec<String> {
+        v["items"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_owned()).collect()
+    }
+
+    #[test]
+    fn library_filters_sorts_and_summarises_speakers() {
+        let (_tmp, root) = library_fixture();
+        let all = library(&root, &LibraryFilter::default()).unwrap();
+        assert_eq!(all["total"], 3);
+        assert_eq!(all["transcribed"], 2);
+        assert_eq!(ids(&all), ["a", "b", "c"]);
+        let alpha = &all["items"][0];
+        assert_eq!(alpha["kind"], "audio");
+        assert_eq!(all["items"][1]["kind"], "video");
+        assert_eq!(alpha["speaker_count"], 4);
+        assert_eq!(alpha["speaker_total"], 2);
+        assert_eq!(alpha["speakers"][0]["name"], "Tom");
+        assert_eq!(alpha["speakers"][1]["name"], "Sarah");
+        assert_eq!(alpha["speakers"][1]["airtime"], 400.0);
+        assert_eq!(alpha["speakers"][1]["color"], "#ff0000");
+        let only = |edit: fn(&mut LibraryFilter)| {
+            let mut filter = LibraryFilter::default();
+            edit(&mut filter);
+            ids(&library(&root, &filter).unwrap())
+        };
+        assert_eq!(only(|f| f.kind = "video".into()), ["b", "c"]);
+        assert_eq!(only(|f| f.kind = "audio".into()), ["a"]);
+        assert_eq!(only(|f| f.transcribed = "no".into()), ["b"]);
+        assert_eq!(only(|f| f.channel = "Meetings".into()), ["a", "c"]);
+        assert_eq!(only(|f| f.query = "interv".into()), ["b"]);
+        assert_eq!(only(|f| f.query = "meetings".into()), ["a", "c"]);
+        assert_eq!(only(|f| f.query = "gamma.webm".into()), ["c"]);
+        assert_eq!(only(|f| f.query = "%".into()), Vec::<String>::new());
+        assert_eq!(only(|f| f.sort = "oldest".into()), ["c", "b", "a"]);
+        assert_eq!(only(|f| f.sort = "longest".into()), ["a", "b", "c"]);
+        assert_eq!(only(|f| f.sort = "words".into()), ["a", "c", "b"]);
+        assert_eq!(only(|f| f.sort = "title".into()), ["a", "b", "c"]);
+        assert_eq!(only(|f| f.sort = "anything-else".into()), ["a", "b", "c"]);
+        let mut paged = LibraryFilter { limit: 60, offset: 2, ..Default::default() };
+        assert_eq!(ids(&library(&root, &paged).unwrap()), ["c"]);
+        paged.limit = 7; // not an allowed page size, falls back to 60
+        assert_eq!(ids(&library(&root, &paged).unwrap()), ["c"]);
+    }
+
+    #[test]
+    fn star_review_and_position_update_one_recording() {
+        let (_tmp, root) = library_fixture();
+        set_starred(&root, "c", true).unwrap();
+        set_review(&root, "b", "reviewed").unwrap();
+        save_position(&root, "b", 42.5).unwrap();
+        save_position(&root, "a", -3.0).unwrap();
+        let filtered = |f: LibraryFilter| ids(&library(&root, &f).unwrap());
+        assert_eq!(filtered(LibraryFilter { starred: true, ..Default::default() }), ["c"]);
+        assert_eq!(filtered(LibraryFilter { review: "reviewed".into(), ..Default::default() }), ["b"]);
+        assert_eq!(filtered(LibraryFilter { sort: "opened".into(), ..Default::default() })[2], "c");
+        assert_eq!(media(&root, "b").unwrap()["position"], 42.5);
+        assert_eq!(media(&root, "a").unwrap()["position"], 0.0);
+        assert!(set_review(&root, "b", "archived").is_err());
+        assert!(set_starred(&root, "missing", true).is_err());
+        assert!(save_position(&root, "b", f64::NAN).is_err());
+    }
+
+    #[test]
+    fn recording_includes_kind_and_timed_notes() {
+        let (_tmp, root) = library_fixture();
+        let rec = transcript(&root, "a").unwrap();
+        assert_eq!(rec["media"]["kind"], "audio");
+        let notes = rec["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0]["title"], "Key moment");
+        assert_eq!(notes[0]["start"], 10.0);
     }
 }

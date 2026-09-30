@@ -69,9 +69,6 @@ export const api = {
   overview: () => call<Overview>("overview"),
   importLegacy: (path: string) => call<Overview>("import_legacy", { path }),
   library: (filter: LibraryFilter) => call<LibraryPage>("library", { filter }),
-  /** Temporary until the filtered library command lands (plan Task 6). */
-  libraryLegacy: (query: string, channel: string, offset: number) =>
-    call<LibraryPage>("library", { query, channel, offset }),
   recording: (id: string) => call<Recording>("recording", { id }),
   mediaUrl: (id: string) => call<string>("media_file", { id }),
   async thumbnail(id: string): Promise<string | null> {
@@ -93,7 +90,7 @@ export const api = {
   saveNote: (note: Note) => call<string>("save_note", { note }),
   linkNotes: (source: string, target: string) => call<void>("link_notes", { source, target }),
   setStarred: (id: string, starred: boolean) => call<void>("set_starred", { id, starred }),
-  setReview: (id: string, state: ReviewState) => call<void>("set_review", { id, state }),
+  setReview: (id: string, state: ReviewState) => call<void>("set_review", { id, stateName: state }),
   savePosition: (id: string, seconds: number) => call<void>("save_position", { id, seconds }),
   transcriptText: (id: string, start: number, end: number, format: TextFormat) =>
     call<string>("transcript_text", { id, start, end, format }),

@@ -48,8 +48,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     media: fx.mediaList.length, speakers: fx.speakerList.length, notes: fx.notesList.length, docs: fx.docsList.length,
     dataRoot: "/home/you/.local/share/concord-next", legacyDatabase: "/home/you/.local/share/concord/pipeline.db",
   }),
-  library: ({ filter, query, channel, offset }) =>
-    library(filter ?? { ...DEFAULT_FILTER, query: query ?? "", channel: channel ?? "", offset: offset ?? 0 }),
+  library: ({ filter }) => library({ ...DEFAULT_FILTER, ...filter }),
   recording: ({ id }) => fx.recordingFor(id),
   media_file: () => fx.silentWav(600),
   thumbnail_file: ({ id }) => fx.thumbnailFor(id),

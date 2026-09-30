@@ -22,7 +22,7 @@ pub fn resolve(root: &Path, id: &str, generator: &Mutex<()>) -> Result<Option<Pa
         .unwrap_or_default()
         .to_string_lossy()
         .to_lowercase();
-    if ["ogg", "oga", "opus", "mp3", "m4a", "wav", "flac", "aac"].contains(&ext.as_str()) {
+    if db::AUDIO_EXTENSIONS.contains(&ext.as_str()) {
         return Ok(None);
     }
     let folder = root.join("thumbnails");

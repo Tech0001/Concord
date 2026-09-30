@@ -165,7 +165,7 @@ export function LibraryView({
     const timer = setTimeout(
       () =>
         api
-          .libraryLegacy(query, channel, offset)
+          .library({ query, channel, kind: "", transcribed: "", starred: false, review: "", sort: "newest", offset, limit: 60 })
           .then((r) => {
             if (alive) {
               setItems(r.items);

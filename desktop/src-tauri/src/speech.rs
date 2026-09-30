@@ -459,7 +459,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         db::import_files(root, &[input]).unwrap();
-        let items = db::library(root, "", "", 0).unwrap();
+        let items = db::library(root, &db::LibraryFilter::default()).unwrap();
         let id = items["items"][0]["id"].as_str().unwrap().to_owned();
         let control = Arc::new(Control::default());
         let job = start(
