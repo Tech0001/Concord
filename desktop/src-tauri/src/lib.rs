@@ -1,4 +1,7 @@
 pub mod db;
+pub mod export;
+pub mod system;
+pub mod waveform;
 pub mod playback;
 pub mod speech;
 pub mod thumbnail;
@@ -10,7 +13,8 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tauri::{Manager, State};
+use std::sync::atomic::Ordering;
+use tauri::{Emitter, Manager, State};
 
 pub struct AppState {
     root: PathBuf,
@@ -18,6 +22,7 @@ pub struct AppState {
     control: Arc<speech::Control>,
     thumbnail_generator: Arc<std::sync::Mutex<()>>,
     playback: Arc<playback::Playback>,
+    export: Arc<export::ExportControl>,
 }
 async fn work<T: Send + 'static>(
     f: impl FnOnce() -> Result<T> + Send + 'static,
@@ -234,6 +239,66 @@ async fn link_notes(
     .await
 }
 
+#[tauri::command]
+async fn transcript_text(state: State<'_, AppState>, id: String, start: f64, end: f64, format: String) -> Result<String, String> {
+    let root = state.root.clone();
+    work(move || Ok(export::render(&export::excerpt(&root, &id, start, end)?, export::TextFormat::parse(&format)?))).await
+}
+#[tauri::command]
+async fn export_transcript(
+    state: State<'_, AppState>,
+    id: String,
+    start: f64,
+    end: f64,
+    format: String,
+    dest: String,
+) -> Result<String, String> {
+    let root = state.root.clone();
+    work(move || {
+        let path = export::export_transcript(&root, &id, start, end, export::TextFormat::parse(&format)?, Path::new(&dest))?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+}
+#[tauri::command]
+async fn export_media(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    start: f64,
+    end: f64,
+    format: String,
+    dest: String,
+) -> Result<String, String> {
+    let (root, control) = (state.root.clone(), state.export.clone());
+    work(move || {
+        let _busy = control
+            .busy
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("Another export is still running"))?;
+        control.cancel.store(false, Ordering::SeqCst);
+        let format = export::MediaFormat::parse(&format)?;
+        let path = export::export_media(&root, &id, start, end, format, Path::new(&dest), &control.cancel, |f| {
+            let _ = app.emit("export-progress", f);
+        })?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+}
+#[tauri::command]
+fn cancel_export(state: State<'_, AppState>) {
+    state.export.cancel.store(true, Ordering::SeqCst);
+}
+#[tauri::command]
+async fn waveform(state: State<'_, AppState>, id: String) -> Result<Vec<f32>, String> {
+    let root = state.root.clone();
+    work(move || waveform::peaks(&root, &id)).await
+}
+#[tauri::command]
+async fn reveal_path(path: String) -> Result<(), String> {
+    work(move || system::reveal(Path::new(&path))).await
+}
+
 pub fn run() {
     let root = db::data_root();
     // Small CLI surface lets maintainers exercise the same storage layer in CI.
@@ -265,9 +330,9 @@ pub fn run() {
       .setup(move|app|{
         let db=db::open(&root)?;
         db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'",[])?;
-        app.manage(AppState {root:root.clone(),runtime:speech::Runtime::resolve(app.path().resource_dir().ok()),control:control.clone(),thumbnail_generator:Arc::new(std::sync::Mutex::new(())),playback:Arc::new(playback::Playback::start()?)});Ok(())
+        app.manage(AppState {root:root.clone(),runtime:speech::Runtime::resolve(app.path().resource_dir().ok()),control:control.clone(),thumbnail_generator:Arc::new(std::sync::Mutex::new(())),playback:Arc::new(playback::Playback::start()?),export:Arc::new(export::ExportControl::default())});Ok(())
       })
-      .invoke_handler(tauri::generate_handler![overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,research,document,import_documents,save_note,link_notes])
+      .invoke_handler(tauri::generate_handler![overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,research,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
       .run(move|_,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();}});
 }

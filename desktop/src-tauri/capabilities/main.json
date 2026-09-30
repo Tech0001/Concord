@@ -3,5 +3,5 @@
   "identifier": "main-window",
   "description": "Only the local main window can open the file picker and use application events.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
 }
