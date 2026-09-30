@@ -20,7 +20,8 @@ const allSizes = {
 };
 const sizes = Object.entries(allSizes).filter(([name]) => !process.env.SIZES || process.env.SIZES.split(",").includes(name));
 const modes = process.env.MODES ? process.env.MODES.split(",") : ["dark", "light"];
-// Each shot: name, hash route, optional script before a reload (before) or after load (after).
+// Each shot: name, hash route, optional script before a reload (before), after load (after),
+// and an optional probe expression whose JSON value is printed (for layout debugging).
 const shots = [
   { name: "gallery", query: "gallery", hash: "" },
   { name: "library", hash: "#/library" },
@@ -93,6 +94,10 @@ try {
         if (shot.after) {
           await send("Runtime.evaluate", { expression: shot.after, awaitPromise: true });
           await sleep(500);
+        }
+        if (shot.probe) {
+          const { result } = await send("Runtime.evaluate", { expression: shot.probe, returnByValue: true });
+          console.log(`probe ${shot.name}-${sizeName}-${mode}:`, JSON.stringify(result.value));
         }
         const { data } = await send("Page.captureScreenshot", { format: "png" });
         const file = join(out, `${shot.name}-${sizeName}-${mode}.png`);

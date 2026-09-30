@@ -19,8 +19,6 @@ export type Media = {
   speaker_count?: number;
   speakers?: SpeakerSummary[];
   speaker_total?: number;
-  /** Transitional: returned by the pre-filter library query until the Library rebuild. */
-  speaker_names?: string | null;
 };
 export type Segment = { start: number; end: number; text: string; speaker?: string | null };
 export type Assignment = {

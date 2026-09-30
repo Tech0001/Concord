@@ -20,6 +20,9 @@
   --range-fill: color-mix(in oklab, var(--primary) 20%, transparent);
   --mark: color-mix(in oklab, var(--primary) 38%, transparent);
   --overlay: color-mix(in oklab, #05070b 60%, transparent);
+  /* Text over thumbnails and video stays light in every theme. */
+  --scrim: rgb(8 10 14 / 0.62);
+  --on-scrim: #f6f3ee;
   --shadow-float: 0 1px 2px rgb(27 34 48 / 0.08), 0 12px 32px -8px rgb(27 34 48 / 0.2);
   --control-h: 32px;
   --row-h: 36px;

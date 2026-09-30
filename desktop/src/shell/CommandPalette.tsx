@@ -4,6 +4,7 @@ import { ArrowRight, AudioLines, FileText, Moon, NotebookPen, Plus, Search, Sun,
 import { api } from "../lib/ipc.ts";
 import { prettyDate } from "../lib/format.ts";
 import type { PaletteResults } from "../lib/types.ts";
+import { speakerColor } from "../lib/speakers.ts";
 import { useAppearance } from "../theme/theme.ts";
 import { useToast } from "../ui/Toasts.tsx";
 import { ANALYSIS, ARCHIVE } from "./nav.ts";
@@ -98,7 +99,7 @@ export function CommandPalette({ open, onOpenChange, onAdd }: { open: boolean; o
           <Command.Group heading="Speakers">
             {results.speakers.map((s) => (
               <Command.Item key={s.id} value={`spk-${s.id}`} onSelect={() => run(() => navigate({ page: "speakers" }))}>
-                <i className="palette-dot" style={{ background: s.color ?? "var(--muted-foreground)" }} aria-hidden />
+                <i className="palette-dot" style={{ background: speakerColor(s.color, s.name) }} aria-hidden />
                 <span className="palette-item-text">
                   <span>{s.name}</span>
                 </span>

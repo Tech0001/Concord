@@ -1,4 +1,5 @@
 /* Legacy page styles, removed piece by piece as pages move to the new system (plan Task 13). */
+
 * {
   box-sizing: border-box;
 }
@@ -127,219 +128,16 @@ a {
   color: var(--muted);
   font-size: 12px;
 }
-.tabs {
-  display: flex;
-  gap: 8px;
-}
-.tabs button {
-  padding: 9px 14px;
-  color: #8f9cb0;
-  font-size: 12px;
-}
-.tabs .selected {
-  color: var(--cream);
-  background: #252d3a;
-  border-radius: 6px;
-}
-.filters {
-  display: flex;
-  gap: 8px;
-}
-.filters input {
-  max-width: 180px;
-}
 .filters select,
 .filters input,
 .library-toolbar > input {
   font-size: 11px;
   padding: 8px 10px;
 }
-.section-meta {
-  display: flex;
-  justify-content: space-between;
-  margin: 21px 0 17px;
-  font-size: 10px;
-  letter-spacing: 0.3px;
-  color: #7e8ca0;
-}
-.recording-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
-  gap: 21px;
-}
-.recording-card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  text-align: left;
-  padding: 0;
-  transition:
-    border-color 0.2s,
-    transform 0.2s;
-}
-.recording-card:hover {
-  border-color: #71604b;
-  transform: translateY(-2px);
-}
-.cover {
-  height: 124px;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background:
-    radial-gradient(ellipse at 65% 150%, #57504155, transparent 80%), #222d3b;
-  color: #8f9aaa;
-  overflow: hidden;
-}
-.cover:after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(
-    90deg,
-    transparent,
-    transparent 26px,
-    #e0a24b06 27px,
-    transparent 28px
-  );
-  pointer-events: none;
-}
-.cover-1 {
-  background: #202f31;
-  color: #99b0a4;
-}
-.cover-image {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.cover.has-artwork:after {
-  background: linear-gradient(#0009, transparent 55%, #0003);
-}
-.cover.has-artwork .cover-channel {
-  color: #fff;
-  text-shadow: 0 1px 3px #000;
-}
-.cover-channel,
-.duration,
-.play-circle {
-  z-index: 1;
-}
-.cover-2 {
-  background: #2b2839;
-  color: #aaa0b5;
-}
-.cover-3 {
-  background: #322b27;
-  color: #b8a48a;
-}
-.cover-channel {
-  position: absolute;
-  left: 14px;
-  top: 13px;
-  font-size: 9px;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: #d5d8da90;
-}
-.duration {
-  position: absolute;
-  right: 11px;
-  bottom: 11px;
-  background: #111722b0;
-  border: 1px solid #ffffff12;
-  border-radius: 4px;
-  padding: 3px 5px;
-  color: #dce1e8;
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
-}
-.play-circle {
-  position: absolute;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: var(--amber);
-  color: #2c2319;
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
-}
-.recording-card:hover .play-circle {
-  display: flex;
-}
-.card-copy {
-  padding: 15px 15px 13px;
-}
-.card-date {
-  font-size: 9px;
-  color: #8593a6;
-  display: flex;
-  justify-content: space-between;
-  gap: 6px;
-}
-.card-date > span {
-  color: #91ad9b;
-  display: flex;
-  gap: 3px;
-  align-items: center;
-}
-.card-copy h3 {
-  font-size: 14px;
-  font-weight: 550;
-  line-height: 1.5;
-  margin: 9px 0 20px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  min-height: 42px;
-}
-.card-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  color: #8190a3;
-  font-size: 10px;
-}
-.speaker-stack {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-}
-.names {
-  margin-top: 9px;
-  color: #a2adbc;
-  font-size: 9px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-height: 15px;
-}
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-}
-.welcome {
-  text-align: center;
-  padding: 60px 25px;
-}
-.welcome img {
-  width: 75px;
-  margin-bottom: 25px;
-}
-.welcome p {
-  max-width: 540px;
-  margin: 15px auto;
-}
-.welcome .actions {
-  justify-content: center;
-  margin-top: 25px;
 }
 .actions {
   display: flex;
@@ -350,15 +148,6 @@ a {
 .muted {
   color: var(--muted);
   font-size: 12px;
-}
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 25px;
-  margin: 30px 0;
-  color: var(--muted);
-  font-size: 11px;
 }
 .row {
   display: flex;
@@ -961,11 +750,5 @@ a {
   }
   .transcript-line {
     gap: 10px;
-  }
-  .filters input {
-    width: 145px;
-  }
-  .recording-grid {
-    gap: 15px;
   }
 }

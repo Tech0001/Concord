@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./style.css";
 import "./shell/shell.css";
 import { Library, NotebookPen, Plus } from "lucide-react";
-import icon from "../../assets/brand/concord-icon.svg";
 import type { Job, Note, Overview, Research } from "./lib/types.ts";
 import { api } from "./lib/ipc.ts";
 import { count } from "./lib/format.ts";
@@ -19,7 +18,8 @@ import { Topbar } from "./shell/Topbar.tsx";
 import { CommandPalette } from "./shell/CommandPalette.tsx";
 import { ActivityPanel } from "./shell/ActivityPanel.tsx";
 import { NoteEditor } from "./notes/NoteEditor.tsx";
-import { LibraryView, Player, SearchView, SpeakerView, Documents, MapView, Settings, PageHeading } from "./views";
+import { LibraryPage } from "./library/LibraryPage.tsx";
+import { Player, SearchView, SpeakerView, Documents, MapView, Settings, PageHeading } from "./views";
 
 export default function App() {
   return (
@@ -152,10 +152,12 @@ function Shell() {
       openNote: setNote,
       openPalette: () => setPaletteOpen(true),
       openActivity: () => setActivityOpen(true),
+      addRecordings,
+      importLegacy,
       pageTitle,
       setPageTitle,
     }),
-    [route, navigate, back, overview, revision, refresh, jobs, activeJob, device, setDevice, transcribe, pageTitle],
+    [route, navigate, back, overview, revision, refresh, jobs, activeJob, device, setDevice, transcribe, addRecordings, importLegacy, pageTitle],
   );
 
   if (!available)
@@ -260,25 +262,7 @@ function Shell() {
       page = <Settings overview={overview} device={device} setDevice={setDevice} onImport={() => void importLegacy()} onError={onError} />;
       break;
     default:
-      page =
-        overview?.media === 0 ? (
-          <section className="welcome panel">
-            <img src={icon} alt="Concord" />
-            <h2>Bring your archive along.</h2>
-            <p>Import your existing Concord library and saved voices, or start with a recording.</p>
-            <div className="actions">
-              <Button variant="primary" onClick={() => void importLegacy(overview.legacyDatabase)}>
-                Import Concord library
-              </Button>
-              <Button onClick={() => void importLegacy()}>Choose database…</Button>
-              <Button variant="ghost" onClick={() => void addRecordings()}>
-                Add a recording
-              </Button>
-            </div>
-          </section>
-        ) : (
-          <LibraryView revision={revision} onOpen={(id) => navigate({ page: "recording", id })} onError={onError} />
-        );
+      page = <LibraryPage />;
   }
 
   return (

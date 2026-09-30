@@ -17,6 +17,8 @@ export type AppContextValue = {
   openNote: (note: Note) => void;
   openPalette: () => void;
   openActivity: () => void;
+  addRecordings: () => Promise<void>;
+  importLegacy: (path?: string) => Promise<void>;
   /** Title shown in the top bar; pages like the player set it and clear it (null) on unmount. */
   pageTitle: string | null;
   setPageTitle: (title: string | null) => void;
