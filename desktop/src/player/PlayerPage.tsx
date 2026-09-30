@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { AlertCircle, Circle, CircleCheck, CircleDot, Copy, FolderOpen, Keyboard, LoaderCircle } from "lucide-react";
 import { api } from "../lib/ipc.ts";
 import { copyText } from "../lib/clipboard.ts";
-import { indexAt, speakerTurns, type Range } from "../lib/range.ts";
+import { clampRange, findMatches, indexAt, linesIn, setIn, setOut, spanRange, speakerTurns, type Range } from "../lib/range.ts";
 import { createTimeStore, type TimeStore } from "../lib/timeStore.ts";
 import { useShortcuts } from "../lib/shortcuts.ts";
 import { TABLET, useMediaQuery } from "../lib/media-query.ts";
@@ -15,6 +15,11 @@ import { Segmented } from "../ui/Segmented.tsx";
 import { errorMessage, useToast } from "../ui/Toasts.tsx";
 import { REVIEW_LABELS } from "../library/recordingMenu.ts";
 import { useApp } from "../shell/AppContext.tsx";
+import { clock } from "../lib/format.ts";
+import { ExportDialog } from "./ExportDialog.tsx";
+import { FindBar } from "./FindBar.tsx";
+import { RangeBar } from "./RangeBar.tsx";
+import { useLineSelection } from "./useLineSelection.ts";
 import { MediaStage } from "./MediaStage.tsx";
 import { NameVoiceDialog } from "./NameVoiceDialog.tsx";
 import { PlayerHeader } from "./PlayerHeader.tsx";
@@ -58,7 +63,7 @@ function usePositionSaver(id: string, time: TimeStore, playing: boolean, ready: 
 }
 
 export function PlayerPage({ id, at }: { id: string; at?: number }) {
-  const { revision, refresh, setPageTitle, navigate } = useApp();
+  const { revision, refresh, setPageTitle, navigate, openNote } = useApp();
   const toast = useToast();
   const stacked = useMediaQuery(TABLET);
   const [data, setData] = useState<Recording>();
@@ -73,6 +78,12 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   const [naming, setNaming] = useState<Voice | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [pane, setPane] = useState<"transcript" | "speakers">("transcript");
+  const [loop, setLoop] = useState(false);
+  const [playingRange, setPlayingRange] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [matchIndex, setMatchIndex] = useState(0);
+  const findInput = useRef<HTMLInputElement>(null);
   const mediaRef = useRef<HTMLMediaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   // One time store per recording, so listeners never leak across recordings.
@@ -158,7 +169,89 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
     },
     [lines, controls],
   );
-  const onLine = useCallback((index: number, _e: MouseEvent) => seekLine(index, true), [seekLine]);
+  const duration = controls.duration || data?.media.duration || 0;
+  const onRange = useCallback(
+    (r: Range) => {
+      setRange(clampRange(r, duration));
+      setPlayingRange(false);
+    },
+    [duration],
+  );
+  const seekAndPlayLine = useCallback((index: number) => seekLine(index, true), [seekLine]);
+  const selection = useLineSelection({ lines, scroller, onRange, onSeekLine: seekAndPlayLine });
+  const onLine: (index: number, e: MouseEvent) => void = selection.handleLine;
+
+  // Find: highlight every match, scroll to the first as you type, step with Enter or the arrows.
+  const matches = useMemo(() => findMatches(lines, query), [lines, query]);
+  const matchSet = useMemo(() => new Set(matches), [matches]);
+  const revealLine = useCallback((index: number) => {
+    scroller.current?.querySelector<HTMLElement>(`[data-line="${index}"]`)?.scrollIntoView({ block: "center" });
+  }, []);
+  useEffect(() => {
+    setMatchIndex(0);
+    if (matches.length) {
+      setFollow(false);
+      revealLine(matches[0]);
+    }
+  }, [matches, revealLine]);
+  const stepFind = (delta: number) => {
+    if (!matches.length) return;
+    const next = (matchIndex + delta + matches.length) % matches.length;
+    setMatchIndex(next);
+    controls.seek(lines[matches[next]].start);
+    setFollow(false);
+    revealLine(matches[next]);
+  };
+
+  const bounds = useMemo(() => (range ? linesIn(lines, range) : null), [lines, range]);
+  const lineState = useCallback(
+    (i: number) => {
+      const inRange = !!bounds && i >= bounds[0] && i <= bounds[1];
+      const edge: "" | "start" | "end" | "both" = !inRange
+        ? ""
+        : i === bounds![0] && i === bounds![1]
+          ? "both"
+          : i === bounds![0]
+            ? "start"
+            : i === bounds![1]
+              ? "end"
+              : "";
+      return { inRange, edge, query: matchSet.has(i) ? query : "", activeMatch: matches[matchIndex] === i };
+    },
+    [bounds, matchSet, query, matches, matchIndex],
+  );
+
+  // Range playback stops (or loops) at the range end; seeking away ends it.
+  useEffect(() => {
+    if (!range || !playingRange) return;
+    return time.subscribe(() => {
+      const t = time.get();
+      if (t >= range.end - 0.04) {
+        if (loop) controls.seek(range.start, true);
+        else {
+          controls.pause();
+          setPlayingRange(false);
+        }
+      } else if (t < range.start - 0.5) setPlayingRange(false);
+    });
+  }, [range, playingRange, loop, time, controls]);
+  const playRange = () => {
+    if (!range) return;
+    controls.seek(range.start, true);
+    setPlayingRange(true);
+    setFollow(true);
+  };
+  const stopRange = () => {
+    controls.pause();
+    setPlayingRange(false);
+  };
+  const clearRange = () => {
+    setRange(null);
+    setPlayingRange(false);
+    selection.setAnchor(null);
+    selection.setSelecting(false);
+    document.getSelection()?.removeAllRanges();
+  };
   const onVoice = useCallback((local: string) => setNaming(voices.get(local) ?? null), [voices]);
   const firstLine = (voice: Voice) => {
     const index = lines.findIndex((l) => l.speaker === voice.local);
@@ -202,9 +295,24 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       { key: "m", run: () => controls.toggleMute() },
       { key: "f", run: toggleFullscreen },
       { key: "?", run: () => setShortcutsOpen(true) },
+      { key: "i", run: () => setRange((r) => setIn(r, time.get(), lines, duration)) },
+      { key: "o", run: () => setRange((r) => setOut(r, time.get(), lines, duration)) },
+      { key: "p", run: playRange },
+      { key: "l", run: () => setLoop((v) => !v) },
+      { key: "Escape", run: clearRange },
+      { key: "f", mod: true, global: true, run: () => findInput.current?.focus() },
     ],
     !!data,
   );
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as unknown as { __concordTest: unknown }).__concordTest = {
+      selectRange: (a: number, b: number) => onRange(spanRange(lines, a, b)),
+      openExport: () => setExportOpen(true),
+      find: (q: string) => setQuery(q),
+    };
+  }, [lines, onRange]);
 
   if (loadError)
     return (
@@ -264,6 +372,29 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
     },
     { label: "Keyboard shortcuts", icon: Keyboard, hint: "?", onSelect: () => setShortcutsOpen(true) },
   ];
+  const copyRange = async () => {
+    if (!range) return;
+    try {
+      await copyText(await api.transcriptText(media.id, range.start, range.end, "txt"));
+      toast.success("Passage copied");
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+  const saveRangeNote = () => {
+    if (!range) return;
+    const quote = bounds ? lines.slice(bounds[0], bounds[1] + 1).map((l) => l.text.trim()).join(" ") : "";
+    openNote({
+      title: `${media.title} · ${clock(range.start)}`,
+      body: "",
+      quote,
+      media_id: media.id,
+      media_title: media.title,
+      start: range.start,
+      end: range.end,
+    });
+  };
+  const mediaAvailable = !!source && !sourceError && !controls.error;
   const speakerPanel = <SpeakerPanel voices={voices} onName={setNaming} onFirstLine={firstLine} />;
   const transcript = (
     <Transcript
@@ -276,6 +407,35 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       onVoice={onVoice}
       scroller={scroller}
       stacked={stacked}
+      lineState={lineState}
+      press={selection.pressHandlers}
+      header={<FindBar ref={findInput} query={query} setQuery={setQuery} index={matchIndex} total={matches.length} step={stepFind} />}
+      banner={
+        selection.selecting && (
+          <div className="select-banner">
+            <span>Tap lines to extend the selection</span>
+            <Button size="sm" variant="primary" onClick={() => selection.setSelecting(false)}>
+              Done
+            </Button>
+          </div>
+        )
+      }
+      footer={
+        range && (
+          <RangeBar
+            range={range}
+            playing={playingRange}
+            loop={loop}
+            onPlay={playRange}
+            onStop={stopRange}
+            onLoop={() => setLoop((v) => !v)}
+            onCopy={() => void copyRange()}
+            onExport={() => setExportOpen(true)}
+            onSaveNote={saveRangeNote}
+            onClear={clearRange}
+          />
+        )
+      }
     />
   );
   return (
@@ -293,8 +453,11 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
               peaks={peaks}
               range={range}
               notes={data.notes}
-              onSeek={(t) => controls.seek(t)}
-              onRangeChange={setRange}
+              onSeek={(t) => {
+                controls.seek(t);
+                if (range && (t < range.start || t > range.end)) setPlayingRange(false);
+              }}
+              onRangeChange={onRange}
               onNote={(n) => {
                 controls.seek(n.start, true);
                 setFollow(true);
@@ -324,6 +487,17 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
         <NameVoiceDialog mediaId={media.id} voice={naming} onClose={() => setNaming(null)} onSample={() => longestLine(naming)} onSaved={refresh} />
       )}
       <ShortcutSheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      {range && (
+        <ExportDialog
+          open={exportOpen}
+          onOpenChange={setExportOpen}
+          recording={data}
+          range={range}
+          onRange={onRange}
+          mediaAvailable={mediaAvailable}
+          playhead={() => time.get()}
+        />
+      )}
     </div>
   );
 }

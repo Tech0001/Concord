@@ -22,6 +22,15 @@ export function humanDuration(seconds: number): string {
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 
+/** Precise length of a range: seconds under a minute, minutes and seconds under an hour. */
+export function spanLabel(seconds: number): string {
+  const v = Math.max(0, Math.floor(finite(seconds)));
+  if (v < 60) return `${v}s`;
+  const h = Math.floor(v / 3600);
+  const m = Math.floor(v / 60) % 60;
+  return h ? `${h}h ${pad(m)}m` : `${m}m ${pad(v % 60)}s`;
+}
+
 export function prettyDate(s: string): string {
   return /^\d{8}$/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6)}` : s || "Undated";
 }

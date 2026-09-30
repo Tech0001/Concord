@@ -7,6 +7,7 @@ import {
   prettyDate,
   count,
   rangeLabel,
+  spanLabel,
   safeFileName,
   exportName,
   parseClock,
@@ -70,4 +71,11 @@ test("initials and extensions", () => {
   assert.equal(initials("  cher "), "C");
   assert.equal(extension("/a/b.OGG"), "ogg");
   assert.equal(extension(null), "");
+});
+
+test("span labels keep seconds for short ranges", () => {
+  assert.equal(spanLabel(42.6), "42s");
+  assert.equal(spanLabel(127), "2m 07s");
+  assert.equal(spanLabel(3725), "1h 02m");
+  assert.equal(spanLabel(-3), "0s");
 });

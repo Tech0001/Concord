@@ -683,3 +683,254 @@
 .dialog-foot-start {
   margin-right: auto;
 }
+
+/* Find */
+.find-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+.find-field {
+  flex: 1;
+  min-width: 0;
+}
+.find-field input {
+  width: 100%;
+  background: var(--background);
+}
+.find-count {
+  padding: 0 6px;
+  font-size: var(--text-sm);
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.transcript.is-stacked .find-bar {
+  padding: 0 0 10px;
+  border: 0;
+  background: none;
+}
+.t-line.is-active-match {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--primary) 55%, transparent);
+}
+
+/* Range tint across the selected lines, with rounded ends */
+.t-line.is-in-range {
+  background: var(--selected);
+  border-radius: 0;
+}
+.t-line.is-in-range[data-edge="start"] {
+  border-radius: var(--r-2) var(--r-2) 0 0;
+}
+.t-line.is-in-range[data-edge="end"] {
+  border-radius: 0 0 var(--r-2) var(--r-2);
+}
+.t-line.is-in-range[data-edge="both"] {
+  border-radius: var(--r-2);
+}
+.t-line.is-in-range[data-current] {
+  background: color-mix(in oklab, var(--primary) 24%, transparent);
+}
+.t-line.is-in-range:hover {
+  background: color-mix(in oklab, var(--primary) 20%, transparent);
+}
+
+/* Range bar */
+.range-bar {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 14px;
+  border: 1px solid color-mix(in oklab, var(--primary) 35%, var(--border));
+  border-radius: var(--r-3);
+  background: var(--popover);
+  box-shadow: var(--shadow-float);
+  animation: ui-rise-in 150ms var(--ease);
+}
+.range-bar-info {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+.range-bar-info .mono {
+  color: var(--primary);
+  font-weight: 500;
+}
+.range-bar-info .muted {
+  font-size: var(--text-xs);
+}
+.range-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-wrap: nowrap;
+}
+/* The transcript column can be narrow; drop button labels before anything wraps. */
+.transcript {
+  container: transcript / inline-size;
+}
+@container transcript (max-width: 600px) {
+  .range-label {
+    display: none;
+  }
+  .range-action {
+    width: 32px;
+    padding: 0;
+  }
+}
+@container transcript (min-width: 601px) {
+  .range-action[data-tip]:hover::after {
+    display: none;
+  }
+}
+.transcript:has(.range-bar) .follow-pill {
+  bottom: 76px;
+}
+.transcript:has(.range-bar) .transcript-scroll {
+  padding-bottom: 120px;
+}
+.transcript.is-stacked .range-bar {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+}
+@media (max-width: 639px) {
+  .transcript.is-stacked .range-bar {
+    left: 8px;
+    right: 8px;
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px);
+    gap: 6px;
+    padding: 4px 4px 4px 12px;
+  }
+  .range-bar .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+  .transcript.is-stacked:has(.range-bar) .follow-pill {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 80px);
+  }
+}
+.select-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--selected);
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+.transcript.is-stacked .select-banner {
+  position: sticky;
+  top: calc(var(--topbar-h) + 8px);
+  z-index: 7;
+  border-radius: var(--r-2);
+  margin-bottom: 8px;
+}
+
+/* Export dialog */
+.export-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.export-times {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.time-field-row {
+  display: flex;
+  gap: 6px;
+}
+.time-field-row input {
+  flex: 1;
+  min-width: 0;
+}
+.time-field.is-invalid input {
+  border-color: var(--destructive);
+}
+.field-error {
+  color: var(--destructive);
+  font-size: var(--text-xs);
+}
+.choice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+.choice-grid.is-three {
+  grid-template-columns: repeat(3, 1fr);
+}
+.choice-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--card);
+  text-align: left;
+  transition:
+    border-color var(--dur) var(--ease),
+    background-color var(--dur) var(--ease);
+}
+.choice-card b {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.choice-card span {
+  font-size: var(--text-sm);
+  color: var(--muted-foreground);
+}
+.choice-card:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--foreground) 22%, var(--border));
+}
+.choice-card.is-on {
+  border-color: var(--primary);
+  background: var(--selected);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+.choice-card:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.export-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--text-sm);
+}
+.export-progress-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--muted);
+  overflow: hidden;
+}
+.export-progress-track > span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  transition: width 200ms var(--ease);
+}
+@media (max-width: 639px) {
+  .export-times,
+  .choice-grid,
+  .choice-grid.is-three {
+    grid-template-columns: 1fr;
+  }
+}
