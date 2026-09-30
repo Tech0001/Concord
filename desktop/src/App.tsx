@@ -20,7 +20,8 @@ import { CommandPalette } from "./shell/CommandPalette.tsx";
 import { ActivityPanel } from "./shell/ActivityPanel.tsx";
 import { NoteEditor } from "./notes/NoteEditor.tsx";
 import { LibraryPage } from "./library/LibraryPage.tsx";
-import { Player, SearchView, SpeakerView, Documents, MapView, Settings, PageHeading } from "./views";
+import { PlayerPage } from "./player/PlayerPage.tsx";
+import { SearchView, SpeakerView, Documents, MapView, Settings, PageHeading } from "./views";
 
 export default function App() {
   return (
@@ -163,19 +164,7 @@ function Shell() {
   let page: React.ReactNode;
   switch (route.page) {
     case "recording":
-      page = (
-        <Player
-          id={route.id}
-          at={route.at ?? 0}
-          revision={revision}
-          onBack={back}
-          onError={onError}
-          onTranscribe={() => void transcribe(route.id)}
-          disabled={!!activeJob}
-          onRefresh={refresh}
-          onNote={setNote}
-        />
-      );
+      page = <PlayerPage id={route.id} at={route.at} />;
       break;
     case "search":
       page = (

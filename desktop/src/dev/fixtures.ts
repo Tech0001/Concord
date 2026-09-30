@@ -203,10 +203,10 @@ export function thumbnailFor(id: string): string | null {
 }
 
 let wavUrl: string | null = null;
-/** An 8-bit mono 2 kHz silent WAV so the player can play in a browser. */
+/** An 8-bit mono 8 kHz silent WAV so the player can play in a browser. */
 export function silentWav(seconds: number): string {
   if (wavUrl) return wavUrl;
-  const rate = 2000;
+  const rate = 8000;
   const samples = rate * seconds;
   const buffer = new ArrayBuffer(44 + samples);
   const view = new DataView(buffer);

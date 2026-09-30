@@ -145,10 +145,6 @@ a {
   align-items: center;
   margin-top: 20px;
 }
-.muted {
-  color: var(--muted);
-  font-size: 12px;
-}
 .row {
   display: flex;
   justify-content: space-between;

@@ -96,7 +96,7 @@ try {
           await sleep(500);
         }
         if (shot.probe) {
-          const { result } = await send("Runtime.evaluate", { expression: shot.probe, returnByValue: true });
+          const { result } = await send("Runtime.evaluate", { expression: shot.probe, returnByValue: true, awaitPromise: true });
           console.log(`probe ${shot.name}-${sizeName}-${mode}:`, JSON.stringify(result.value));
         }
         const { data } = await send("Page.captureScreenshot", { format: "png" });

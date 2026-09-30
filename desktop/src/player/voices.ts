@@ -1,0 +1,36 @@
+import type { Assignment, Segment } from "../lib/types.ts";
+import { speakerColor, voiceLabel } from "../lib/speakers.ts";
+
+export type Voice = { local: string; name: string; color: string; named: boolean; airtime: number };
+
+/** Every local voice in the transcript, named where an assignment has a name, loudest first. */
+export function buildVoices(assignments: Assignment[], segments: Segment[]): Map<string, Voice> {
+  const voices = new Map<string, Voice>();
+  const measured = new Set<string>();
+  for (const a of assignments) {
+    voices.set(a.local_id, {
+      local: a.local_id,
+      name: a.name ?? voiceLabel(a.local_id),
+      color: speakerColor(a.color, a.name ?? a.local_id),
+      named: !!a.name,
+      airtime: a.airtime,
+    });
+    if (a.airtime > 0) measured.add(a.local_id);
+  }
+  for (const s of segments) {
+    if (!s.speaker) continue;
+    const v = voices.get(s.speaker);
+    if (v) {
+      if (!measured.has(s.speaker)) v.airtime += s.end - s.start;
+    } else {
+      voices.set(s.speaker, {
+        local: s.speaker,
+        name: voiceLabel(s.speaker),
+        color: speakerColor(null, s.speaker),
+        named: false,
+        airtime: s.end - s.start,
+      });
+    }
+  }
+  return new Map([...voices].sort((a, b) => b[1].airtime - a[1].airtime));
+}
