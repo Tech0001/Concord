@@ -59,3 +59,7 @@ pipeline.db
 __pycache__/
 *.pyc
 /dist-electron
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
+/build/binaries/gstreamer/
+/build/concord-media.*/
