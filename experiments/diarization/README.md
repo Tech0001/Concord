@@ -165,6 +165,46 @@ directory. The local report is `http://127.0.0.1:5051/asr/report.html` when
 the lab HTTP server is running. No transcription files from the live archive
 are overwritten. See [CPU and GPU test results](ASR_RESULTS.md).
 
+## Nemotron transcription replacement test
+
+Nemotron ASR is another transcription model; it is distinct from Nemotron
+Diarization. Both English-only and multilingual candidates use the same
+ASR-enabled native runtime above. Download the pinned official Q8 artifacts:
+
+```bash
+hf download nvidia/nemotron-speech-streaming-en-0.6b nemotron-speech-streaming-en-0.6b.q8_0.gguf \
+  --revision ebe59e5a817142986528bbbee5dba8db7b38ed50 \
+  --local-dir ~/.cache/concord-diarization-lab/models/nemotron-en
+hf download nvidia/nemotron-3.5-asr-streaming-0.6b nemotron-3.5-asr-streaming-0.6b.q8_0.gguf \
+  --revision 1c8deaecc64b91f034d73e08dd8b64625eb3395d \
+  --local-dir ~/.cache/concord-diarization-lab/models/nemotron-3.5
+python experiments/diarization/asr.py --audio /path/excerpt.wav \
+  --model nemotron-en --device cpu
+python experiments/diarization/asr.py --audio /path/excerpt.wav \
+  --model nemotron-en --device vulkan:0 --stream --right-context -1
+python experiments/diarization/asr.py --audio /path/excerpt.wav \
+  --model nemotron-3.5 --device vulkan:0 --stream --right-context -1
+python experiments/diarization/asr_report.py
+```
+
+Substitute `cpu` to test the same streaming settings without GPU acceleration.
+`--right-context -1` preserves the lookahead stored in the exported model
+(1120 ms steps for English, 320 ms for the multilingual artifact). An explicit
+`--right-context 13` tests 1120 ms steps in either model. File requests
+without `--stream` can still route to streaming internally: this runtime forces
+that path for Vulkan RNNT, while CPU uses the offline path for these excerpts.
+The harness saves actual execution mode and geometry from worker logs. Compare
+CPU/GPU output only within matching model, mode, language and lookahead settings.
+Multilingual Nemotron defaults to the `en-US` prompt for these English meetings;
+`--language auto` explicitly tests automatic language detection.
+
+The same Concord chunking and timestamp conversion remain in use. The current
+Python reference stays Parakeet. The report includes 30-second listening
+sections so omitted English, repetition, and glossolalia can be reviewed against
+the audio. Automatic transcript disagreement is not an accuracy score. No
+model is credited with recovering intelligible speech without listening review.
+See [Nemotron ASR results](NEMOTRON_ASR_RESULTS.md).
+
 Sources: [Nemotron model](https://huggingface.co/nvidia/Nemotron-3-Diarization),
 [native runtime](https://github.com/NVIDIA/NeMo-Speech.cpp),
 [NVIDIA evaluation protocol](https://huggingface.co/nvidia/Nemotron-3-Diarization/blob/main/diarization_evaluation.md).
