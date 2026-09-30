@@ -22,6 +22,7 @@ import {
   Sparkles,
   Clock3,
   CircleAlert,
+  GripVertical,
 } from "lucide-react";
 import type {
   Media,
@@ -313,6 +314,113 @@ export function LibraryView({
   );
 }
 
+function PlayerLayout({
+  children,
+}: {
+  children: [React.ReactNode, React.ReactNode];
+}) {
+  const container = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [preferred, setPreferred] = useState(() => {
+    try {
+      const stored = Number(localStorage.getItem("player-video-width"));
+      if (Number.isFinite(stored) && stored >= 20 && stored <= 80)
+        return stored;
+    } catch {
+      /* Storage can be unavailable in a restricted webview. */
+    }
+    return 64;
+  });
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() =>
+      setWidth(element.getBoundingClientRect().width),
+    );
+    observer.observe(element);
+    setWidth(element.getBoundingClientRect().width);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem("player-video-width", String(preferred));
+    } catch {
+      /* Keep the current split for this session. */
+    }
+  }, [preferred]);
+  const available = width ? Math.max(520, width - 20) : 1200;
+  const minimum = Math.max(20, (240 / available) * 100);
+  const maximum = Math.min(80, 100 - (280 / available) * 100);
+  const clamp = (value: number) => Math.min(maximum, Math.max(minimum, value));
+  const split = clamp(preferred);
+  const move = (clientX: number) => {
+    const bounds = container.current?.getBoundingClientRect();
+    if (bounds)
+      setPreferred(
+        clamp(((clientX - bounds.left - 10) / (bounds.width - 20)) * 100),
+      );
+  };
+  return (
+    <div
+      ref={container}
+      className={`player-layout${dragging ? " is-resizing" : ""}`}
+      style={{
+        gridTemplateColumns: `minmax(0, ${split}fr) 20px minmax(0, ${100 - split}fr)`,
+      }}
+    >
+      {children[0]}
+      <div
+        className="player-divider"
+        role="separator"
+        tabIndex={0}
+        aria-label="Resize video and transcript"
+        aria-orientation="vertical"
+        aria-valuemin={Math.round(minimum)}
+        aria-valuemax={Math.round(maximum)}
+        aria-valuenow={Math.round(split)}
+        aria-valuetext={`Video ${Math.round(split)}%, transcript ${Math.round(100 - split)}%`}
+        title="Drag to resize. Double-click to reset. Arrow keys also adjust the split."
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          event.currentTarget.focus();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setDragging(true);
+        }}
+        onPointerMove={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId))
+            move(event.clientX);
+        }}
+        onPointerUp={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId))
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          setDragging(false);
+        }}
+        onLostPointerCapture={() => setDragging(false)}
+        onDoubleClick={() => setPreferred(64)}
+        onKeyDown={(event) => {
+          const next = {
+            ArrowLeft: clamp(split - 2),
+            ArrowRight: clamp(split + 2),
+            Home: minimum,
+            End: maximum,
+            Enter: 64,
+          }[event.key];
+          if (next === undefined) return;
+          event.preventDefault();
+          setPreferred(next);
+        }}
+      >
+        <span>
+          <GripVertical size={16} />
+        </span>
+      </div>
+      {children[1]}
+    </div>
+  );
+}
+
 export function Player({
   id,
   at,
@@ -405,7 +513,7 @@ export function Player({
           {data.media.transcript ? "Re-transcribe" : "Transcribe"}
         </button>
       </div>
-      <div className="player-layout">
+      <PlayerLayout>
         <div className="player-column">
           <div className="media-panel panel">
             {source ? (
@@ -540,7 +648,7 @@ export function Player({
             )}
           </div>
         </section>
-      </div>
+      </PlayerLayout>
       {assigning && (
         <div className="modal-backdrop">
           <section className="small-dialog panel">
