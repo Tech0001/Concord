@@ -21,7 +21,8 @@ import { ActivityPanel } from "./shell/ActivityPanel.tsx";
 import { NoteEditor } from "./notes/NoteEditor.tsx";
 import { LibraryPage } from "./library/LibraryPage.tsx";
 import { PlayerPage } from "./player/PlayerPage.tsx";
-import { SearchView, SpeakerView, Documents, MapView, Settings, PageHeading } from "./views";
+import { SearchPage } from "./search/SearchPage.tsx";
+import { SpeakerView, Documents, MapView, Settings, PageHeading } from "./views";
 
 export default function App() {
   return (
@@ -167,15 +168,7 @@ function Shell() {
       page = <PlayerPage id={route.id} at={route.at} />;
       break;
     case "search":
-      page = (
-        <SearchView
-          query={route.q}
-          setQuery={(q) => navigate({ page: "search", q }, { replace: true })}
-          revision={revision}
-          onOpen={(id, at) => navigate({ page: "recording", id, at })}
-          onError={onError}
-        />
-      );
+      page = <SearchPage q={route.q} />;
       break;
     case "speakers":
       page = <SpeakerView revision={revision} onError={onError} />;

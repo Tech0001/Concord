@@ -369,7 +369,20 @@ pub fn search(root: &Path, query: &str) -> Result<Vec<Value>> {
         .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(" AND ");
-    rows(&open(root)?,"SELECT m.id,m.title,m.channel,s.text,CAST(s.start AS REAL) AS start,s.speaker FROM segments s JOIN media m ON m.id=s.media_id WHERE segments MATCH ?1 ORDER BY rank LIMIT 100",[fts])
+    rows(
+        &open(root)?,
+        "SELECT m.id, m.title, m.channel, m.date, segments.text AS text,
+                highlight(segments, 4, char(2), char(3)) AS marked,
+                CAST(segments.start AS REAL) AS start, segments.speaker AS speaker,
+                sp.name AS speaker_name, sp.color AS speaker_color
+         FROM segments
+         JOIN media m ON m.id = segments.media_id
+         LEFT JOIN assignments a ON a.media_id = segments.media_id AND a.local_id = segments.speaker
+         LEFT JOIN speakers sp ON sp.id = a.speaker_id
+         WHERE segments MATCH ?1
+         ORDER BY rank LIMIT 200",
+        [fts],
+    )
 }
 
 /// Quick-jump results for the command palette.
@@ -672,5 +685,28 @@ mod tests {
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0]["title"], "Key moment");
         assert_eq!(notes[0]["start"], 10.0);
+    }
+
+    #[test]
+    fn search_marks_matches_and_names_speakers() {
+        let (_tmp, root) = library_fixture();
+        open(&root)
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO segments(media_id,start,end,speaker,text) VALUES
+                   ('a',12.5,15,'S0','We met at the harbour'),('c',3,4,'S9','harbour lights');",
+            )
+            .unwrap();
+        let hits = search(&root, "harbour").unwrap();
+        let alpha = hits.iter().find(|h| h["id"] == "a").unwrap();
+        assert_eq!(alpha["marked"], "We met at the \u{2}harbour\u{3}");
+        assert_eq!(alpha["text"], "We met at the harbour");
+        assert_eq!(alpha["speaker_name"], "Sarah");
+        assert_eq!(alpha["speaker_color"], "#ff0000");
+        assert_eq!(alpha["date"], "20251007");
+        assert_eq!(alpha["start"], 12.5);
+        let gamma = hits.iter().find(|h| h["id"] == "c").unwrap();
+        assert!(gamma["speaker_name"].is_null());
+        assert!(search(&root, "\" OR *").unwrap().is_empty());
     }
 }
