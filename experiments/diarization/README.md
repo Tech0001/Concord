@@ -133,6 +133,38 @@ The synthetic 16-profile test establishes that global grouping has no eight-slot
 software limit. It does not establish recognition accuracy on a 16-person call.
 See [measured results and limitations](RESULTS.md).
 
+## Parakeet native transcription test
+
+Parakeet produces words; Nemotron Diarization produces speaker turns.
+NeMo-Speech.cpp can run both models. This test retains Parakeet TDT 0.6B v3,
+replacing its Python inference runtime with the official native Q8 artifact.
+
+```bash
+CONCORD_LAB_ASR=ON bash experiments/diarization/build-runtime.sh vulkan
+hf download nvidia/parakeet-tdt-0.6b-v3 parakeet-tdt-0.6b-v3.q8_0.gguf \
+  --revision 541d1f99c6b0c3cd0b11a95167540bb8edefd82b \
+  --local-dir ~/.cache/concord-diarization-lab/models/parakeet-v3
+python experiments/diarization/asr.py --audio /path/excerpt.wav --engine native --device cpu
+python experiments/diarization/asr.py --audio /path/excerpt.wav --engine current --device cpu
+python experiments/diarization/asr.py --audio /path/excerpt.wav --engine native --device vulkan:0
+python experiments/diarization/asr_report.py
+```
+
+The ASR-enabled runtime uses a separate `build-asr-lab` directory. Use `cpu`
+instead of `vulkan` when building a CPU-only runtime. The native worker runs
+without Python/PyTorch inference. The standard-library harness reuses
+Concord's chunking helpers and fallback word-to-segment grouping to emit its
+transcript JSON format; native sentence grouping can differ from NeMo's.
+The current-engine reference calls the existing transcription script unchanged.
+For a true CPU reference, CUDA is hidden from that child process because NeMo
+chooses its initial restore device before the existing `.to(device)` call.
+
+Measurements live in the isolated lab database's `asr_runs` table. Raw native
+outputs, converted transcripts, logs, and summaries live under its `asr/`
+directory. The local report is `http://127.0.0.1:5051/asr/report.html` when
+the lab HTTP server is running. No transcription files from the live archive
+are overwritten. See [CPU and GPU test results](ASR_RESULTS.md).
+
 Sources: [Nemotron model](https://huggingface.co/nvidia/Nemotron-3-Diarization),
 [native runtime](https://github.com/NVIDIA/NeMo-Speech.cpp),
 [NVIDIA evaluation protocol](https://huggingface.co/nvidia/Nemotron-3-Diarization/blob/main/diarization_evaluation.md).

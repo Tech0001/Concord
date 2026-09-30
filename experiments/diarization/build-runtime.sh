@@ -9,6 +9,10 @@ spirv_headers_rev=cb42dec3830d3ac67fa449ecdc0c0f73d5e74498
 lab_cache="${CONCORD_LAB_CACHE:-$HOME/.cache/concord-diarization-lab}"
 runtime_src="$lab_cache/NeMo-Speech.cpp"
 backend="${1:-cpu}"
+build_asr="${CONCORD_LAB_ASR:-OFF}"
+case "$build_asr" in ON|OFF) ;; *) echo 'CONCORD_LAB_ASR must be ON or OFF' >&2; exit 2 ;; esac
+build_dir="$runtime_src/build-lab"
+if [[ "$build_asr" == ON ]]; then build_dir="$runtime_src/build-asr-lab"; fi
 case "$backend" in cpu|vulkan) ;; *) echo 'Usage: build-runtime.sh [cpu|vulkan]' >&2; exit 2 ;; esac
 if [[ ! -d "$runtime_src/.git" ]]; then
   git clone --no-checkout https://github.com/NVIDIA/NeMo-Speech.cpp.git "$runtime_src"
@@ -71,14 +75,14 @@ if [[ "$backend" == vulkan ]]; then
   vulkan_options+=("-DCMAKE_PREFIX_PATH=$spirv_src/install-lab")
   vulkan_options+=("-DCMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES=$spirv_src/install-lab/include")
 fi
-cmake -S "$runtime_src" -B "$runtime_src/build-lab" -G Ninja \
+cmake -S "$runtime_src" -B "$build_dir" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DNEMO_SPEECH_DEPENDENCY_PREFIX="$runtime_src/.deps" \
   -DCMAKE_CXX_FLAGS='-include cstdint' \
-  -DNEMO_SPEECH_BUILD_ASR=OFF -DNEMO_SPEECH_BUILD_DIAR=ON \
+  -DNEMO_SPEECH_BUILD_ASR="$build_asr" -DNEMO_SPEECH_BUILD_DIAR=ON \
   -DNEMO_SPEECH_BUILD_TTS=OFF -DNEMO_SPEECH_BUILD_NMT=OFF \
   -DNEMO_SPEECH_BUILD_MIC_CAPTURE=OFF -DNEMO_SPEECH_GGML_PATCHED=OFF \
   -DGGML_VULKAN="$vulkan" "${vulkan_options[@]}"
-cmake --build "$runtime_src/build-lab" --target nemo-speech -j 4
+cmake --build "$build_dir" --target nemo-speech -j 4
 hf download nvidia/Nemotron-3-Diarization Nemotron-3-Diarization.q8_0.gguf \
   --revision "$model_rev" --local-dir "$lab_cache/models/nemotron-3"
-"$runtime_src/build-lab/bin/nemo-speech" doctor
+"$build_dir/bin/nemo-speech" doctor

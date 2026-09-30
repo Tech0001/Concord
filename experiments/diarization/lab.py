@@ -375,6 +375,8 @@ def report(args):
                '<h1>Concord diarization lab</h1><p><strong>Current test: Concord’s existing pipeline with Nemotron replacing the turn-detection model.</strong> Chunking, voice matching, and cleanup use Concord’s existing code. This is running in the isolated test environment.</p>',
                '<p>The old transcript is an automatic comparison reference, not hand-labelled ground truth. Matching counts or labels does not establish accuracy. Listen for merged people, split voices, brief speakers, and overlap.</p>',
                '<p>“Substantial” means at least 15 seconds of detected speech, solely to make review manageable. Brief and unresolved tracks are retained in the raw output. An unresolved track is not an identified person. Native worker memory excludes TitaNet, transcription, and the desktop application.</p>']
+    if (root/'asr/report.html').exists():
+        content.append('<p><a href="asr/report.html">Parakeet transcription: CPU and native runtime tests</a></p>')
 
     def summary_table(selected):
         content.append('<div class="scroll"><table><tr><th>Recording / mode</th><th>Expected people</th><th>Substantial / all tracks</th><th>Unresolved tracks</th><th>Old voices dominant</th><th>Mixed / split</th><th>Native seconds</th><th>Native worker VRAM / RAM MiB (sampled)</th></tr>')
