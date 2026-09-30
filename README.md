@@ -78,6 +78,9 @@ The native implementation is in `desktop/src-tauri/`; its interface is in
 `electron/` for migration reference. See [legacy build instructions](docs/legacy-build.md)
 and [the Nemotron integration notes](docs/nemo-native.md).
 
+For the current project state, decisions, local setup, validation, and next work,
+start with the [development handoff](docs/HANDOFF.md).
+
 ## Next milestones
 
 This is a working first native slice, not full feature parity. Upcoming work:
