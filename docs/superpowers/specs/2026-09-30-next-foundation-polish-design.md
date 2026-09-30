@@ -29,7 +29,8 @@ note model); restyle of Search, Documents (with Markdown rendering), Settings; b
 found during the pass; a browser preview harness for design verification.
 
 **Out:** Speakers rebuild, Notes rebuild (tags, multi-anchor, links), semantic search/AI,
-Map, channels/pipeline/batch queue, legacy data sync, file rename/trash, macOS/Windows.
+Map, channels/pipeline/batch queue, legacy data sync, file rename/trash, macOS/Windows,
+actually serving Concord to a phone (LAN server or mobile build — the UI is made ready).
 The current simple Speakers and Notes pages get the new styling only.
 
 ## Design direction
@@ -57,6 +58,41 @@ documents).
 - **Remove:** eyebrow marketing copy ("A PLACE FOR EVERY CONVERSATION"), oversized page
   headings, the background texture, the "NEXT · PREVIEW" plaque. Page headers become a
   compact title row with counts and actions.
+
+### Responsive and touch (phone-ready)
+
+The desktop window is the primary target, but every screen must work on a phone
+(~375–430px wide) and a tablet with touch. How a phone reaches Concord is a later
+decision: LAN access like the Electron app, or a Tauri mobile build. This delivery makes
+the UI and client layer ready for either.
+
+- **Breakpoints:**
+  - ≥1200px: full layout.
+  - 900–1199px: the sidebar collapses to its icon rail.
+  - 640–899px (tablet): the player stacks media above the transcript.
+  - <640px (phone):
+    - A bottom tab bar (Library, Search, Notes, Speakers, More) replaces the sidebar.
+    - The top bar holds the page title, a palette button, and a primary action.
+- **Phone layouts:**
+  - Library uses compact rows (thumbnail left, text right), with filters in a bottom
+    sheet.
+  - Menus, dialogs, and the export dialog become bottom sheets or full-screen sheets.
+  - The player keeps the media and transport sticky at the top, the transcript scrolls
+    beneath, and the range bar docks at the bottom above the safe area.
+- **Touch:**
+  - Hit targets are at least 44px on coarse pointers (`@media (pointer: coarse)`).
+  - There are no hover-only controls: star and ⋮ are always visible on touch, and
+    tooltips have visible or long-press equivalents.
+  - Timeline handles get larger touch areas.
+  - Ranges on touch: long-press a line to start a selection, then tap another line to
+    extend it. Text selection mapping still works.
+- **Keyboard shortcuts** are an enhancement; every action is also reachable via visible
+  buttons or menus.
+- The viewport meta uses `viewport-fit=cover`, and layout respects safe-area insets.
+- **Client transport seam:** `lib/ipc.ts` exposes typed functions over a pluggable
+  transport. That is Tauri `invoke` today; an HTTP transport could be added later. Media
+  and thumbnail URLs are always obtained from the backend, never constructed in
+  components. Screens never call `invoke` directly.
 
 ### Theme system
 
@@ -283,8 +319,9 @@ A single page with sections:
 - **Visual:**
   - A dev-only mock IPC (`?mock` in a browser on `vite dev`) serves synthetic fixtures;
     no private data is committed.
-  - Headless Chromium screenshots of every page at 1440×940 and 960×640, in dark and
-    light, are reviewed for polish.
+  - Headless Chromium screenshots of every page at 1440×940, 960×640, 820×1180
+    (tablet) and 390×844 (phone), in dark and light, are reviewed for polish. Touch
+    emulation is used for the phone and tablet sizes.
 - **Real app:**
   - Build and install the AppImage via `scripts/install-next-local.sh`.
   - Verify in the real WebKitGTK window:
