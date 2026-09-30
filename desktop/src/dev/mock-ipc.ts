@@ -55,6 +55,11 @@ const handlers: Record<string, (a: any) => unknown> = {
   search: ({ query }) => fx.searchHits(query),
   palette: ({ query }) => fx.paletteFor(query),
   speakers: () => fx.speakerList,
+  speaker_appearances: ({ id }) => fx.appearancesFor(id),
+  set_speaker_notes: ({ id, notes }) => {
+    const s = fx.speakerList.find((x) => x.id === id);
+    if (s) s.notes = notes.trim() || null;
+  },
   research: () => ({
     notes: fx.notesList,
     links: [{ source: fx.notesList[0].id, target: fx.notesList[1].id, kind: "related" }],

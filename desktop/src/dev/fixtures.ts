@@ -1,5 +1,5 @@
 // Synthetic archive for design review in a browser. No real recordings, names, or transcripts.
-import type { Assignment, Media, Note, NoteMarker, Recording, ReviewState, SearchHit, Segment, Speaker } from "../lib/types.ts";
+import type { Appearance, Assignment, Media, Note, NoteMarker, Recording, ReviewState, SearchHit, Segment, Speaker } from "../lib/types.ts";
 
 export function seeded(seed: number) {
   let s = seed >>> 0;
@@ -266,4 +266,20 @@ export function paletteFor(query: string) {
     notes: notesList.filter((n) => match(n.title) || match(n.body)).slice(0, 6).map((n) => ({ id: n.id!, title: n.title, media_id: n.media_id ?? null, start: n.start ?? null })),
     documents: docsList.filter((d) => match(d.title)).slice(0, 6).map(({ id, title }) => ({ id, title })),
   };
+}
+
+export function appearancesFor(speakerId: string): Appearance[] {
+  const rand = seeded(speakerId.length * 7 + Number(speakerId.slice(4)));
+  const count = 3 + Math.floor(rand() * 9);
+  return mediaList.slice(0, 40).filter(() => rand() < count / 40).map((m, i) => ({
+    media_id: m.id,
+    local_id: `S${i % 4}`,
+    airtime: Math.round(m.duration * (0.1 + rand() * 0.4)),
+    start: Math.round(m.duration * rand() * 0.8),
+    end: null,
+    title: m.title,
+    channel: m.channel,
+    date: m.date,
+    duration: m.duration,
+  })).sort((a, b) => b.airtime - a.airtime);
 }

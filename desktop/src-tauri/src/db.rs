@@ -406,6 +406,28 @@ pub fn speakers(root: &Path) -> Result<Vec<Value>> {
     rows(&open(root)?,"SELECT s.id,s.name,s.color,s.notes,count(DISTINCT a.media_id) AS recordings,coalesce(sum(a.airtime),0) AS airtime FROM speakers s LEFT JOIN assignments a ON a.speaker_id=s.id GROUP BY s.id ORDER BY airtime DESC, s.name COLLATE NOCASE",[])
 }
 
+/// Every recording a saved voice appears in, loudest first, with the start of its longest turn.
+pub fn speaker_appearances(root: &Path, speaker_id: &str) -> Result<Vec<Value>> {
+    rows(
+        &open(root)?,
+        "SELECT a.media_id, a.local_id, a.airtime, a.start, a.end, m.title, m.channel, m.date, m.duration
+         FROM assignments a JOIN media m ON m.id = a.media_id
+         WHERE a.speaker_id = ?1
+         ORDER BY a.airtime DESC, m.date DESC",
+        [speaker_id],
+    )
+}
+
+pub fn set_speaker_notes(root: &Path, id: &str, notes: &str) -> Result<()> {
+    let notes = notes.trim();
+    let changed = open(root)?.execute(
+        "UPDATE speakers SET notes = ?1 WHERE id = ?2",
+        params![(!notes.is_empty()).then_some(notes), id],
+    )?;
+    anyhow::ensure!(changed == 1, "Speaker not found");
+    Ok(())
+}
+
 pub fn assign(root: &Path, media_id: &str, local_id: &str, name: &str) -> Result<()> {
     if name.trim().is_empty() {
         bail!("Enter a speaker name");
@@ -718,5 +740,36 @@ mod tests {
         assert_eq!(list[1]["name"], "Sarah");
         assert_eq!(list[1]["airtime"], 400.0);
         assert_eq!(list[1]["recordings"], 1);
+    }
+
+    #[test]
+    fn speaker_appearances_list_where_a_voice_spoke() {
+        let (_tmp, root) = library_fixture();
+        open(&root)
+            .unwrap()
+            .execute_batch("UPDATE assignments SET start = 42.5 WHERE media_id='a' AND local_id='S0'; INSERT INTO assignments(media_id,local_id,speaker_id,airtime,start) VALUES ('c','S2','s1',60,7);")
+            .unwrap();
+        let list = speaker_appearances(&root, "s1").unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0]["media_id"], "a");
+        assert_eq!(list[0]["local_id"], "S0");
+        assert_eq!(list[0]["airtime"], 300.0);
+        assert_eq!(list[0]["start"], 42.5);
+        assert_eq!(list[0]["title"], "Alpha meeting");
+        assert_eq!(list[0]["channel"], "Meetings");
+        assert_eq!(list[0]["date"], "20251007");
+        assert_eq!(list[1]["local_id"], "S3");
+        assert_eq!(list[2]["media_id"], "c");
+        assert!(speaker_appearances(&root, "nobody").unwrap().is_empty());
+    }
+
+    #[test]
+    fn speaker_notes_save_and_clear() {
+        let (_tmp, root) = library_fixture();
+        set_speaker_notes(&root, "s1", "  Leads the Tuesday study.  ").unwrap();
+        assert_eq!(speakers(&root).unwrap().iter().find(|s| s["id"] == "s1").unwrap()["notes"], "Leads the Tuesday study.");
+        set_speaker_notes(&root, "s1", "   ").unwrap();
+        assert!(speakers(&root).unwrap().iter().find(|s| s["id"] == "s1").unwrap()["notes"].is_null());
+        assert!(set_speaker_notes(&root, "missing", "x").is_err());
     }
 }

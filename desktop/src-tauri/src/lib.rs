@@ -113,6 +113,16 @@ async fn speakers(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     work(move || db::speakers(&root)).await
 }
 #[tauri::command]
+async fn speaker_appearances(state: State<'_, AppState>, id: String) -> Result<Vec<Value>, String> {
+    let root = state.root.clone();
+    work(move || db::speaker_appearances(&root, &id)).await
+}
+#[tauri::command]
+async fn set_speaker_notes(state: State<'_, AppState>, id: String, notes: String) -> Result<(), String> {
+    let root = state.root.clone();
+    work(move || db::set_speaker_notes(&root, &id, &notes)).await
+}
+#[tauri::command]
 async fn assign_speaker(
     state: State<'_, AppState>,
     id: String,
@@ -332,7 +342,7 @@ pub fn run() {
         db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'",[])?;
         app.manage(AppState {root:root.clone(),runtime:speech::Runtime::resolve(app.path().resource_dir().ok()),control:control.clone(),thumbnail_generator:Arc::new(std::sync::Mutex::new(())),playback:Arc::new(playback::Playback::start()?),export:Arc::new(export::ExportControl::default())});Ok(())
       })
-      .invoke_handler(tauri::generate_handler![overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,research,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,research,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
       .run(move|_,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();}});
 }

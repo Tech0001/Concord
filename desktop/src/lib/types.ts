@@ -69,6 +69,17 @@ export type Speaker = {
   recordings: number;
   airtime: number;
 };
+export type Appearance = {
+  media_id: string;
+  local_id: string;
+  airtime: number;
+  start: number | null;
+  end: number | null;
+  title: string;
+  channel: string;
+  date: string;
+  duration: number;
+};
 export type Note = {
   id?: string;
   title: string;
