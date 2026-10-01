@@ -2,6 +2,7 @@
 import { api, setTransport, type Transport } from "../lib/ipc.ts";
 import type { LibraryFilter, Note, ReviewState } from "../lib/types.ts";
 import * as fx from "./fixtures.ts";
+import {chatHandlers} from "./mock-chat.ts";
 import { setupHandlers, setupState } from "./mock-setup.ts";
 
 const delay = <T>(value: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(value), ms));
@@ -212,6 +213,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   transcribe: () => "job",
   import_media: () => 0,
   ...setupHandlers,
+  ...chatHandlers,
 };
 
 export function installMock(): void {

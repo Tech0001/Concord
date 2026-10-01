@@ -1,6 +1,6 @@
 [package]
 name = "concord-next"
-version = "0.27.0"
+version = "0.28.0"
 description = "A local research archive for spoken-word media"
 authors = ["Concord contributors"]
 license = "MIT"

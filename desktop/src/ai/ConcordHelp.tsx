@@ -6,13 +6,14 @@ import { Button } from "../ui/Button.tsx";
 import { useToast } from "../ui/Toasts.tsx";
 import { PENDING_HELP } from "./help-links.ts";
 export function AskHelp({topic,error,onNavigate}:{topic:string;error?:string;onNavigate?:()=>void}) {
-  const {navigate}=useApp(); const toast=useToast(); const [busy,setBusy]=useState(false);
+  const {openAsk}=useApp(); const toast=useToast(); const [busy,setBusy]=useState(false);
   return <Button size="sm" variant="ghost" icon={CircleHelp} disabled={busy} onClick={()=>{
     setBusy(true);
     void api.aiHelpPrompt(topic,error).then(question=>{
       sessionStorage.setItem(PENDING_HELP,question);
       onNavigate?.();
-      navigate({page:"ai",context:"help",question});
+      openAsk({context:"help",question});
+      sessionStorage.removeItem(PENDING_HELP);
     }).catch(toast.error).finally(()=>setBusy(false));
   }}>Ask for help</Button>;
 }

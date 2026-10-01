@@ -122,13 +122,16 @@ export function SearchFilters({
 export function SourceHit({
   hit,
   number,
+  onNavigate,
 }: {
   hit: ResearchHit;
   number?: number;
+  onNavigate?: () => void;
 }) {
   const { navigate, openNote } = useApp();
   const toast = useToast();
   const open = async () => {
+    onNavigate?.();
     if (hit.kind === "recording")
       navigate({ page: "recording", id: hit.id, at: hit.start ?? 0 });
     else if (hit.kind === "document")

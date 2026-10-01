@@ -65,11 +65,19 @@ selected source excerpts go to its provider; subscription limits and extra-usage
 These subscriptions do not supply embeddings. See [Codex non-interactive mode](https://developers.openai.com/codex/noninteractive)
 and [Claude Code integrations](https://code.claude.com/docs/en/legal-and-compliance).
 
-Chat uses one saved conversation with an explicit context choice for each message:
-**My archive**, **Concord help**, or **Neither**. Help includes the installed version’s guide
+Use **Ask** beside the top-bar search, or **Ctrl+J**, to chat without leaving the current page.
+The side panel and full AI page share conversations, drafts and responses. Choose a context
+for each message: **My archive**, **This recording**, **Concord help**, or **Just chat**.
+Opening Ask in the player selects that recording; Settings, Setup and Status select Help.
+An existing draft keeps its selected context. On desktop, Enter sends and Shift+Enter adds a line.
+Numbered citations preview their passages and open the source; only cited passages appear in
+the source list or a saved note's anchors. Simple greetings do not retrieve archive passages.
+
+Help includes the installed version’s guide
 and filtered setup/queue diagnostics, with a local preview before sending. It omits credentials,
 file paths, source names, raw logs and recording/document contents. Earlier messages are sent
-only within the same context choice. Setup steps, sources and failed jobs offer **Ask for help**;
+only within the same context choice and, for This recording, the same recording.
+Setup steps, sources, failed jobs and errors offer **Ask for help**;
 the question is prefilled, never sent automatically. Help links open the relevant screen and do
 not execute operations or change settings.
 

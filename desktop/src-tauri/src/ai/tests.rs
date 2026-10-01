@@ -789,5 +789,31 @@ fn schema_thirteen_chats_migrate_with_history_intact() {
     drop(db);
     let old=chat::read(root.path(),"old").unwrap();
     assert_eq!(old["messages"][0]["content"],"Keep this question");assert_eq!(old["messages"][0]["context_kind"],"archive");
-    let db=db::open(root.path()).unwrap();assert_eq!(db.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),14);
+    let db=db::open(root.path()).unwrap();assert_eq!(db.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),15);
+}
+
+#[test]
+fn recording_scope_filters_both_retrieval_and_prior_messages_and_greetings_skip_embedding() {
+    let root=tempfile::tempdir().unwrap();fixture(root.path());let fake=Fake::new();fake.config(root.path(),"chat","tiny-chat","");
+    let control=Control::default();let id=chat::create(root.path()).unwrap();
+    let request=|media:&str,text:&str,semantic|chat::Send{conversation_id:id.clone(),text:text.into(),use_library:true,semantic,context:Some(chat::ContextKind::Archive),filter:Filter{media_id:media.into(),..Filter::default()}};
+    let first=chat::send(root.path(),&control,&request("prayer","prayer",false),||panic!("No help context"),|_|{}).unwrap();
+    assert_eq!(first["messages"][1]["sources"].as_array().unwrap().len(),1);
+    assert_eq!(first["messages"][1]["sources"][0]["id"],"prayer");
+    assert_eq!(first["messages"][0]["context_media_id"],"prayer");
+    db::open(root.path()).unwrap().execute("UPDATE ai_messages SET content='PRIVATE_PREVIOUS_RECORDING' WHERE role='assistant'",[]).unwrap();
+    chat::send(root.path(),&control,&request("car","car",false),||panic!(),|_|{}).unwrap();
+    let calls=fake.requests.lock().unwrap();let payload=&calls.last().unwrap().2;
+    assert!(!payload.to_string().contains("PRIVATE_PREVIOUS_RECORDING"));assert!(!payload.to_string().contains("Faith and prayer support"));assert!(payload.to_string().contains("tires and oil"));drop(calls);
+    // With semantic search on but no embedding runtime prepared, a greeting must still succeed.
+    let result=chat::send(root.path(),&control,&request("","you there?",true),||panic!(),|_|{}).unwrap();
+    assert_eq!(result["messages"][5]["error"],0);assert!(result["messages"][5]["sources"].as_array().unwrap().is_empty());
+    assert_eq!(fake.requests.lock().unwrap().len(),3);
+    assert!(!chat::is_small_talk("Hello, what did Sarah say about prayer?"));
+}
+#[test]
+fn schema_fourteen_chat_contexts_gain_scopes_without_losing_messages() {
+    let root=tempfile::tempdir().unwrap();let db=db::open(root.path()).unwrap();
+    db.execute_batch("INSERT INTO ai_conversations(id,title) VALUES('old','Keep it');INSERT INTO ai_messages(id,conversation_id,role,content,context_kind) VALUES('m','old','assistant','Keep this help','help');ALTER TABLE ai_messages DROP COLUMN context_media_id;ALTER TABLE ai_messages DROP COLUMN context_status;PRAGMA user_version=14;").unwrap();drop(db);
+    let old=chat::read(root.path(),"old").unwrap();assert_eq!(old["messages"][0]["content"],"Keep this help");assert_eq!(old["messages"][0]["context_kind"],"help");assert_eq!(old["messages"][0]["context_media_id"],"");
 }

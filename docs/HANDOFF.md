@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.27.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.28.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -10,13 +10,61 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
-## Shared chat with explicit app help (0.27.0)
+## Global Ask panel and shared chat (0.28.0)
+
+The broader chat interface requested after 0.27 is now implemented. **Ask** beside top-bar
+search and **Ctrl+J** open a right-side panel without leaving the page; narrow phone screens
+use a bottom sheet. **Full view** opens the same conversation on AI. The root `ChatProvider`
+owns drafts, active conversation and streaming, so navigation and opening/closing the panel
+do not discard a question or interrupt the visible response. The AI page defaults to Chat;
+semantic search stays on AI, as the user previously requested.
+
+Four visible choices: **My archive · This recording · Concord help · Just chat**. Opening Ask
+defaults to Help on Settings/Setup/Status, the selected recording in the player, and archive
+elsewhere. Nonempty drafts retain their explicit scope; problem shortcuts select Help and
+append a sanitized prefill without sending. Drafts are retained separately by context and
+recording. No automatic intent classifier routes substantive questions. A small exact set of
+greetings/thanks skips retrieval, addressing the ten excerpts previously sent for “you there”.
+
+The full chat has a centered thread and docked composer with scope chips, filters, provider/
+model and disclosure. Rename/star/delete are in the conversation menu; starred conversations
+can be filtered in history. Enter sends, Shift+Enter adds a line, IME composition is preserved.
+Citation chips preview on hover/focus and navigate to the passage. Code blocks/inline code
+are excluded from citation parsing; the source list and Save as note anchors contain only
+cited evidence, preserving original citation numbers. Replies show retrieved/cited counts.
+
+Help keeps the existing filtered diagnostics and navigation allowlist, adds a speech status
+line, and offers action links as buttons. These **open screens only**; they never change a
+setting or run a job. Setup/source/job shortcuts now open the panel, and generic error toasts
+offer Ask about this using the same backend error classification. No real library content
+was sent to a provider during development or validation.
+
+Schema **15** adds `ai_messages.context_media_id` and `context_status`; existing messages are
+preserved. This recording restricts retrieval and model history to that exact media ID.
+Help/archive/general history remains separated as in 0.27. Backups accept schema 15.
+
+Validation: 163 Rust tests (9 existing opt-in tests ignored), 59 interface tests, clean Clippy,
+production frontend build. `desktop/scripts/native-ask-test.py` runs the native WebKitGTK
+regression against a fresh scratch library and synthetic loopback streaming provider. It
+covers panel/full-view state, navigation while streaming, keyboard/IME behavior, greeting
+retrieval bypass, citation preview/navigation, recording retrieval/history isolation,
+context defaults, sanitized help shortcuts, and no implicit queue start. Latest native run:
+`/tmp/concord-ask-native-hoyq6d0y` (1646×1042); earlier runs also passed at 806×1386
+and 1701×1386. Asking from the Semantic search tab returns to Chat without losing the draft.
+Phone layout checked in Chromium at 390×844; screenshots: `/tmp/concord-028-screens/`.
+Logs: `/tmp/concord-028-{rust,ts,clippy,native-test,package}.log`.
+Installed and byte-verified the 0.28.0 AppImage at
+`~/.local/opt/concord-next/Concord-Next.AppImage`, then reopened the installed app.
+Verified backup: `~/.local/share/concord-next/backups/before-0.28.0-20261001-162519.db`.
+The installed library migrated to schema 15; top-bar Ask is present in its native window.
+
+## Shared chat with explicit app help (0.27.0, historical)
 
 The user chose **one chat and one saved history**, with **My archive · Concord help · Neither**
 chosen for each message. Do not split Help into a separate page, chat history or automatically
 inferred mode. Semantic search remains on AI per the earlier product decision. A later pasted
-UI proposal recommends a global Ask panel, a narrower thread, a docked composer, better citation
-chips and a This recording scope; those are future UI work, not part of this delivery.
+UI proposal recommended a global Ask panel, a narrower thread, a docked composer, better citation
+chips and a This recording scope; those are delivered in 0.28 above.
 
 Help adds a compiled product guide (`src-tauri/src/ai/help-guide.md`) and a server-collected,
 explicitly allowlisted status snapshot (`ai/help.rs`). It reuses onboarding readiness, then

@@ -567,7 +567,7 @@ mod tests {
         assert_eq!(
             crate::health::backup::validate(Path::new(backup["path"].as_str().unwrap())).unwrap()
                 ["version"],
-            14
+            15
         );
     }
     #[test]
@@ -581,7 +581,7 @@ mod tests {
         assert_eq!(
             db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            14
+            15
         );
         assert_eq!(
             db.query_row("SELECT count(*) FROM media", [], |r| r.get::<_, i64>(0))

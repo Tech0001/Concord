@@ -47,6 +47,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             <div key={t.id} className={cx("toast", `toast-${t.kind}`)} role={t.kind === "error" ? "alert" : "status"}>
               <Icon size={16} aria-hidden className="toast-icon" />
               <span className="toast-message">{t.message}</span>
+              {t.kind === "error" && !t.action && <button type="button" className="toast-action" onClick={()=>{window.dispatchEvent(new CustomEvent("concord:ask-error",{detail:t.message}));dismiss(t.id);}}>Ask about this</button>}
               {t.action && (
                 <button
                   type="button"

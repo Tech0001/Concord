@@ -1,6 +1,6 @@
 import { PopoutIndicator } from "../player/PopoutContext.tsx";
 import { ToolIndicator } from "../tools/ToolsContext.tsx";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, MessageCircle } from "lucide-react";
 import { PHONE, useMediaQuery } from "../lib/media-query.ts";
 import { Button, IconButton } from "../ui/Button.tsx";
 import { Select } from "../ui/Select.tsx";
@@ -12,7 +12,7 @@ import { PAGE_TITLES } from "./nav.ts";
 import { useApp } from "./AppContext.tsx";
 
 export function Topbar({ onAdd }: { onAdd: () => void }) {
-  const { route, pageTitle, openPalette, category, setCategory } = useApp();
+  const { route, pageTitle, openPalette, openAsk, category, setCategory } = useApp();
   const phone = useMediaQuery(PHONE);
   const scoped = ["library", "search", "documents", "notes", "map", "ai", "pipeline"].includes(route.page);
   const categories: {value: Category; label: string}[] = [{value:"personal",label:"Personal"},{value:"work",label:"Work"},{value:"",label:"Both"}];
@@ -24,6 +24,7 @@ export function Topbar({ onAdd }: { onAdd: () => void }) {
         <h2 className="topbar-title">{title}</h2>
         {scoped && <Select size="sm" label="Archive category" value={category} onChange={setCategory} options={categories}/> }
         <PopoutIndicator/><ToolIndicator/>
+        <IconButton label="Ask Concord" icon={MessageCircle} onClick={()=>openAsk()}/>
         <IconButton label="Search or jump to" icon={Search} onClick={openPalette} />
         {route.page === "library" && <IconButton label="Add recordings" icon={Plus} onClick={onAdd} />}
       </header>
@@ -35,6 +36,7 @@ export function Topbar({ onAdd }: { onAdd: () => void }) {
         <span>Search or jump to…</span>
         <Kbd>Ctrl K</Kbd>
       </button>
+      <Button icon={MessageCircle} className="topbar-ask" aria-label="Ask Concord" onClick={()=>openAsk()}>Ask <Kbd>Ctrl J</Kbd></Button>
       <div className="topbar-actions">
         <PopoutIndicator/><ToolIndicator/>
         {scoped && <Segmented label="Archive category" value={category} onChange={setCategory} options={categories}/>}

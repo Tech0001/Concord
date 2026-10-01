@@ -13,6 +13,7 @@ const DocumentContext = createContext<{
   id?: string;
   onDocument?: (id: string) => void;
   appLinks?: Record<string, () => void>;
+  citation?: (number: number) => ReactNode;
 }>({});
 
 /**
@@ -27,11 +28,13 @@ export function Markdown({
   onDocument,
   omitTitle,
   appLinks,
+  citation,
 }: {
   source: string;
   documentId?: string;
   onDocument?: (id: string) => void;
   appLinks?: Record<string, () => void>;
+  citation?: (number: number) => ReactNode;
   omitTitle?: string;
 }) {
   const blocks = parseBlocks(stripFrontmatter(stripExcalidrawScene(source)));
@@ -42,7 +45,7 @@ export function Markdown({
   )
     blocks.shift();
   return (
-    <DocumentContext.Provider value={{ id: documentId, onDocument, appLinks }}>
+    <DocumentContext.Provider value={{ id: documentId, onDocument, appLinks, citation }}>
       <div className="md">
         {blocks.map((block, i) => renderBlock(block, i))}
       </div>
@@ -174,6 +177,8 @@ function renderInline(text: string): ReactNode[] {
       }
     }
     if (ch === "[") {
+      const reference = /^\[(\d+)\](?!\()/.exec(text.slice(i));
+      if (reference) {flush();out.push(<InlineCitation key={`r-${key++}`} number={Number(reference[1])}/>);i+=reference[0].length;continue;}
       const close = text.indexOf("]", i + 1);
       if (close > i && text[close + 1] === "(") {
         const urlEnd = text.indexOf(")", close + 2);
@@ -284,3 +289,5 @@ function MarkdownLink({
     );
   return <span>{children}</span>;
 }
+
+function InlineCitation({number}:{number:number}) { const {citation}=useContext(DocumentContext); return <>{citation ? citation(number) : `[${number}]`}</>; }

@@ -331,6 +331,7 @@ export function ArchiveWorkspace({
   return (
     <div className="archive-workspace">
       <div className="archive-tabs">
+        <AskHelp topic="health" onNavigate={onClose}/>
         <Segmented
           label="Status and health sections"
           value={tab}

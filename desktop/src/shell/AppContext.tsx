@@ -20,6 +20,7 @@ export type AppContextValue = {
   openNote: (note: Note) => void;
   openPalette: () => void;
   openActivity: () => void;
+  openAsk: (intent?: Partial<import("../ai/ChatStore.tsx").AskIntent>) => void;
   addRecordings: () => Promise<void>;
   /** Resolves true when a library was imported. */
   importLegacy: (path?: string) => Promise<boolean>;

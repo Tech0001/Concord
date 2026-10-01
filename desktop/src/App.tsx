@@ -1,3 +1,5 @@
+import {ChatProvider,useChatShell} from "./ai/ChatStore.tsx";
+import {AskPanel} from "./ai/AskPanel.tsx";
 import { PopoutProvider } from "./player/PopoutContext.tsx";
 import { ToolsPage } from "./tools/ToolsPage.tsx";
 import { ToolsProvider } from "./tools/ToolsContext.tsx";
@@ -38,13 +40,14 @@ import type { SetupStatus } from "./setup/types.ts";
 export default function App() {
   return (
     <ToastProvider>
-      <ToolsProvider><PopoutProvider><Shell /></PopoutProvider></ToolsProvider>
+      <ChatProvider><ToolsProvider><PopoutProvider><Shell /></PopoutProvider></ToolsProvider></ChatProvider>
     </ToastProvider>
   );
 }
 
 function Shell() {
   const toast = useToast();
+  const ask = useChatShell();
   const { route, navigate, back } = useRoute();
   const [overview, setOverview] = useState<Overview>();
   const [revision, setRevision] = useState(0);
@@ -165,7 +168,18 @@ function Shell() {
     if (!onSetup && !p.completed && (!setup.library.started || p.furthest !== "library")) navigate({ page: "setup" }, { replace: true });
   }, [setup, onSetup, navigate]);
 
-  useShortcuts([{ key: "k", mod: true, global: true, run: () => setPaletteOpen((v) => !v) }]);
+  const openAsk = useCallback((intent?: Parameters<AppContextValue['openAsk']>[0]) => {
+    const help = activityOpen || route.page === 'settings' || route.page === 'setup';
+    const recording = route.page === 'recording' ? route.id : undefined;
+    setActivityOpen(false);
+    ask.show({context:help?'help':recording?'recording':'archive',recordingId:recording,recordingTitle:recording?pageTitle??undefined:undefined,...intent});
+  },[ask.show,activityOpen,route,pageTitle]);
+  useShortcuts([{ key: "k", mod: true, global: true, run: () => setPaletteOpen((v) => !v) },
+    { key: "j", mod: true, global: true, run: () => ask.open ? ask.close() : openAsk() }]);
+  useEffect(()=>{
+    const help=(event:Event)=>{void api.aiHelpPrompt('health',String((event as CustomEvent).detail??'')).then(question=>openAsk({context:'help',question})).catch(toast.error);};
+    window.addEventListener('concord:ask-error',help);return()=>window.removeEventListener('concord:ask-error',help);
+  },[openAsk,toast]);
 
   const pageKey =
     route.page === "recording" ? `recording:${route.id}` : route.page === "documents" ? `documents:${route.id ?? ""}` : route.page;
@@ -243,6 +257,7 @@ function Shell() {
       openNote: setNote,
       openPalette: () => setPaletteOpen(true),
       openActivity: () => setActivityOpen(true),
+      openAsk,
       addRecordings,
       importLegacy,
       pageTitle,
@@ -269,6 +284,7 @@ function Shell() {
       pageTitle,
       setup,
       refreshSetup,
+      openAsk,
     ],
   );
 
@@ -288,6 +304,7 @@ function Shell() {
     return (
       <AppContext.Provider value={context}>
         <SetupPage route={route} />
+        <AskPanel/>
         <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} onChanged={() => api.jobs().then(setJobs).catch(toast.error)} />
         {prompts}
       </AppContext.Provider>
@@ -331,7 +348,7 @@ function Shell() {
 
   return (
     <AppContext.Provider value={context}>
-      <div className="shell" data-rail={!phone && (collapsed || narrow)}>
+      <div className="shell" data-ask-open={ask.open && route.page!=="ai"} data-rail={!phone && (collapsed || narrow)}>
         {!phone && (
           <Sidebar mode={collapsed || narrow ? "rail" : "full"} onToggle={() => (narrow ? setDrawerOpen(true) : setCollapsed((v) => !v))} />
         )}
@@ -348,6 +365,7 @@ function Shell() {
       <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} onChanged={() => api.jobs().then(setJobs).catch(toast.error)} />
       {note && <NoteEditor note={note} onClose={() => setNote(null)} />}
       {prompts}
+      <AskPanel/>
     </AppContext.Provider>
   );
 }
