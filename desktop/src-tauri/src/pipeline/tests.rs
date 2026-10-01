@@ -181,3 +181,202 @@ fn real_queue_publishes_a_transcript_and_releases_the_worker() {
             .starts_with(root.path())
     );
 }
+
+#[test]
+fn download_cap_resets_by_date_and_does_not_block_local_transcription() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let db = db::open(root).unwrap();
+    save_config(
+        root,
+        &Config {
+            daily_limit: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    db.execute("INSERT INTO media(id,title,url,status) VALUES ('remote','Remote','https://www.youtube.com/watch?v=fixture1234','pending')",[]).unwrap();
+    let remote = queue::insert(&db, "remote", "Remote", "download", "auto", true)
+        .unwrap()
+        .unwrap();
+    db.execute(
+        "INSERT INTO pipeline_downloads(job_id,day) VALUES ('previous',date('now','localtime'))",
+        [],
+    )
+    .unwrap();
+    enqueue(
+        root,
+        &c,
+        &Batch {
+            ids: vec!["one".into()],
+            ..Default::default()
+        },
+        true,
+    )
+    .unwrap();
+    let local = queue::claim(root, 1).unwrap().unwrap();
+    assert_eq!(local["media_id"], "one");
+    queue::finish(root, local["id"].as_str().unwrap(), Ok(()), &c, 2).unwrap();
+    assert!(queue::claim(root, 2).unwrap().is_none());
+    assert_eq!(overview(root).unwrap()["atDailyLimit"], true);
+    db.execute(
+        "UPDATE pipeline_downloads SET day=date('now','localtime','-1 day')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(queue::claim(root, 3).unwrap().unwrap()["id"], remote);
+    queue::wait_for_live(root, &remote, 4).unwrap();
+    assert_eq!(state(root, &remote)["attempts"], 0);
+    assert!(queue::claim(root, 303).unwrap().is_none());
+    assert_eq!(queue::claim(root, 304).unwrap().unwrap()["id"], remote);
+}
+
+#[test]
+fn folder_sources_preserve_files_metadata_and_labels_when_edited_or_removed() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let folder = root.join("incoming");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("meeting.ogg"), b"sample").unwrap();
+    let mut input = sources::Source {
+        id: None,
+        name: "Folder meetings".into(),
+        kind: "folder".into(),
+        url: folder.to_string_lossy().into_owned(),
+        enabled: true,
+        diarize: false,
+        include_shorts: false,
+        category: "work".into(),
+    };
+    let id = sources::save(root, &c, &input).unwrap();
+    let source = sources::list(root).unwrap().pop().unwrap();
+    assert_eq!(sources::local(root, &c, &source).unwrap(), 1);
+    assert_eq!(sources::local(root, &c, &source).unwrap(), 0);
+    let state = snapshot(root).unwrap();
+    assert_eq!(state["running"], false);
+    assert_eq!(state["jobs"][0]["diarize"], 0);
+    let media = state["jobs"][0]["media_id"].as_str().unwrap();
+    let item = db::media(root, media).unwrap();
+    assert_eq!(item["category"], "work");
+    input.id = Some(id.clone());
+    input.name = "Renamed folder".into();
+    sources::save(root, &c, &input).unwrap();
+    assert_eq!(db::media(root, media).unwrap()["channel"], "Renamed folder");
+    sources::remove(root, &c, &id).unwrap();
+    assert_eq!(db::media(root, media).unwrap()["source_id"], Value::Null);
+    assert!(folder.join("meeting.ogg").exists());
+    assert_eq!(snapshot(root).unwrap()["jobs"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn youtube_scan_preserves_existing_archive_and_rejects_unsafe_urls() {
+    use serde_json::json;
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let input = sources::Source {
+        id: None,
+        name: "Channel".into(),
+        kind: "youtube".into(),
+        url: "https://www.youtube.com/@sample".into(),
+        enabled: true,
+        diarize: true,
+        include_shorts: true,
+        category: "personal".into(),
+    };
+    let id = sources::save(root, &c, &input).unwrap();
+    let source = sources::list(root).unwrap().pop().unwrap();
+    let entries = vec![
+        json!({"id":"first123456","title":"First"}),
+        json!({"id":"short123456","title":"Short"}),
+        json!({"id":"../../bad","title":"Invalid"}),
+    ];
+    assert_eq!(sources::ingest(root, &source, &entries, "auto").unwrap(), 2);
+    assert_eq!(sources::ingest(root, &source, &entries, "auto").unwrap(), 0);
+    let jobs = snapshot(root).unwrap();
+    assert_eq!(jobs["jobs"].as_array().unwrap().len(), 2);
+    assert_eq!(jobs["jobs"][0]["kind"], "download");
+    assert_eq!(download::scan_urls(&input.url, false).unwrap().len(), 2);
+    assert_eq!(download::scan_urls(&input.url, true).unwrap().len(), 3);
+    assert!(download::youtube_url("https://youtube.com.evil.test/@sample").is_err());
+    assert!(download::youtube_url("file:///tmp/input").is_err());
+    assert!(download::youtube_url("https://user:password@youtube.com/@sample").is_err());
+    let duplicate = sources::Source {
+        id: None,
+        name: "Duplicate".into(),
+        url: "https://www.youtube.com/@sample/videos".into(),
+        ..input
+    };
+    assert!(sources::save(root, &c, &duplicate).is_err());
+    assert!(sources::list(root).unwrap().iter().any(|s| s["id"] == id));
+}
+
+#[test]
+fn partial_source_output_retains_valid_entries_and_empty_playlists_are_not_videos() {
+    let root = tempfile::tempdir().unwrap();
+    let control = speech::Control::default();
+    let mut cmd = std::process::Command::new("python3");
+    cmd.args(["-c","import sys,json; print(json.dumps({'_type':'playlist','entries':[{'id':'kept1234567','title':'Available'}]})); print('One item unavailable',file=sys.stderr);sys.exit(1)"]);
+    let output = subprocess::capture(
+        root.path(),
+        &control,
+        cmd,
+        None,
+        std::time::Duration::from_secs(10),
+    )
+    .unwrap();
+    assert!(!output.success);
+    assert!(output.error.contains("One item unavailable"));
+    assert_eq!(sources::listing(&output.text).unwrap().len(), 1);
+    assert!(
+        sources::listing(r#"{"_type":"playlist","id":"channel","entries":null}"#)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        sources::listing(r#"{"id":"single12345","title":"Single video"}"#)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn clearing_other_pending_work_does_not_change_a_later_failure() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    // Use an untranscribed local item so media.status follows its current job.
+    db::open(root)
+        .unwrap()
+        .execute("UPDATE media SET transcript=NULL WHERE id='one'", [])
+        .unwrap();
+    let batch = Batch {
+        ids: vec!["one".into()],
+        ..Default::default()
+    };
+    let old = enqueue(root, &c, &batch, false).unwrap()["ids"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    action(root, &c, "cancel", Some(&old)).unwrap();
+    save_config(
+        root,
+        &Config {
+            retries: 0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    enqueue(root, &c, &batch, true).unwrap();
+    let current = queue::claim(root, 1).unwrap().unwrap();
+    queue::finish(
+        root,
+        current["id"].as_str().unwrap(),
+        Err(anyhow::anyhow!("failed")),
+        &c,
+        2,
+    )
+    .unwrap();
+    assert_eq!(db::media(root, "one").unwrap()["status"], "failed");
+    action(root, &c, "cancel-pending", None).unwrap();
+    assert_eq!(db::media(root, "one").unwrap()["status"], "failed");
+}

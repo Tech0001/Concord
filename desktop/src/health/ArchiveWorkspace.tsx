@@ -354,6 +354,7 @@ export function ArchiveWorkspace({
                 ["Pending", number(status.archive.pending)],
                 ["Failed", number(status.archive.failed)],
                 ["Speakers", number(status.speakers.total)],
+                ["Daily downloads", `${number(status.pipeline?.dailyDownloads ?? 0)} / ${number(status.pipeline?.dailyLimit ?? 200)}`],
               ].map(([label, value]) => (
                 <div key={label}>
                   <span>{label}</span>

@@ -64,10 +64,10 @@ export function PlayerHeader({
           <Button
             variant={media.transcript ? "secondary" : "primary"}
             icon={Sparkles}
-            disabled={busy || queued || !media.path}
+            disabled={busy || queued || (!media.path && !media.url)}
             onClick={() => void transcribe(media.id)}
           >
-            {busy ? "Transcribing…" : queued ? "Queued" : media.transcript ? "Re-transcribe" : "Transcribe"}
+            {busy ? "Processing…" : queued ? "Queued" : !media.path && media.url ? "Download & transcribe" : media.transcript ? "Re-transcribe" : "Transcribe"}
           </Button>
           <IconButton label={starred ? "Remove star" : "Star"} icon={Star} active={starred} className={starred ? "star-btn is-starred" : "star-btn"} onClick={onStar} />
           <MoreMenu title={media.title} entries={menu} />

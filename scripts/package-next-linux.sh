@@ -15,6 +15,7 @@ done
 if [[ ! -x build/binaries/embedding/llama-server ]]; then
   bash scripts/build-embedding-runtime.sh
 fi
+bash scripts/stage-next-downloads.sh
 system_plugins="$(pkg-config --variable=pluginsdir gstreamer-1.0)"
 mkdir -p build
 staging_root="$(mktemp -d "$PWD/build/concord-media.XXXXXX")"

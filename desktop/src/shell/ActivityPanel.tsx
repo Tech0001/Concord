@@ -16,6 +16,7 @@ const LABEL: Record<string, string> = {
   running: "Running",
   queued: "Queued",
   retry: "Waiting to retry",
+  waiting_live: "Waiting for live stream",
   complete: "Done",
   failed: "Failed",
   interrupted: "Interrupted",
@@ -56,9 +57,9 @@ export function ActivityPanel({
   useEffect(() => {
     if (open) void check();
   }, [open]);
-  const active = jobs.filter((j) => ["running", "queued", "retry"].includes(j.status));
+  const active = jobs.filter((j) => ["running", "queued", "retry", "waiting_live"].includes(j.status));
   const finished = jobs.filter(
-    (j) => !["running", "queued", "retry"].includes(j.status),
+    (j) => !["running", "queued", "retry", "waiting_live"].includes(j.status),
   );
   const clear = async (id?: string) => {
     setBusy(true);

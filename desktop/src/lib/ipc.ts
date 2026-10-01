@@ -1,4 +1,4 @@
-import type { PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
+import type { SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
 import type { DocumentsState, DocumentSync } from "../documents/types.ts";
 import type { ArchiveStatus, Audit, BackupValidation, LogEntry, MaintenanceJob } from "../health/types.ts";
 import type { AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, Summary } from "../ai/types.ts";
@@ -75,6 +75,11 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const MEDIA_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "ogg", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 
 export const api = {
+  pipelineSaveSource: (source: SourceInput) => call<string>("pipeline_save_source", { source }),
+  pipelineRemoveSource: (id: string) => call<void>("pipeline_remove_source", { id }),
+  pipelineCheck: (id?: string, full = false) => call<void>("pipeline_check", { id, full }),
+  pipelineStopCheck: () => call<void>("pipeline_stop_check"),
+  pipelineTools: () => call<{ ready: boolean; version?: string; error?: string }>("pipeline_tools"),
   pipelineState: () => call<PipelineState>("pipeline_state"),
   pipelineCandidates: (batch: Batch) => call<Candidates>("pipeline_candidates", { batch }),
   pipelineEnqueue: (batch: Batch, start: boolean) => call<Enqueued>("pipeline_enqueue", { batch, start }),

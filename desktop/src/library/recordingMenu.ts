@@ -20,7 +20,7 @@ export function recordingMenu(m: Media, a: RecordingActions): MenuEntry[] {
   return [
     { label: "Open", icon: Play, onSelect: () => a.open() },
     ...(m.position > 5 ? [{ label: `Resume at ${clock(m.position)}`, icon: History, onSelect: () => a.open(m.position) }] : []),
-    { label: m.transcript ? "Re-transcribe" : "Transcribe", icon: Sparkles, onSelect: a.transcribe, disabled: a.transcribeDisabled || !m.path },
+    { label: !m.path && m.url ? "Download & transcribe" : m.transcript ? "Re-transcribe" : "Transcribe", icon: Sparkles, onSelect: a.transcribe, disabled: a.transcribeDisabled || (!m.path && !m.url) },
     { kind: "separator" },
     { kind: "label", label: "Review" },
     ...(Object.keys(REVIEW_LABELS) as ReviewState[]).map((s) => ({

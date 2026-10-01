@@ -2,6 +2,7 @@ export type ReviewState = "unreviewed" | "in_review" | "reviewed";
 export type LibrarySort = "newest" | "oldest" | "opened" | "words" | "title" | "longest";
 export type SpeakerSummary = { name: string; color: string | null; airtime: number };
 export type Media = {
+  url?: string;
   id: string;
   title: string;
   channel: string;

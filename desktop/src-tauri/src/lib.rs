@@ -46,7 +46,17 @@ async fn work<T: Send + 'static>(
         .map_err(|e| format!("{e:#}"))
 }
 #[tauri::command]
-async fn pipeline_state(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||pipeline::snapshot(&root)).await}
+async fn pipeline_save_source(state:State<'_,AppState>,source:pipeline::sources::Source)->Result<String,String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||pipeline::sources::save(&root,&control,&source)).await}
+#[tauri::command]
+async fn pipeline_remove_source(state:State<'_,AppState>,id:String)->Result<(),String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||pipeline::sources::remove(&root,&control,&id)).await}
+#[tauri::command]
+async fn pipeline_check(state:State<'_,AppState>,id:Option<String>,full:bool)->Result<(),String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||pipeline::sources::start(root,control,id,full)).await}
+#[tauri::command]
+fn pipeline_stop_check(state:State<'_,AppState>){state.pipeline.scanner.cancel();}
+#[tauri::command]
+async fn pipeline_tools()->Result<Value,String>{work(move||Ok(pipeline::download::status())).await}
+#[tauri::command]
+async fn pipeline_state(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||{let mut s=pipeline::snapshot(&root)?;s["checking"]=serde_json::json!(control.checking.load(Ordering::SeqCst));Ok(s)}).await}
 #[tauri::command]
 async fn pipeline_candidates(state:State<'_,AppState>,batch:pipeline::Batch)->Result<Value,String>{let root=state.root.clone();work(move||pipeline::candidates(&root,&batch)).await}
 #[tauri::command]
@@ -271,7 +281,7 @@ async fn jobs(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     work(move || {
         db::rows(
             &db::open(&root)?,
-            "SELECT * FROM jobs ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'retry' THEN 2 ELSE 3 END,created_at DESC LIMIT 100",
+            "SELECT * FROM jobs ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'retry' THEN 2 WHEN 'waiting_live' THEN 3 ELSE 4 END,created_at DESC LIMIT 100",
             [],
         )
     })
@@ -463,12 +473,14 @@ pub fn run() {
         runtime_log::push("info",concat!("Concord Next ",env!("CARGO_PKG_VERSION")," started"));
         db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'", [])?;
         ai::builtin::initialize(app.path().resource_dir()?);
+        pipeline::download::initialize(app.path().resource_dir()?);
         db.execute("UPDATE ai_jobs SET status='interrupted',message='Concord closed before indexing finished. Update index to resume.' WHERE status='running'",[])?;
         if let Err(e)=documents::seed_legacy(&root){runtime_log::push("warn",&format!("Legacy document folders: {e:#}"));}
         let docs_control=Arc::new(documents::Control::default());
         documents::start(root.clone(),docs_control.clone());
         let runtime=speech::Runtime::resolve(app.path().resource_dir().ok());
         let pipeline=Arc::new(pipeline::Control::new(control.clone()));
+        if let Err(e)=pipeline::sources::seed(&root){runtime_log::push("warn",&format!("Legacy download setup: {e:#}"));}
         pipeline::recover(&root)?;
         pipeline::launch(root.clone(),runtime.clone(),pipeline.clone());
         app.manage(AppState {
@@ -488,7 +500,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
       .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.pipeline.shutdown();state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
 }

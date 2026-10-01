@@ -12,7 +12,7 @@ export type MaintenanceJob = {
   created_at: string;
 };
 export type ArchiveStatus = {
-  pipeline: { running: boolean; active: number; queued: number; retry: number; failed: number };
+  pipeline: import("../pipeline/types.ts").PipelineOverview;
   generatedAt: string;
   archive: {
     total: number;

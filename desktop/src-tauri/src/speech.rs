@@ -143,6 +143,8 @@ pub struct Control {
     pid: AtomicI32,
 }
 impl Control {
+    pub(crate) fn is_cancelled(&self) -> bool {self.cancelled.load(Ordering::SeqCst)}
+    pub(crate) fn set_pid(&self, pid: i32) {self.pid.store(pid, Ordering::SeqCst);}
     pub(crate) fn begin(&self) {
         self.busy.store(true, Ordering::SeqCst);
         self.cancelled.store(false, Ordering::SeqCst);
@@ -304,6 +306,12 @@ pub(crate) fn process(
     media: &Path,
     device: &str,
 ) -> Result<()> {
+    process_options(root,runtime,control,job,id,media,&Options{device,language:"en-US",diarize:true})
+}
+pub(crate) struct Options<'a> {pub device:&'a str,pub language:&'a str,pub diarize:bool}
+pub(crate) fn process_options(root:&Path,runtime:&Runtime,control:&Control,job:&str,id:&str,media:&Path,options:&Options<'_>)->Result<()> {
+    anyhow::ensure!(media.is_file(),"The media file is unavailable. Reconnect its drive before retrying.");
+    let device=options.device;
     message(root, job, "running", "Verifying speech models")?;
     runtime.verify()?;
     let status = runtime.status();
@@ -355,8 +363,6 @@ pub(crate) fn process(
             .arg(&audio)
             .arg("--output-json")
             .arg(&raw)
-            .arg("--diar-output")
-            .arg(&diar)
             .arg("--runtime")
             .arg(&runtime.binary)
             .arg("--asr-model")
@@ -367,18 +373,19 @@ pub(crate) fn process(
                 "--device",
                 device,
                 "--language",
-                "en-US",
+                options.language,
                 "--embedding-device",
                 if embedding_gpu { "cuda" } else { "cpu" },
             ])
             .env("PYTHONUNBUFFERED", "1")
             .env("OMP_NUM_THREADS", "8")
             .env("MKL_NUM_THREADS", "8");
+        if options.diarize {cmd.arg("--diar-output").arg(&diar);}
         if !embedding_gpu {
             cmd.env("CUDA_VISIBLE_DEVICES", "");
         }
         run_process(root, job, control, cmd, &work.join("speech.log"))?;
-        let diar: Value = serde_json::from_reader(fs::File::open(diar)?)?;
+        let diar: Value = if options.diarize {serde_json::from_reader(fs::File::open(diar)?)?}else{json!({"segments":[],"speakerProfiles":[]})};
         let merged = transcript::merge(serde_json::from_reader(fs::File::open(raw)?)?, &diar)?;
         if control.cancelled.load(Ordering::SeqCst) {
             bail!("Cancelled");
@@ -540,6 +547,20 @@ mod tests {
         command.args(["-c","import os, encodings; print(os.environ['LD_LIBRARY_PATH'])"]);
         let output=command.output().unwrap();assert!(output.status.success());
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(),runtime.binary.parent().unwrap().to_string_lossy());
+    }
+    #[test]
+    #[ignore = "requires installed speech models and CONCORD_TEST_AUDIO"]
+    fn real_transcription_only_job_has_words_without_speaker_assignments() {
+        let input = std::env::var("CONCORD_TEST_AUDIO").expect("CONCORD_TEST_AUDIO");
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        db::import_files(root, std::slice::from_ref(&input)).unwrap();
+        let id = db::library(root, &db::LibraryFilter::default()).unwrap()["items"][0]["id"].as_str().unwrap().to_owned();
+        db::open(root).unwrap().execute("INSERT INTO jobs(id,media_id,title,status) VALUES ('asr-only',?1,'Fixture','running')",[&id]).unwrap();
+        process_options(root, &Runtime::resolve(None), &Control::default(), "asr-only", &id, Path::new(&input), &Options {device:"auto",language:"en-US",diarize:false}).unwrap();
+        let result = db::transcript(root, &id).unwrap();
+        assert!(!result["segments"].as_array().unwrap().is_empty());
+        assert!(result["assignments"].as_array().unwrap().is_empty());
     }
     #[test]
     #[ignore = "requires installed speech models and CONCORD_TEST_AUDIO"]

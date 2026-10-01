@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowUpRight, Check, Clock, ListOrdered, LoaderCircle, Pause, Play, RefreshCw, Settings2, Square, X } from "lucide-react";
+import { ArrowUpRight, Check, Clock, ListOrdered, LoaderCircle, Pause, Play, RefreshCw, Settings2, Square, Rss, X } from "lucide-react";
 import { api } from "../lib/ipc.ts";
 import { count, clock, prettyDate } from "../lib/format.ts";
 import { useApp } from "../shell/AppContext.tsx";
@@ -9,15 +9,17 @@ import { Empty } from "../ui/Empty.tsx";
 import { PageHeader } from "../ui/PageHeader.tsx";
 import { Select } from "../ui/Select.tsx";
 import { useToast } from "../ui/Toasts.tsx";
-import { isPending, type Candidates, type PipelineConfig, type PipelineState, type QueueJob } from "./types.ts";
+import { isPending, type Candidates, type PipelineState, type QueueJob } from "./types.ts";
+import { Sources } from "./Sources.tsx";
+import { Setup } from "./Setup.tsx";
 import "./pipeline.css";
 
-const labels: Record<string, string> = { running: "Processing", queued: "Queued", retry: "Waiting to retry", complete: "Done", failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted" };
+const labels: Record<string, string> = { running: "Processing", queued: "Queued", retry: "Waiting to retry", complete: "Done", failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted", waiting_live: "Waiting for live stream" };
 export function PipelinePage() {
   const { navigate, refresh, device, setDevice } = useApp();
   const toast = useToast();
   const [state, setState] = useState<PipelineState>();
-  const [tab, setTab] = useState<"queue" | "batch" | "setup">("queue");
+  const [tab, setTab] = useState<"queue" | "batch" | "sources" | "setup">("queue");
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState(false);
   const reload = useCallback(async () => setState(await api.pipelineState()), []);
@@ -44,9 +46,9 @@ export function PipelinePage() {
   const row = (j: QueueJob) => <article className="pipeline-job" key={j.id} data-status={j.status}>
     <div className="pipeline-job-main">
       <button className="pipeline-job-title" onClick={() => navigate({ page: "recording", id: j.media_id })}>{j.title}<ArrowUpRight size={13}/></button>
-      <small>{j.channel} · Nemotron 3.5 · {j.device === "auto" ? "Automatic device" : j.device}{j.attempts > 0 && ` · Attempt ${j.attempts}`}</small>
+      <small>{j.channel} · {j.kind === "download" && !j.path ? "Download + " : ""}Nemotron 3.5 · {j.device === "auto" ? "Automatic device" : j.device}{j.attempts > 0 && ` · Attempt ${j.attempts}`}</small>
       <p>{j.message}</p>
-      {j.status === "retry" && <small>Next attempt {new Date(j.retry_at * 1000).toLocaleString()}</small>}
+      {["retry", "waiting_live"].includes(j.status) && <small>Next attempt {new Date(j.retry_at * 1000).toLocaleString()}</small>}
     </div>
     <div className="pipeline-job-actions">
       <Chip tone={j.status === "complete" ? "success" : j.status === "failed" ? "danger" : j.status === "running" ? "accent" : "neutral"}>{j.status === "running" && <LoaderCircle size={12} className="spin"/>}{labels[j.status] ?? j.status}</Chip>
@@ -56,18 +58,20 @@ export function PipelinePage() {
   return <div className="pipeline-page">
     <PageHeader title="Pipeline" meta="Choose recordings, process them in order, and keep your archive up to date." actions={<>
       <Chip tone={state?.running ? "accent" : "neutral"}>{active ? "Processing" : state?.running ? "Ready" : "Paused"}</Chip>
-      {state?.running ? <Button icon={Pause} disabled={busy} onClick={() => void act("pause")}>Pause queue</Button> : <Button icon={Play} variant="primary" disabled={busy || !pending.length} onClick={() => void act("start")}>Start queue</Button>}
+      {state?.running ? <Button icon={Pause} disabled={busy} onClick={() => void act("pause")}>Pause queue</Button> : <Button icon={Play} variant="primary" disabled={busy || (!pending.length && !state?.config.automaticChecks)} onClick={() => void act("start")}>Start queue</Button>}
       {active && <Button icon={Square} disabled={busy} onClick={() => void act("stop")}>Stop</Button>}
     </>}/>
     <div className="pipeline-tabs" role="tablist" aria-label="Pipeline views">
-      {([ ["queue", "Queue", ListOrdered], ["batch", "Transcribe recordings", RefreshCw], ["setup", "Setup", Settings2] ] as const).map(([key, label, Icon]) => <button role="tab" aria-selected={tab === key} key={key} onClick={() => setTab(key)}><Icon size={15}/>{label}</button>)}
+      {([ ["queue", "Queue", ListOrdered], ["batch", "Transcribe recordings", RefreshCw], ["sources", "Sources", Rss], ["setup", "Setup", Settings2] ] as const).map(([key, label, Icon]) => <button role="tab" aria-selected={tab === key} key={key} onClick={() => setTab(key)}><Icon size={15}/>{label}</button>)}
     </div>
+    {state?.overview.atDailyLimit && <div className="pipeline-summary"><span>Daily download limit reached ({state.overview.dailyDownloads} / {state.overview.dailyLimit}). Downloads resume after local midnight; local transcription can continue.</span></div>}
     {!state ? <p className="muted">Loading pipeline…</p> : tab === "queue" ? <>
       <div className="pipeline-summary"><span>{count(pending.length, "recording")} in the queue</span><small>{active && !state.running ? "Paused after the current recording. Stop cancels the current recording too." : "Work survives restarting Concord. Existing transcripts stay available until replacements are ready."}</small>{pending.some(j => j.status !== "running") && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act("cancel-pending")}>Clear pending</Button>}</div>
       <section className="pipeline-jobs" aria-label="Processing queue">{pending.length ? pending.map(row) : <Empty icon={Check} title="Queue is clear" text="Add recordings from your library to transcribe or re-transcribe them." action={<Button onClick={() => setTab("batch")}>Choose recordings</Button>}/>}</section>
       <div className="pipeline-history"><Button variant="ghost" icon={Clock} onClick={() => setHistory(v => !v)}>{history ? "Hide" : "Show"} history ({finished.length})</Button>{history && finished.length > 0 && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void act("clear")}>Clear history</Button>}</div>
       {history && <section className="pipeline-jobs" aria-label="Queue history">{finished.slice().reverse().map(row)}</section>}
     </> : tab === "batch" ? <BatchView channels={state.channels.map(c => c.channel)} device={device} onAdded={async () => { await reload(); refresh(); setTab("queue"); }}/>
+      : tab === "sources" ? <Sources sources={state.sources} checking={state.checking} onChanged={async () => { await reload(); refresh(); }}/>
       : <Setup config={state.config} device={device} onSave={async value => { await api.pipelineSaveConfig(value); setDevice(value.device); await reload(); }}/>
     }
   </div>;
@@ -106,14 +110,4 @@ function BatchView({ channels, device, onAdded }: { channels: string[]; device: 
     <div className="pipeline-candidates" aria-label="Recordings to transcribe">{data?.items.map(m => <label key={m.id} className="pipeline-candidate"><input type="checkbox" checked={selected.has(m.id)} onChange={e => setSelected(old => { const next = new Set(old); e.target.checked ? next.add(m.id) : next.delete(m.id); return next; })}/><div><b>{m.title}</b><small>{m.channel} · {prettyDate(m.date)} · {clock(m.duration)}</small></div></label>)}</div>
     {data?.total === 0 && <Empty icon={Check} title="No matching recordings" text="Choose another collection or include recordings with existing transcripts."/>}
   </section>;
-}
-function Setup({ config, device, onSave }: { config: PipelineConfig; device: string; onSave: (value: PipelineConfig) => Promise<void> }) {
-  const { navigate } = useApp(); const toast = useToast();
-  const [value, setValue] = useState({ ...config, device });const [busy, setBusy] = useState(false);
-  const save = async () => { setBusy(true); try { await onSave(value); toast.success("Processing setup saved"); } catch (e) { toast.error(e); } finally { setBusy(false); } };
-  return <div className="pipeline-setup">
-    <section className="pipeline-card"><h2>Speech processing</h2><p>Nemotron 3.5 multilingual transcription and Nemotron diarization. Automatic uses an available GPU; CPU also works.</p><Select label="Queue processing device" value={value.device} onChange={device => setValue(v => ({ ...v, device }))} options={[{ value: "auto", label: "Automatic · GPU when available" }, { value: "cpu", label: "CPU" }, { value: "vulkan:0", label: "GPU · Vulkan" }]}/><Button variant="ghost" icon={ArrowUpRight} onClick={() => navigate({ page: "settings" })}>Speech models and device check</Button></section>
-    <section className="pipeline-card"><h2>When processing fails</h2><p>Retry delays survive restarting Concord. Other ready recordings can continue while a retry waits.</p><label>Automatic retries<input className="input" type="number" min={0} max={10} value={value.retries} onChange={e => setValue(v => ({ ...v, retries: Number(e.target.value) }))}/></label><label>Minutes between retries<input className="input" type="number" min={1} max={1440} value={value.retryMinutes} onChange={e => setValue(v => ({ ...v, retryMinutes: Number(e.target.value) }))}/></label></section>
-    <Button variant="primary" disabled={busy} onClick={() => void save()}>Save processing setup</Button>
-  </div>;
 }

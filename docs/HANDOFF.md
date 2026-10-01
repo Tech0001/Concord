@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.9.0**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.10.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -10,7 +10,46 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
-## Durable processing queue and batch transcription (0.9.0 being packaged)
+## Subscriptions and download setup (0.10.0 installed)
+
+Pipeline now separates Queue, Transcribe recordings, Sources, and Setup. Sources support
+YouTube channels/playlists/videos and local folders, enable/disable, rename/category changes,
+per-source diarization and Shorts, recent checks or full-history discovery. Removing a source
+keeps existing recordings, research and files. Rechecks deduplicate across tabs and sources.
+Folders never recursively follow symlinks; overlapping roots are rejected.
+
+Setup includes destination, quality/codec/audio preferences, audio-only downloads, speech
+language, retry policy, schedule, daily cap, rate/pacing and optional browser/file cookies.
+Automatic checks remain OFF after upgrading; Start/Pause controls scheduling. Live streams
+wait until a recording is available. Daily allowance resets at local midnight; waiting downloads
+do not block local transcription. Interrupted work survives restart. Files completed before
+an ASR failure are retained and reused, without a second download or daily count. Existing
+transcripts stay readable throughout retries. Media status follows active work without an
+old cancelled-history row overriding a newer failure.
+
+Schema 9 extends channel metadata and pipeline work, and records successful daily downloads.
+The old download folder/quality/codec/pace/limits are imported once, without enabling downloads
+or importing cookies. yt-dlp 2026.08.19 and Node 24.21.0 are privately bundled from pinned,
+SHA-256 verified official artifacts; licenses and source references ship alongside them.
+No remote JS components are installed during downloads. FFmpeg remains a host dependency,
+now included in download readiness checks. AppImage Python/library paths are cleared for
+these host/private helper tools.
+
+74 Rust tests and 38 TypeScript tests pass, along with Clippy and the frontend build. Native
+WebKitGTK verifies source setup/edit/removal, folder discovery, categories/diarization flags,
+idempotent scans, mocked YouTube subprocess listings, real subprocess file publication and
+retention after intentional missing-model failures. Fixture: prepare-subscriptions-review.py
+and native-subscriptions-smoke.js. Latest result: /tmp/concord-health-native-h1xqpyvn.
+Bundled yt-dlp and private Node also downloaded a public YouTube test video; FFmpeg merged
+its AV1 video and Opus audio into a valid 596-second MP4. A real 25-second GPU
+transcription-only job passed with words and no speaker assignments. The installed AppImage
+starts both bundled tool versions successfully. Schema 9 retains all 595 documents and has
+an empty processing queue. Backup:
+`~/.local/share/concord-next/backups/before-0.10.0-20260930-225007.db`.
+Desktop/phone Sources and Setup layouts checked. No live-library source scan or download was
+started. Independent speech installation and the remaining Electron parity are still pending.
+
+## Durable processing queue and batch transcription (0.9.0 installed)
 
 Pipeline now has Queue, Transcribe recordings, and Setup. Select individual recordings,
 a collection, missing transcripts, or all matches. Batch enqueue is initially paused; Start
@@ -36,7 +75,8 @@ scratch directory (intentional dependency failure). Result: /tmp/concord-health-
 A real 25-second GPU transcription through the new worker passed in 23 seconds, published
 only inside a temporary library and released its processing lock. Desktop/phone layouts checked.
 
-0.8.0 remains installed while packaging. Next: sources/subscriptions, downloads and their
+0.9.0 is installed with schema 8 and an empty processing queue. Backup:
+`~/.local/share/concord-next/backups/before-0.9.0-20260930-221345.db`. Next: sources/subscriptions, downloads and their
 setup/scheduling/daily limits, followed by remaining Electron parity. The full port remains
 in progress. Pipeline setup does not yet install the speech runtime independently of Electron.
 

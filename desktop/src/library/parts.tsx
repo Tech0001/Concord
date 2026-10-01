@@ -43,10 +43,10 @@ export function StatusChips({ media, transcribing }: { media: Media; transcribin
       {transcribing ? (
         <Chip tone="accent">
           <LoaderCircle size={11} className="spin" aria-hidden />
-          Transcribing
+          Processing
         </Chip>
       ) : (
-        !media.transcript && <Chip>Not transcribed</Chip>
+        !media.transcript && <Chip tone={media.status === "failed" ? "danger" : "neutral"}>{media.status === "failed" ? "Processing failed" : ["pending", "queued"].includes(media.status) ? "Queued" : media.status === "cancelled" ? "Cancelled" : "Not transcribed"}</Chip>
       )}
       {media.review_state !== "unreviewed" && (
         <Chip tone={media.review_state === "reviewed" ? "success" : "warn"}>{REVIEW_LABELS[media.review_state]}</Chip>

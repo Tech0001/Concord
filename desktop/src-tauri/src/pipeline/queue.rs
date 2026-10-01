@@ -19,8 +19,8 @@ fn selected(db: &Connection, batch: &Batch) -> Result<Vec<Value>> {
     let ids: HashSet<_> = batch.ids.iter().collect();
     Ok(db::rows(
         db,
-        "SELECT id,title,channel,date,path,transcript,status,duration FROM media
-        WHERE (?1='' OR channel=?1) AND (?2='' OR title LIKE ?3 ESCAPE '\\') ORDER BY date,id",
+        "SELECT m.id,m.title,m.channel,m.date,m.path,m.transcript,m.status,m.duration,COALESCE(c.diarize,1) AS diarize FROM media m LEFT JOIN channels c ON c.id=m.source_id
+        WHERE (?1='' OR m.channel=?1) AND (?2='' OR m.title LIKE ?3 ESCAPE '\\') ORDER BY m.date,m.id",
         params![batch.channel, batch.query, db::like_pattern(&batch.query)],
     )?
     .into_iter()
@@ -73,17 +73,18 @@ pub fn enqueue(root: &Path, control: &Control, batch: &Batch, start: bool) -> Re
             unavailable += 1;
             continue;
         }
-        let id = uuid::Uuid::new_v4().to_string();
-        let n=tx.execute("INSERT OR IGNORE INTO jobs(id,media_id,title,status,message) VALUES (?1,?2,?3,'queued','Waiting in the processing queue')",params![id,m["id"].as_str(),m["title"].as_str()])?;
-        if n == 0 {
+        if let Some(id) = insert(
+            &tx,
+            m["id"].as_str().unwrap(),
+            m["title"].as_str().unwrap(),
+            "transcribe",
+            &device,
+            m["diarize"] != 0,
+        )? {
+            added.push(id);
+        } else {
             existing += 1;
-            continue;
         }
-        tx.execute(
-            "INSERT INTO pipeline_work(id,device) VALUES (?1,?2)",
-            params![id, device],
-        )?;
-        added.push(id);
     }
     if start && !added.is_empty() {
         set_running(&tx, true)?;
@@ -92,11 +93,37 @@ pub fn enqueue(root: &Path, control: &Control, batch: &Batch, start: bool) -> Re
     crate::runtime_log::push("info",&format!("Queued {} recordings for transcription; {unavailable} unavailable, {existing} already queued",added.len()));
     Ok(json!({"added":added.len(),"ids":added,"unavailable":unavailable,"alreadyQueued":existing}))
 }
+fn media_state(db: &Connection, job: &str) -> Result<()> {
+    db.execute("UPDATE media SET status=COALESCE((SELECT CASE j.status WHEN 'failed' THEN 'failed' WHEN 'cancelled' THEN CASE WHEN media.path IS NULL THEN 'cancelled' ELSE 'ready' END WHEN 'queued' THEN 'pending' WHEN 'retry' THEN 'pending' WHEN 'waiting_live' THEN 'pending' ELSE media.status END FROM jobs j WHERE j.id=?1),status) WHERE id=(SELECT media_id FROM jobs WHERE id=?1) AND transcript IS NULL",[job])?;
+    Ok(())
+}
+pub(super) fn insert(
+    db: &Connection,
+    media: &str,
+    title: &str,
+    kind: &str,
+    device: &str,
+    diarize: bool,
+) -> Result<Option<String>> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let n=db.execute("INSERT OR IGNORE INTO jobs(id,media_id,title,status,message) VALUES (?1,?2,?3,'queued','Waiting in the processing queue')",params![id,media,title])?;
+    if n == 0 {
+        return Ok(None);
+    }
+    db.execute(
+        "INSERT INTO pipeline_work(id,kind,device,diarize) VALUES (?1,?2,?3,?4)",
+        params![id, kind, device, diarize],
+    )?;
+    media_state(db, &id)?;
+    Ok(Some(id))
+}
 pub fn snapshot(root: &Path) -> Result<Value> {
     let db = db::open(root)?;
-    Ok(json!({"running":running(&db)?,"config":config(root)?,
-        "jobs":db::rows(&db,"SELECT j.*,p.kind,p.device,p.attempts,p.retry_at,p.finished_at,p.cancelled,m.channel,m.path FROM pipeline_work p JOIN jobs j ON j.id=p.id JOIN media m ON m.id=j.media_id ORDER BY CASE j.status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'retry' THEN 2 ELSE 3 END,j.rowid",[])?,
-        "channels":db::rows(&db,"SELECT DISTINCT channel FROM media ORDER BY channel",[])?}))
+    Ok(
+        json!({"running":running(&db)?,"config":config(root)?,"sources":super::sources::list(root)?,"overview":super::overview(root)?,
+        "jobs":db::rows(&db,"SELECT j.*,p.kind,p.diarize,p.device,p.attempts,p.retry_at,p.finished_at,p.cancelled,m.channel,m.path FROM pipeline_work p JOIN jobs j ON j.id=p.id JOIN media m ON m.id=j.media_id ORDER BY CASE j.status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'retry' THEN 2 ELSE 3 END,j.rowid",[])?,
+        "channels":db::rows(&db,"SELECT DISTINCT channel FROM media ORDER BY channel",[])?}),
+    )
 }
 pub fn action(root: &Path, control: &Control, action: &str, id: Option<&str>) -> Result<()> {
     let active = control.gate.lock().unwrap();
@@ -106,6 +133,7 @@ pub fn action(root: &Path, control: &Control, action: &str, id: Option<&str>) ->
         "start" => set_running(&tx, true)?,
         "pause" => set_running(&tx, false)?,
         "stop" => {
+            control.scanner.cancel();
             set_running(&tx, false)?;
             if let Some(id) = active.as_deref() {
                 tx.execute("UPDATE pipeline_work SET cancelled=1 WHERE id=?1", [id])?;
@@ -118,12 +146,19 @@ pub fn action(root: &Path, control: &Control, action: &str, id: Option<&str>) ->
             if active.as_deref() == Some(id) {
                 control.speech.cancel();
             } else {
-                tx.execute("UPDATE jobs SET status='cancelled',message='Removed from the queue' WHERE id=?1 AND status IN ('queued','retry','waiting_live')",[id])?;
+                let changed=tx.execute("UPDATE jobs SET status='cancelled',message='Removed from the queue' WHERE id=?1 AND status IN ('queued','retry','waiting_live')",[id])?;
+                if changed > 0 {
+                    media_state(&tx, id)?;
+                }
             }
         }
         "cancel-pending" => {
+            let pending=db::rows(&tx,"SELECT id FROM jobs WHERE status IN ('queued','retry','waiting_live') AND id IN (SELECT id FROM pipeline_work)",[])?;
             tx.execute("UPDATE pipeline_work SET cancelled=1 WHERE id IN (SELECT id FROM jobs WHERE status IN ('queued','retry','waiting_live'))",[])?;
             tx.execute("UPDATE jobs SET status='cancelled',message='Removed from the queue' WHERE id IN (SELECT id FROM pipeline_work) AND status IN ('queued','retry','waiting_live')",[])?;
+            for row in pending {
+                media_state(&tx, row["id"].as_str().unwrap())?;
+            }
         }
         "retry" => {
             let id = id.context("Choose a queue item")?;
@@ -133,6 +168,7 @@ pub fn action(root: &Path, control: &Control, action: &str, id: Option<&str>) ->
                 "This job is not retryable, or the recording is already queued"
             );
             tx.execute("UPDATE pipeline_work SET attempts=0,retry_at=0,cancelled=0,finished_at=NULL WHERE id=?1",[id])?;
+            media_state(&tx, id)?;
         }
         "clear" => {
             tx.execute("DELETE FROM jobs WHERE id IN (SELECT id FROM pipeline_work) AND status IN ('complete','failed','cancelled','interrupted')",[])?;
@@ -146,19 +182,22 @@ pub fn action(root: &Path, control: &Control, action: &str, id: Option<&str>) ->
 pub fn recover(root: &Path) -> Result<()> {
     let mut db = db::open(root)?;
     let tx = db.transaction()?;
-    tx.execute("UPDATE jobs SET status='cancelled',message='Cancelled before Concord closed' WHERE id IN (SELECT id FROM pipeline_work WHERE cancelled=1) AND status IN ('running','queued','retry')",[])?;
+    tx.execute("UPDATE jobs SET status='cancelled',message='Cancelled before Concord closed' WHERE id IN (SELECT id FROM pipeline_work WHERE cancelled=1) AND status IN ('running','queued','retry','waiting_live')",[])?;
     tx.execute("UPDATE pipeline_work SET attempts=max(0,attempts-1) WHERE id IN (SELECT id FROM jobs WHERE status IN ('running','interrupted'))",[])?;
     tx.execute("UPDATE jobs SET status='queued',message='Resuming after Concord closed; the previous transcript is preserved' WHERE status IN ('running','interrupted') AND id IN (SELECT id FROM pipeline_work WHERE cancelled=0)",[])?;
+    tx.execute("UPDATE channels SET check_status='interrupted',check_message='Source check was interrupted; check again to continue' WHERE check_status='checking'",[])?;
     tx.commit()?;
     Ok(())
 }
 pub(super) fn claim(root: &Path, at: i64) -> Result<Option<Value>> {
+    let cfg = config(root)?;
     let mut db = db::open(root)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if !running(&tx)? {
         return Ok(None);
     }
-    let row=db::rows(&tx,"SELECT j.*,p.kind,p.device,p.attempts,m.path FROM jobs j JOIN pipeline_work p ON p.id=j.id JOIN media m ON m.id=j.media_id WHERE p.cancelled=0 AND (j.status='queued' OR (j.status='retry' AND p.retry_at<=?1)) ORDER BY j.rowid LIMIT 1",[at])?.pop();
+    let limited = super::download::daily_count(&tx)? >= cfg.daily_limit;
+    let row=db::rows(&tx,"SELECT j.*,p.kind,p.diarize,p.device,p.attempts,m.path,m.url,m.source_id FROM jobs j JOIN pipeline_work p ON p.id=j.id JOIN media m ON m.id=j.media_id WHERE p.cancelled=0 AND (j.status='queued' OR (j.status IN ('retry','waiting_live') AND p.retry_at<=?1)) ORDER BY j.rowid",[at])?.into_iter().find(|r|!limited || r["kind"]!="download" || available(r));
     if let Some(row) = &row {
         let id = row["id"].as_str().unwrap();
         tx.execute(
@@ -221,6 +260,7 @@ pub(super) fn finish(
             [id],
         )?;
     }
+    media_state(&tx, id)?;
     tx.commit()?;
     crate::runtime_log::push(
         if status == "failed" { "error" } else { "info" },
@@ -229,6 +269,32 @@ pub(super) fn finish(
     Ok(())
 }
 pub fn enqueue_one(root: &Path, control: &Control, id: String, device: String) -> Result<String> {
+    let media = db::media(root, &id)?;
+    if media["path"].is_null()
+        && super::download::youtube_url(media["url"].as_str().unwrap_or("")).is_ok()
+    {
+        validate_device(&device)?;
+        let _guard = control.gate.lock().unwrap();
+        let mut db = db::open(root)?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let diarize: bool = tx.query_row(
+            "SELECT COALESCE((SELECT diarize FROM channels WHERE id=?1),1)",
+            [media["source_id"].as_str()],
+            |r| r.get(0),
+        )?;
+        let job = insert(
+            &tx,
+            &id,
+            media["title"].as_str().unwrap(),
+            "download",
+            &device,
+            diarize,
+        )?
+        .context("This recording is already queued")?;
+        set_running(&tx, true)?;
+        tx.commit()?;
+        return Ok(job);
+    }
     let r = enqueue(
         root,
         control,
@@ -246,4 +312,15 @@ pub fn enqueue_one(root: &Path, control: &Control, id: String, device: String) -
 }
 pub(super) fn tick_time() -> i64 {
     now()
+}
+pub(super) fn wait_for_live(root: &Path, id: &str, at: i64) -> Result<()> {
+    let mut db = db::open(root)?;
+    let tx = db.transaction()?;
+    tx.execute("UPDATE jobs SET status='waiting_live',message='Live or scheduled video; checking again in 5 minutes' WHERE id=?1",[id])?;
+    tx.execute(
+        "UPDATE pipeline_work SET attempts=max(0,attempts-1),retry_at=?1 WHERE id=?2",
+        params![at + 300, id],
+    )?;
+    tx.commit()?;
+    Ok(())
 }

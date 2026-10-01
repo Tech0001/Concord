@@ -1,7 +1,10 @@
 import type { Job } from "../lib/types.ts";
-export type PipelineConfig = { device: string; retries: number; retryMinutes: number };
+export type PipelineConfig = { device: string; retries: number; retryMinutes: number; downloadDirectory: string; quality: string; codec: string; audioLanguage: string; audioOnly: boolean; speed: string; rateMib: number; dailyLimit: number; checkMinutes: number; automaticChecks: boolean; cookiesFile: string; cookiesBrowser: string; speechLanguage: string };
+export type Source = { id: string; name: string; url: string; kind: "youtube" | "folder" | "collection"; enabled: number; diarize: number; include_shorts: number; category: "personal" | "work"; last_check: number; check_status: string; check_message: string; recordings: number };
+export type SourceInput = { id?: string; name: string; url: string; kind: Source["kind"]; enabled: boolean; diarize: boolean; includeShorts: boolean; category: Source["category"] };
+export type PipelineOverview = { running: boolean; active: number; queued: number; retry: number; waitingLive: number; failed: number; dailyDownloads: number; dailyLimit: number; atDailyLimit: boolean };
 export type QueueJob = Job & { kind: string; device: string; attempts: number; retry_at: number; cancelled: number; channel: string; path: string | null; finished_at: string | null };
-export type PipelineState = { running: boolean; config: PipelineConfig; jobs: QueueJob[]; channels: { channel: string }[] };
+export type PipelineState = { running: boolean; checking: boolean; config: PipelineConfig; jobs: QueueJob[]; channels: { channel: string }[]; sources: Source[]; overview: PipelineOverview };
 export type Batch = { ids?: string[]; channel?: string; query?: string; missingOnly?: boolean; device?: string };
 export type Candidates = { total: number; eligible: number; unavailable: number; alreadyQueued: number; hours: number; items: { id: string; title: string; channel: string; date: string; path: string | null; transcript: string | null; duration: number }[] };
 export type Enqueued = { added: number; ids: string[]; unavailable: number; alreadyQueued: number };
