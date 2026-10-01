@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.2.2**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.3.0**
 (Delivery 1 plus verified native playback and range-tool repairs).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,33 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Port continuation — Speakers and Activity (0.3.0)
+
+The user authorized continuing through full Electron parity without stopping for approvals.
+Keep the polished design; Watchers and Compare are the only agreed removals. Work through
+Speakers, Notes, Search/AI, Map, and Pipeline, then audit the unscheduled Electron tools and
+library/player/document capabilities. Do not mark the whole port done after a single delivery.
+
+Delivery 2 implemented: saved/unidentified lists, profile rename/color/noise, merge/delete,
+rescan and individual Find matches, full label dialog with existing/new profiles, additional
+local voices, unlink/noise/sample controls, and grouped appearances with individual fingerprint
+controls. Matching still uses cosine >= 0.45 and never overwrites existing labels. A training
+ledger prevents repeated Save and unlink/relabel from counting the same fingerprint twice.
+Schema 3 adds the speaker fields and ledger and backfills missing local assignments.
+
+Activity now separates active jobs from collapsed recent history, dates each attempt, and has
+Retry, per-attempt dismissal, and Clear finished. Clearing history cannot remove running or
+queued jobs or recordings. The user's old Python failures were historical attempts, not new
+failures after 0.2.2. The 0.2.2 Python environment fix is included.
+
+Verification: 37 Rust tests passed (two opt-in tests excluded), 34 TypeScript tests passed,
+Clippy passed with warnings denied, and frontend compilation passed. Native WebKitGTK
+checks in a SQLite backup passed creation/automatic matching, grouped appearances,
+rename/color, merge/noise/delete, and Activity history clearing. The native test script is
+`desktop/scripts/native-speakers-smoke.js`; its fixture needs three local 2D centroids with
+S0/S1 similar and S2 orthogonal, as documented in that script's companion setup comments.
+The original library was never used for test mutations.
 
 ## Packaged speech repair (0.2.2)
 
@@ -195,10 +222,10 @@ reaches Electron parity, then gets polished. Order:
    range-tool repairs verified and installed in 0.2.1. Spec:
    `docs/superpowers/specs/2026-09-30-next-foundation-polish-design.md`; plan:
    `docs/superpowers/plans/2026-09-30-next-foundation-polish.md`.
-2. **Speakers** — rebuild to the Electron page: edit, recolor, merge, noise,
+2. **Speakers** — implemented in 0.3.0: edit, recolor, merge, noise,
    rescan/find matches, unidentified queue, the full label dialog. Appearances
-   ("where they spoke") and speaker notes already shipped in 0.2.0. Needs
-   `speakers.is_noise` and `sample_count`.
+   ("where they spoke") and speaker notes are included. Schema 3 includes
+   `speakers.is_noise`, `sample_count`, and the training ledger.
 3. **Notes** — multi-anchor notes (ranges and document passages), tags, typed links,
    a real Notes page, range notes from the player.
 4. **Search and AI** — one search experience (words, meaning, chat); embedding and

@@ -15,11 +15,13 @@ export function SpeakerPanel({
   onFirstLine: (voice: Voice) => void;
 }) {
   const list = groupVoices(voices);
+  const unidentified = list.filter(v => !v.named);
   return (
     <section className="speaker-panel" aria-label="Speakers in this recording">
       <header className="panel-head">
         <h3>In this recording</h3>
         <span className="muted num">{count(list.length, "speaker")}</span>
+        {!!unidentified.length && <button type="button" onClick={() => onFirstLine(unidentified[0])}>{unidentified.length} unidentified · Listen</button>}
       </header>
       {list.length === 0 ? (
         <Empty icon={Users} title="No voices yet" text="Transcribe this recording to see who speaks." />
@@ -31,7 +33,7 @@ export function SpeakerPanel({
                 type="button"
                 className="voice-main"
                 onClick={() => onName(v)}
-                title={v.named ? "Rename this voice" : "Name this voice"}
+                title={v.named ? "Change speaker label" : "Name this voice"}
               >
                 <i className="speaker-dot" aria-hidden />
                 <span className={v.named ? "voice-name" : "voice-name is-unnamed"}>{v.name}</span>

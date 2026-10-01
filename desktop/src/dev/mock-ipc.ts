@@ -67,6 +67,16 @@ const handlers: Record<string, (a: any) => unknown> = {
   search: ({ query }) => fx.searchHits(query),
   palette: ({ query }) => fx.paletteFor(query),
   speakers: () => fx.speakerList,
+  unidentified_speakers: () => [],
+  rescan_speakers: () => ({ matched: 0, recordings: 0 }),
+  clear_jobs: () => 0,
+  edit_speaker: ({ id, name, color, noise }) => {
+    const speaker = fx.speakerList.find(s => s.id === id);
+    if (speaker) Object.assign(speaker, { name, color, is_noise: noise ? 1 : 0 });
+  },
+  delete_speaker: ({ id }) => { const index = fx.speakerList.findIndex(s => s.id === id); if (index >= 0) fx.speakerList.splice(index,1); },
+  merge_speakers: () => ({ matched: 0, recordings: 0 }),
+  label_speakers: () => ({ matched: 0, recordings: 0 }),
   speaker_appearances: ({ id }) => fx.appearancesFor(id),
   set_speaker_notes: ({ id, notes }) => {
     const s = fx.speakerList.find((x) => x.id === id);

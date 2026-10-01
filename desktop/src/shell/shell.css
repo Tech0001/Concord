@@ -522,3 +522,7 @@
     opacity: 0;
   }
 }
+.job-history { margin-top:20px; border-top:1px solid var(--border); padding-top:16px; }
+.job-history summary { cursor:pointer; font-weight:500; }
+.job-history > p { font-size:var(--text-sm); }
+.job-actions { display:flex; align-items:center; gap:8px; }

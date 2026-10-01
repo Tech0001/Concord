@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 2 {
+    if version >= 3 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -93,7 +93,20 @@ fn migrate(db: &mut Connection) -> Result<()> {
             tx.execute_batch(&format!("ALTER TABLE media ADD COLUMN {ddl}"))?;
         }
     }
-    tx.execute_batch("PRAGMA user_version = 2")?;
+    for (name, ddl) in [("is_noise", "is_noise INTEGER NOT NULL DEFAULT 0"), ("sample_count", "sample_count INTEGER NOT NULL DEFAULT 1")] {
+        let present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('speakers') WHERE name=?1)", [name], |r| r.get(0))?;
+        if !present { tx.execute_batch(&format!("ALTER TABLE speakers ADD COLUMN {ddl}"))?; }
+    }
+    tx.execute_batch("UPDATE speakers SET is_noise=1 WHERE name='(noise)';
+      CREATE TABLE IF NOT EXISTS speaker_training (
+        speaker_id TEXT NOT NULL REFERENCES speakers(id) ON DELETE CASCADE,
+        media_id TEXT NOT NULL, local_id TEXT NOT NULL,
+        PRIMARY KEY(speaker_id,media_id,local_id));
+      INSERT OR IGNORE INTO speaker_training SELECT speaker_id,media_id,local_id FROM assignments WHERE speaker_id IS NOT NULL AND centroid IS NOT NULL;
+      INSERT OR IGNORE INTO assignments(media_id,local_id,airtime,start,end)
+        SELECT f.media_id,f.speaker,sum(max(0,CAST(f.end AS REAL)-CAST(f.start AS REAL))),min(CAST(f.start AS REAL)),max(CAST(f.end AS REAL))
+        FROM segments f JOIN media m ON m.id=f.media_id WHERE f.speaker IS NOT NULL AND f.speaker<>'' GROUP BY f.media_id,f.speaker;
+      PRAGMA user_version = 3")?;
     tx.commit()?;
     Ok(())
 }
@@ -188,6 +201,8 @@ pub fn import_legacy(root: &Path, source: &Path) -> Result<Value> {
         "INSERT INTO settings VALUES ('imported_from',?1)",
         [source.to_string_lossy().as_ref()],
     )?;
+    tx.execute_batch("UPDATE speakers SET is_noise=1 WHERE name='(noise)';
+      INSERT OR IGNORE INTO speaker_training SELECT speaker_id,media_id,local_id FROM assignments WHERE speaker_id IS NOT NULL AND centroid IS NOT NULL;")?;
     tx.commit()?;
     stats(root)
 }
@@ -275,7 +290,7 @@ fn attach_speakers(db: &Connection, items: &mut [Value]) -> Result<()> {
         db,
         "SELECT a.media_id, s.name, s.color, sum(a.airtime) AS airtime
          FROM assignments a JOIN speakers s ON s.id = a.speaker_id
-         WHERE a.media_id IN (SELECT value FROM json_each(?1))
+         WHERE s.is_noise=0 AND a.media_id IN (SELECT value FROM json_each(?1))
          GROUP BY a.media_id, s.id ORDER BY a.media_id, airtime DESC",
         [serde_json::to_string(&ids)?],
     )?;
@@ -319,6 +334,10 @@ pub fn save_position(root: &Path, id: &str, seconds: f64) -> Result<()> {
     )
 }
 
+pub fn clear_jobs(root: &Path, id: Option<&str>) -> Result<usize> {
+    Ok(open(root)?.execute("DELETE FROM jobs WHERE status IN ('complete','failed','interrupted','cancelled') AND (?1 IS NULL OR id=?1)", [id])?)
+}
+
 pub fn media(root: &Path, id: &str) -> Result<Value> {
     rows(
         &open(root)?,
@@ -332,7 +351,7 @@ pub fn media(root: &Path, id: &str) -> Result<Value> {
 pub fn transcript(root: &Path, id: &str) -> Result<Value> {
     let mut item = media(root, id)?;
     let db = open(root)?;
-    let assignments=rows(&db,"SELECT a.local_id,a.speaker_id,a.airtime,s.name,s.color FROM assignments a LEFT JOIN speakers s ON s.id=a.speaker_id WHERE media_id=?1 ORDER BY airtime DESC",[id])?;
+    let assignments=rows(&db,"SELECT a.local_id,a.speaker_id,a.airtime,a.start,a.end,s.name,s.color,s.is_noise FROM assignments a LEFT JOIN speakers s ON s.id=a.speaker_id WHERE media_id=?1 ORDER BY airtime DESC",[id])?;
     let mut segments = Vec::new();
     let mut model = String::new();
     if let Some(path) = item["transcript"].as_str() {
@@ -396,14 +415,14 @@ pub fn palette(root: &Path, query: &str) -> Result<Value> {
     let p = like_pattern(q);
     Ok(json!({
         "recordings": rows(&db, "SELECT id,title,channel,date FROM media WHERE title LIKE ?1 ESCAPE '\\' OR channel LIKE ?1 ESCAPE '\\' ORDER BY opened_at IS NULL, opened_at DESC, date DESC LIMIT 6", [&p])?,
-        "speakers": rows(&db, "SELECT id,name,color FROM speakers WHERE name LIKE ?1 ESCAPE '\\' ORDER BY name COLLATE NOCASE LIMIT 6", [&p])?,
+        "speakers": rows(&db, "SELECT id,name,color FROM speakers WHERE is_noise=0 AND name LIKE ?1 ESCAPE '\\' ORDER BY name COLLATE NOCASE LIMIT 6", [&p])?,
         "notes": rows(&db, "SELECT id,title,media_id,start FROM notes WHERE title LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\' OR quote LIKE ?1 ESCAPE '\\' ORDER BY created_at DESC LIMIT 6", [&p])?,
         "documents": rows(&db, "SELECT id,title FROM docs WHERE title LIKE ?1 ESCAPE '\\' ORDER BY title COLLATE NOCASE LIMIT 6", [&p])?,
     }))
 }
 
 pub fn speakers(root: &Path) -> Result<Vec<Value>> {
-    rows(&open(root)?,"SELECT s.id,s.name,s.color,s.notes,count(DISTINCT a.media_id) AS recordings,coalesce(sum(a.airtime),0) AS airtime FROM speakers s LEFT JOIN assignments a ON a.speaker_id=s.id GROUP BY s.id ORDER BY airtime DESC, s.name COLLATE NOCASE",[])
+    rows(&open(root)?,"SELECT s.id,s.name,s.color,s.notes,s.is_noise,s.sample_count,count(DISTINCT a.media_id) AS recordings,coalesce(sum(a.airtime),0) AS airtime FROM speakers s LEFT JOIN assignments a ON a.speaker_id=s.id GROUP BY s.id ORDER BY s.is_noise, airtime DESC, s.name COLLATE NOCASE",[])
 }
 
 /// Every recording a saved voice appears in, loudest first, with the start of its longest turn.
@@ -429,32 +448,10 @@ pub fn set_speaker_notes(root: &Path, id: &str, notes: &str) -> Result<()> {
 }
 
 pub fn assign(root: &Path, media_id: &str, local_id: &str, name: &str) -> Result<()> {
-    if name.trim().is_empty() {
-        bail!("Enter a speaker name");
-    }
-    let mut db = open(root)?;
-    let tx = db.transaction()?;
-    let id: Option<String> = tx
-        .query_row(
-            "SELECT id FROM speakers WHERE name=?1 COLLATE NOCASE",
-            [name.trim()],
-            |r| r.get(0),
-        )
-        .ok();
-    let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let embedding: Option<Vec<u8>> = tx
-        .query_row(
-            "SELECT centroid FROM assignments WHERE media_id=?1 AND local_id=?2",
-            params![media_id, local_id],
-            |r| r.get(0),
-        )
-        .context("Speaker turn not found")?;
-    tx.execute("INSERT INTO speakers(id,name,embedding) VALUES (?1,?2,?3) ON CONFLICT(id) DO UPDATE SET embedding=coalesce(speakers.embedding,excluded.embedding)",params![id,name.trim(),embedding])?;
-    tx.execute(
-        "UPDATE assignments SET speaker_id=?1 WHERE media_id=?2 AND local_id=?3",
-        params![id, media_id, local_id],
-    )?;
-    tx.commit()?;
+    crate::speakers::label(root, &crate::speakers::Label {
+        media_id: media_id.into(), locals: vec![local_id.into()], name: Some(name.into()),
+        speaker_id: None, color: None, noise: false, unlink: false,
+    })?;
     Ok(())
 }
 
@@ -525,6 +522,17 @@ mod tests {
           INSERT INTO transcript_clips VALUES ('n','A note','Thinking','hello','c','v',0,2,'today');").unwrap();
     }
     #[test]
+    fn clearing_finished_activity_preserves_running_jobs_and_media() {
+        let root = tempfile::tempdir().unwrap();
+        let db = open(root.path()).unwrap();
+        db.execute_batch("INSERT INTO media(id,title) VALUES ('m','Meeting');
+          INSERT INTO jobs(id,media_id,title,status) VALUES ('done','m','Meeting','complete'),('fail','m','Meeting','failed'),('run','m','Meeting','running'),('queue','m','Meeting','queued');").unwrap();
+        assert_eq!(clear_jobs(root.path(),Some("run")).unwrap(),0);
+        assert_eq!(clear_jobs(root.path(),None).unwrap(),2);
+        assert_eq!(db.query_row("SELECT count(*) FROM jobs",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(db.query_row("SELECT count(*) FROM media",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+    #[test]
     fn migration_is_isolated_and_searchable() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("old.db");
@@ -590,7 +598,7 @@ mod tests {
         assert_eq!(row["review_state"], "unreviewed");
         assert_eq!(row["position"], 0.0);
         assert!(row["opened_at"].is_null());
-        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 3);
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
     }

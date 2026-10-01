@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
+  MatchResult,
+  LabelVoice,
   Overview,
   LibraryFilter,
   LibraryPage,
@@ -82,10 +84,17 @@ export const api = {
   speakerAppearances: (id: string) => call<Appearance[]>("speaker_appearances", { id }),
   setSpeakerNotes: (id: string, notes: string) => call<void>("set_speaker_notes", { id, notes }),
   assignSpeaker: (id: string, local: string, name: string) => call<void>("assign_speaker", { id, local, name }),
+  unidentifiedSpeakers: () => call<Appearance[]>("unidentified_speakers"),
+  editSpeaker: (id: string, name: string, color: string | null, noise: boolean) => call<void>("edit_speaker", { id, name, color, noise }),
+  deleteSpeaker: (id: string) => call<void>("delete_speaker", { id }),
+  mergeSpeakers: (source: string, target: string) => call<MatchResult>("merge_speakers", { source, target }),
+  rescanSpeakers: (id?: string) => call<MatchResult>("rescan_speakers", { id: id ?? null }),
+  labelVoices: (label: LabelVoice) => call<MatchResult>("label_speakers", { label }),
   importMedia: (paths: string[]) => call<number>("import_media", { paths }),
   speechStatus: () => call<Runtime>("speech_status"),
   transcribe: (id: string, device: string) => call<string>("transcribe", { id, device }),
   cancelTranscription: () => call<void>("cancel_transcription"),
+  clearJobs: (id?: string) => call<number>("clear_jobs", { id: id ?? null }),
   jobs: () => call<Job[]>("jobs"),
   research: () => call<Research>("research"),
   document: (id: string) => call<DocumentBody>("document", { id }),

@@ -540,6 +540,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
         <NameVoiceDialog
           mediaId={media.id}
           voice={naming}
+          voices={[...voices.values()]}
           onClose={() => setNaming(null)}
           onSample={() => longestLine(naming)}
           onSaved={refresh}

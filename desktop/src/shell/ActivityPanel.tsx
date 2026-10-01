@@ -1,60 +1,36 @@
-import { LoaderCircle, Square } from "lucide-react";
+import { useState } from "react";
+import { Activity, LoaderCircle, RefreshCw, Square, X } from "lucide-react";
 import { api } from "../lib/ipc.ts";
 import type { Job } from "../lib/types.ts";
-import { Button } from "../ui/Button.tsx";
+import { useApp } from "./AppContext.tsx";
+import { Button, IconButton } from "../ui/Button.tsx";
 import { Chip } from "../ui/Chip.tsx";
 import { Dialog } from "../ui/Dialog.tsx";
 import { Empty } from "../ui/Empty.tsx";
 import { useToast } from "../ui/Toasts.tsx";
-import { Activity } from "lucide-react";
 
-const TONE: Record<string, "accent" | "success" | "danger" | "neutral"> = {
-  running: "accent",
-  complete: "success",
-  failed: "danger",
-  interrupted: "danger",
-  cancelled: "neutral",
-};
-const LABEL: Record<string, string> = {
-  running: "Running",
-  complete: "Done",
-  failed: "Failed",
-  interrupted: "Interrupted",
-  cancelled: "Cancelled",
-};
-
-export function ActivityPanel({ open, onOpenChange, jobs }: { open: boolean; onOpenChange: (open: boolean) => void; jobs: Job[] }) {
-  const toast = useToast();
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Activity" variant="side">
-      {jobs.length === 0 ? (
-        <Empty icon={Activity} title="Nothing running" text="Transcription jobs appear here." />
-      ) : (
-        <ul className="job-list">
-          {jobs.map((j) => (
-            <li key={j.id} className="job">
-              <div className="job-head">
-                <b className="job-title">{j.title}</b>
-                <Chip tone={TONE[j.status] ?? "neutral"}>
-                  {j.status === "running" && <LoaderCircle size={12} className="spin" aria-hidden />}
-                  {LABEL[j.status] ?? j.status}
-                </Chip>
-              </div>
-              {j.message && <p className="job-message">{j.message}</p>}
-              {j.status === "running" && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  icon={Square}
-                  onClick={() => api.cancelTranscription().catch((e) => toast.error(e))}
-                >
-                  Cancel processing
-                </Button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </Dialog>
-  );
+const LABEL: Record<string,string> = {running:"Running",queued:"Queued",complete:"Done",failed:"Failed",interrupted:"Interrupted",cancelled:"Cancelled"};
+export function ActivityPanel({open,onOpenChange,jobs,onChanged}: {open:boolean;onOpenChange:(open:boolean)=>void;jobs:Job[];onChanged:()=>void}) {
+  const toast=useToast(); const {transcribe,navigate}=useApp(); const [busy,setBusy]=useState(false);
+  const active=jobs.filter(j => ["running","queued"].includes(j.status));
+  const finished=jobs.filter(j => !["running","queued"].includes(j.status));
+  const clear=async(id?:string) => {setBusy(true);try{await api.clearJobs(id);onChanged();}catch(e){toast.error(e);}finally{setBusy(false);}};
+  const retry=async(j:Job) => {setBusy(true);try{await transcribe(j.media_id);onChanged();}finally{setBusy(false);}};
+  const row=(j:Job) => <li key={j.id} className="job">
+    <div className="job-head"><button className="job-title" onClick={() => {onOpenChange(false);navigate({page:"recording",id:j.media_id});}}>{j.title}</button>
+      <Chip tone={j.status === "running" ? "accent" : j.status === "complete" ? "success" : ["failed","interrupted"].includes(j.status) ? "danger" : "neutral"}>
+        {j.status === "running" && <LoaderCircle size={12} className="spin" />}{LABEL[j.status] ?? j.status}</Chip></div>
+    {j.created_at && <small className="muted">{new Date(j.created_at.includes("T") ? j.created_at : `${j.created_at.replace(" ","T")}Z`).toLocaleString()}</small>}
+    {j.message && <p className="job-message">{j.message}</p>}
+    {j.status === "running" ? <Button size="sm" variant="ghost" icon={Square} onClick={() => api.cancelTranscription().catch(toast.error)}>Cancel processing</Button> :
+      j.status !== "queued" && <div className="job-actions">{["failed","interrupted","cancelled"].includes(j.status) && <Button size="sm" icon={RefreshCw} disabled={busy || !!active.length} onClick={() => void retry(j)}>Retry</Button>}
+        <IconButton size="sm" icon={X} label={`Dismiss ${j.title} attempt`} disabled={busy} onClick={() => void clear(j.id)} /></div>}
+  </li>;
+  return <Dialog open={open} onOpenChange={onOpenChange} title="Activity" variant="side">
+    {active.length ? <ul className="job-list">{active.map(row)}</ul> : <Empty icon={Activity} title="Nothing running" text="Finished attempts are listed in recent activity below." />}
+    {!!finished.length && <details className="job-history"><summary>Recent activity · {finished.length} finished attempts</summary>
+      <p className="muted">These are past attempts, saved between launches. Retrying creates a new attempt.</p>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => void clear()}>Clear finished</Button>
+      <ul className="job-list">{finished.map(row)}</ul></details>}
+  </Dialog>;
 }

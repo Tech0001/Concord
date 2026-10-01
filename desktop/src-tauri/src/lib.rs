@@ -1,6 +1,7 @@
 #[cfg(debug_assertions)]
 mod smoke;
 pub mod db;
+pub mod speakers;
 pub mod export;
 pub mod system;
 pub mod waveform;
@@ -135,6 +136,30 @@ async fn assign_speaker(
     work(move || db::assign(&root, &id, &local, &name)).await
 }
 #[tauri::command]
+async fn unidentified_speakers(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let root = state.root.clone(); work(move || speakers::unidentified(&root)).await
+}
+#[tauri::command]
+async fn edit_speaker(state: State<'_, AppState>, id: String, name: String, color: Option<String>, noise: bool) -> Result<(), String> {
+    let root = state.root.clone(); work(move || speakers::edit(&root,&id,&name,color.as_deref(),noise)).await
+}
+#[tauri::command]
+async fn delete_speaker(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let root = state.root.clone(); work(move || speakers::delete(&root,&id)).await
+}
+#[tauri::command]
+async fn merge_speakers(state: State<'_, AppState>, source: String, target: String) -> Result<Value, String> {
+    let root = state.root.clone(); work(move || speakers::merge(&root,&source,&target)).await
+}
+#[tauri::command]
+async fn rescan_speakers(state: State<'_, AppState>, id: Option<String>) -> Result<Value, String> {
+    let root = state.root.clone(); work(move || speakers::rescan(&root,id.as_deref())).await
+}
+#[tauri::command]
+async fn label_speakers(state: State<'_, AppState>, label: speakers::Label) -> Result<Value, String> {
+    let root = state.root.clone(); work(move || speakers::label(&root,&label)).await
+}
+#[tauri::command]
 async fn import_media(state: State<'_, AppState>, paths: Vec<String>) -> Result<usize, String> {
     let root = state.root.clone();
     work(move || db::import_files(&root, &paths)).await
@@ -172,6 +197,10 @@ async fn jobs(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
         )
     })
     .await
+}
+#[tauri::command]
+async fn clear_jobs(state: State<'_, AppState>, id: Option<String>) -> Result<usize, String> {
+    let root=state.root.clone(); work(move || db::clear_jobs(&root,id.as_deref())).await
 }
 #[tauri::command]
 async fn research(state: State<'_, AppState>) -> Result<Value, String> {
@@ -361,7 +390,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,research,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
       .run(move|_,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();}});
 }

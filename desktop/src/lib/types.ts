@@ -27,6 +27,9 @@ export type Assignment = {
   name: string | null;
   color: string | null;
   airtime: number;
+  start?: number | null;
+  end?: number | null;
+  is_noise?: number;
 };
 export type NoteMarker = { id: string; title: string; start: number; end: number | null };
 export type Recording = {
@@ -61,7 +64,11 @@ export type Overview = {
   dataRoot: string;
   legacyDatabase: string;
 };
+export type MatchResult = { matched: number; recordings: number; reassigned?: number; speakerId?: string | null };
+export type LabelVoice = { mediaId: string; locals: string[]; speakerId?: string | null; name?: string; color?: string; noise?: boolean; unlink?: boolean };
 export type Speaker = {
+  is_noise?: number;
+  sample_count?: number;
   id: string;
   name: string;
   color: string | null;

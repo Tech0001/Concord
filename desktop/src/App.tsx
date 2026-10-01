@@ -100,6 +100,7 @@ function Shell() {
           label: "Activity",
           run: () => setActivityOpen(true),
         });
+        setJobs(await api.jobs());
         refresh();
       } catch (e) {
         toast.error(e);
@@ -228,7 +229,7 @@ function Shell() {
       </div>
       {!phone && narrow && <SidebarDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />}
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onAdd={() => void addRecordings()} />
-      <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} />
+      <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} onChanged={() => api.jobs().then(setJobs).catch(toast.error)} />
       {note && <NoteEditor note={note} onClose={() => setNote(null)} />}
     </AppContext.Provider>
   );
