@@ -11,7 +11,7 @@ import { PHONE, RAIL, useMediaQuery } from "./lib/media-query.ts";
 import { ToastProvider, useToast } from "./ui/Toasts.tsx";
 import { Empty } from "./ui/Empty.tsx";
 import { AppContext, type AppContextValue } from "./shell/AppContext.tsx";
-import { Sidebar } from "./shell/Sidebar.tsx";
+import { Sidebar, SidebarDrawer } from "./shell/Sidebar.tsx";
 import { TabBar } from "./shell/TabBar.tsx";
 import { Topbar } from "./shell/Topbar.tsx";
 import { CommandPalette } from "./shell/CommandPalette.tsx";
@@ -48,6 +48,7 @@ function Shell() {
   const [pageTitle, setPageTitle] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("sidebar-collapsed-v1", false, (v) => typeof v === "boolean");
   const narrow = useMediaQuery(RAIL);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const phone = useMediaQuery(PHONE);
   const available = api.available();
   const lastJobs = useRef("");
@@ -191,7 +192,12 @@ function Shell() {
   return (
     <AppContext.Provider value={context}>
       <div className="shell" data-rail={!phone && (collapsed || narrow)}>
-        {!phone && <Sidebar rail={collapsed || narrow} canCollapse={!narrow} onToggle={() => setCollapsed((v) => !v)} />}
+        {!phone && (
+          <Sidebar
+            mode={collapsed || narrow ? "rail" : "full"}
+            onToggle={() => (narrow ? setDrawerOpen(true) : setCollapsed((v) => !v))}
+          />
+        )}
         <main className="main">
           <Topbar onAdd={() => void addRecordings()} />
           <div className="page" key={pageKey}>
@@ -200,6 +206,7 @@ function Shell() {
         </main>
         {phone && <TabBar />}
       </div>
+      {!phone && narrow && <SidebarDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />}
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onAdd={() => void addRecordings()} />
       <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} />
       {note && <NoteEditor note={note} onClose={() => setNote(null)} />}

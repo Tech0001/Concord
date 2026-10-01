@@ -28,12 +28,29 @@
   z-index: 20;
 }
 .sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   padding: 2px 2px 14px;
+}
+.sidebar-toggle {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  border-radius: var(--r-2);
+  color: var(--muted-foreground);
+}
+.sidebar-toggle:hover {
+  background: var(--hover);
+  color: var(--foreground);
 }
 .brand-button {
   display: flex;
   align-items: center;
-  width: 100%;
+  min-width: 0;
   padding: 6px 8px;
   border-radius: var(--r-2);
 }
@@ -174,7 +191,12 @@
   padding: 12px 8px;
 }
 .sidebar.is-rail .sidebar-brand {
-  padding: 2px 0 14px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 10px;
+}
+.sidebar.is-rail .sidebar-toggle {
+  margin-left: 0;
 }
 .sidebar.is-rail .brand-button {
   justify-content: center;
@@ -474,4 +496,29 @@
 .job-message {
   color: var(--muted-foreground);
   font-size: var(--text-sm);
+}
+
+/* Drawer: the labelled sidebar over the content on narrow windows */
+.nav-drawer-overlay {
+  z-index: 60;
+}
+.nav-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 61;
+  width: var(--sidebar-w);
+  box-shadow: var(--shadow-float);
+  animation: nav-drawer-in 180ms var(--ease);
+  outline: none;
+}
+.nav-drawer .sidebar {
+  height: 100%;
+}
+@keyframes nav-drawer-in {
+  from {
+    transform: translateX(-24px);
+    opacity: 0;
+  }
 }

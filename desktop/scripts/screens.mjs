@@ -1,6 +1,6 @@
 // Capture Concord Next pages from the Vite dev server using headless Chromium over CDP.
 // Usage: node desktop/scripts/screens.mjs <outdir> [name-filter]
-// Env: BASE (default http://127.0.0.1:1420/), EXTRA (JSON array of extra shots),
+// Env: BASE (default http://127.0.0.1:1420/), CDP_PORT (default 9333), EXTRA (JSON array of extra shots),
 //      SIZES (comma list of desktop,small,tablet,phone), MODES (comma list of dark,light).
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
@@ -11,7 +11,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 const out = process.argv[2] ?? "screens";
 const only = process.argv[3] ?? "";
 const base = process.env.BASE ?? "http://127.0.0.1:1420/";
-const port = 9333;
+const port = Number(process.env.CDP_PORT ?? 9333);
 const allSizes = {
   desktop: { width: 1440, height: 940, mobile: false },
   small: { width: 960, height: 640, mobile: false },
