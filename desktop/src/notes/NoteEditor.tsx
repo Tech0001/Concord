@@ -327,6 +327,7 @@ export function NoteEditor({
                   </span>
                 </div>
               )}
+              {!a.media_id && !a.doc_id && <p className="muted">Recording removed from library · saved passage kept</p>}
               <textarea
                 aria-label={`Evidence ${i + 1} passage`}
                 rows={2}
@@ -338,7 +339,7 @@ export function NoteEditor({
                 variant="ghost"
                 size="sm"
                 icon={Play}
-                disabled={!draft.title.trim() || saving}
+                disabled={!draft.title.trim() || saving || (!a.media_id && !a.doc_id)}
                 onClick={() => void save(a)}
               >
                 Save & open source

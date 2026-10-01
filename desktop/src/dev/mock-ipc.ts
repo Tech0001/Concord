@@ -77,6 +77,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   tools_extract: () => undefined,
   tools_cancel_extract: () => undefined,
   recording_file_info: ({id}) => { const m=find(id)!;return {id,title:m.title,path:m.path,exists:!!m.path,filename:m.title,extension:m.kind==="audio"?"ogg":"mp4",shared:[{id,title:m.title}]}; },
+  remove_recording: () => undefined,
   recording_file_action: () => undefined,
   set_recording_title: ({id,title}) => { const m=find(id);if(m)m.title=title; },
   set_category: ({id,category}) => { const m=find(id); if(m) m.category=category; },

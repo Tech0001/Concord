@@ -23,6 +23,88 @@ struct Operation {
     fingerprint: String,
 }
 
+pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
+    db.execute_batch("CREATE TABLE IF NOT EXISTS removed_recordings(id TEXT PRIMARY KEY,path TEXT,url TEXT NOT NULL DEFAULT '',removed_at TEXT NOT NULL DEFAULT (datetime('now')));
+      CREATE INDEX IF NOT EXISTS removed_recordings_path ON removed_recordings(path);
+      CREATE INDEX IF NOT EXISTS removed_recordings_url ON removed_recordings(url);
+      ")?;
+    let has_title: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('note_anchors') WHERE name='source_title')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_title {
+        db.execute_batch("ALTER TABLE note_anchors ADD COLUMN source_title TEXT")?;
+    }
+    Ok(())
+}
+
+/// Forget this library entry without touching any files or deleting research notes.
+pub fn remove(
+    root: &Path,
+    control: &pipeline::Control,
+    ai: &crate::ai::Control,
+    id: &str,
+) -> Result<()> {
+    let _gate = control.gate.lock().unwrap();
+    let _automatic = ai.automation_gate.lock().unwrap();
+    let _index = ai.index_job.lock().unwrap();
+    let summaries = ai.summaries.lock().unwrap();
+    ensure!(
+        !control.checking.load(Ordering::SeqCst),
+        "Wait for the source scan to finish before removing a recording"
+    );
+    ensure!(
+        !ai.indexing.load(Ordering::SeqCst),
+        "Wait for semantic indexing to finish before removing a recording"
+    );
+    ensure!(
+        !summaries.contains_key(id),
+        "Stop this recording's AI summary before removing it"
+    );
+    let mut db = db::open(root)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let active: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM jobs WHERE media_id=?1 AND status='running')",
+        [id],
+        |r| r.get(0),
+    )?;
+    ensure!(!active, "Stop processing this recording before removing it");
+    let (path, url, title): (Option<String>, String, String) = tx
+        .query_row("SELECT path,url,title FROM media WHERE id=?1", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .context("Recording not found")?;
+    let path = path.map(|p| {
+        Path::new(&p)
+            .canonicalize()
+            .map(|v| v.to_string_lossy().into_owned())
+            .unwrap_or(p)
+    });
+    tx.execute(
+        "INSERT OR REPLACE INTO removed_recordings(id,path,url) VALUES(?1,?2,?3)",
+        params![id, path, url],
+    )?;
+    crate::research::backfill(&tx)?;
+    tx.execute(
+        "UPDATE note_anchors SET source_title=?2,media_id=NULL WHERE media_id=?1",
+        params![id, title],
+    )?;
+    tx.execute("UPDATE notes SET media_id=NULL WHERE media_id=?1", [id])?;
+    tx.execute("DELETE FROM jobs WHERE media_id=?1", [id])?;
+    tx.execute("DELETE FROM segments WHERE media_id=?1", [id])?;
+    tx.execute("DELETE FROM assignments WHERE media_id=?1", [id])?;
+    // Foreign keys/triggers remove summaries, semantic chunks, fingerprints and follow-ups.
+    // Speaker profiles and their accumulated voice training remain available.
+    tx.execute("DELETE FROM media WHERE id=?1", [id])?;
+    tx.commit()?;
+    crate::runtime_log::push(
+        "info",
+        "Recording removed from library; original files kept",
+    );
+    Ok(())
+}
+
 fn fingerprint(path: &Path) -> Result<String> {
     let stamp = health::stamp(path)?;
     let bytes = stamp.0;
@@ -409,6 +491,138 @@ mod tests {
             pipeline::Control::new(Arc::new(speech::Control::default())),
             path,
         )
+    }
+    #[test]
+    fn removing_a_recording_keeps_files_notes_profiles_and_other_entries() {
+        let (dir, c, path) = fixture();
+        let root = dir.path();
+        let ai = crate::ai::Control::default();
+        let db = db::open(root).unwrap();
+        fs::write(root.join("retained.md"), "Keep transcript file").unwrap();
+        db.execute_batch("INSERT INTO speakers(id,name,embedding) VALUES('s','Person',X'0000803f');
+              UPDATE assignments SET speaker_id='s' WHERE media_id='one';
+              INSERT INTO speaker_training VALUES('s','one','S0');
+              INSERT INTO note_anchors(id,note_id,position,media_id,start,end,quote) VALUES('a','n',0,'one',0,1,'Saved words');
+              INSERT INTO ai_indexes VALUES('sig','model',1);
+              INSERT INTO ai_sources VALUES('sig','recording','one','digest');
+              INSERT INTO ai_chunks(signature,kind,source_id,position,text,vector) VALUES('sig','recording','one',0,'Search words',X'0000803f');
+              INSERT INTO ai_summaries(media_id,content,model,digest) VALUES('one','Summary','model','digest');
+              INSERT INTO jobs(id,media_id,title,status) VALUES('pending','one','One','queued');
+              INSERT INTO pipeline_work(id,kind,device) VALUES('pending','transcribe','cpu');").unwrap();
+        let bytes = fs::read(&path).unwrap();
+        remove(root, &c, &ai, "one").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            fs::read_to_string(root.join("retained.md")).unwrap(),
+            "Keep transcript file"
+        );
+        assert!(db::media(root, "one").is_err());
+        assert!(db::media(root, "two").is_ok());
+        for table in [
+            "assignments",
+            "segments",
+            "ai_sources",
+            "ai_chunks",
+            "ai_summaries",
+            "jobs",
+            "pipeline_work",
+        ] {
+            assert_eq!(
+                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "{table}"
+            );
+        }
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM speakers", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        let note = crate::research::read(root).unwrap()["notes"][0].clone();
+        assert_eq!(note["anchors"][0]["title"], "one");
+        assert_eq!(note["anchors"][0]["quote"], "Saved words");
+        assert!(note["anchors"][0]["media_id"].is_null());
+        let mut edit: crate::research::Note = serde_json::from_value(note).unwrap();
+        edit.body = "Still editable".into();
+        crate::research::save(root, &edit).unwrap();
+        let saved = crate::research::read(root).unwrap()["notes"][0].clone();
+        assert_eq!(saved["anchors"][0]["title"], "one");
+        assert_eq!(saved["body"], "Still editable");
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            0
+        );
+        db.execute(
+            "INSERT INTO segments_fts(segments_fts,rank) VALUES('integrity-check',1)",
+            [],
+        )
+        .unwrap();
+        let backup = crate::health::backup::create(root, &root.join("backups")).unwrap();
+        assert_eq!(
+            crate::health::backup::validate(Path::new(backup["path"].as_str().unwrap())).unwrap()
+                ["version"],
+            13
+        );
+    }
+    #[test]
+    fn version_twelve_libraries_upgrade_without_changing_existing_content() {
+        let (dir, _, path) = fixture();
+        let root = dir.path();
+        let db = db::open(root).unwrap();
+        db.execute_batch("ALTER TABLE note_anchors DROP COLUMN source_title;DROP TABLE removed_recordings;PRAGMA user_version=12;").unwrap();
+        drop(db);
+        let db = db::open(root).unwrap();
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            13
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM media", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            db.query_row("SELECT media_id FROM notes WHERE id='n'", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "one"
+        );
+        assert!(path.exists());
+        migrate(&db).unwrap(); // Concurrent initial opens can both reach migration.
+    }
+    #[test]
+    fn removal_refuses_active_work_and_accepts_missing_files() {
+        let (dir, c, path) = fixture();
+        let root = dir.path();
+        let ai = crate::ai::Control::default();
+        let db = db::open(root).unwrap();
+        db.execute(
+            "INSERT INTO jobs(id,media_id,title,status) VALUES('active','one','One','running')",
+            [],
+        )
+        .unwrap();
+        assert!(remove(root, &c, &ai, "one")
+            .unwrap_err()
+            .to_string()
+            .contains("Stop processing"));
+        db.execute("UPDATE jobs SET status='cancelled'", [])
+            .unwrap();
+        c.checking.store(true, Ordering::SeqCst);
+        assert!(remove(root, &c, &ai, "one").is_err());
+        c.checking.store(false, Ordering::SeqCst);
+        ai.indexing.store(true, Ordering::SeqCst);
+        assert!(remove(root, &c, &ai, "one").is_err());
+        ai.indexing.store(false, Ordering::SeqCst);
+        fs::remove_file(&path).unwrap();
+        remove(root, &c, &ai, "one").unwrap();
+        assert!(db::media(root, "one").is_err());
     }
     #[test]
     fn rename_updates_shared_paths_without_overwriting_files_or_research() {

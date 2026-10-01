@@ -543,7 +543,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   );
   return (
     <div className="player">
-      {fileAction && <RecordingFileDialog media={media} action={fileAction} onClose={()=>setFileAction(undefined)} onSaved={action=>{refresh();if(action!=="title"){resumeFile.current={source,at:time.get()};setFileRevision(v=>v+1);}}}/>}
+      {fileAction && <RecordingFileDialog media={media} action={fileAction} onClose={()=>setFileAction(undefined)} onSaved={action=>{refresh();if(action==="remove"){navigate({page:"library"});return;}if(action!=="title"){resumeFile.current={source,at:time.get()};setFileRevision(v=>v+1);}}}/>}
       <PlayerHeader recording={data} starred={starred} onStar={() => void star()} menu={menu} />
       <SplitLayout>
         <section className="player-media" aria-label="Playback">

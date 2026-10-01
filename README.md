@@ -112,6 +112,16 @@ Linux data lives in `~/.local/share/concord-next/` (respecting `XDG_DATA_HOME`).
 location; new transcripts are versioned under the app folder. External drives must remain
 connected. Import does not copy watchers, old queued jobs, or AI credentials.
 
+Add local recording folders under **Pipeline → Sources → Add folder**. **Save & scan folder**
+finds audio/video in that folder and its subfolders, adds new files to Library, and queues them.
+Use **Start queue** to transcribe, or **Scan folder** to check for files added later. Documents
+are indexed separately on **Docs** and are not included in the Library recording count.
+
+A recording’s menu offers **Remove from library**, which keeps its original media/transcript
+files and saved research notes. Future source scans skip the removed recording. Selecting the
+local file explicitly through Add recordings adds it again. **Move media to Trash** is a separate
+file operation; it keeps the recording and transcript in Concord while moving the media file.
+
 Rust owns SQLite, jobs, child processes, transcript/speaker merging and search. React uses
 Tauri IPC. A private loopback media server exposes only the opened recording through an
 unguessable session URL, supporting WebKitGTK seeking without a public listening port.

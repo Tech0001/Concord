@@ -166,7 +166,7 @@ pub(super) fn local(root: &Path, control: &Control, source: &Value) -> Result<us
     let mut added = 0;
     for path in paths {
         if tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM media WHERE path=?1)",
+            "SELECT EXISTS(SELECT 1 FROM media WHERE path=?1) OR EXISTS(SELECT 1 FROM removed_recordings WHERE path=?1)",
             [path.to_string_lossy().as_ref()],
             |r| r.get::<_, bool>(0),
         )? {
@@ -211,7 +211,7 @@ pub(super) fn ingest(
         let id = serde_json::to_string(&(source["id"].as_str().unwrap(), remote))?;
         let url = format!("https://www.youtube.com/watch?v={remote}");
         let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM media WHERE id=?1 OR url=?2)",
+            "SELECT EXISTS(SELECT 1 FROM media WHERE id=?1 OR url=?2) OR EXISTS(SELECT 1 FROM removed_recordings WHERE id=?1 OR url=?2)",
             params![id, url],
             |r| r.get(0),
         )?;

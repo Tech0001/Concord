@@ -82,7 +82,7 @@ try:
         assert db.execute("SELECT kind,source_id FROM ai_sources").fetchall() == [('recording', 'health-good')]
         assert db.execute("SELECT status FROM jobs WHERE id='native-completed'").fetchone()[0] == 'complete'
         assert db.execute('SELECT action,status FROM ai_followups ORDER BY action').fetchall() == [('embedding', 'complete'), ('summary', 'complete')]
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 12
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
     print(json.dumps({'root': str(root), **report}, indent=2))
 finally:
     release.set()

@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 12 {
+    if version >= 13 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -118,7 +118,8 @@ fn migrate(db: &mut Connection) -> Result<()> {
     crate::search_index::migrate(&tx)?;
     crate::ai::summary::migrate(&tx)?;
     crate::ai::automation::migrate(&tx)?;
-    tx.execute_batch("PRAGMA user_version=12")?;
+    if version < 13 { crate::media_files::migrate(&tx)?; }
+    tx.execute_batch("PRAGMA user_version=13")?;
     tx.commit()?;
     Ok(())
 }
@@ -524,6 +525,7 @@ pub fn import_media_ids(root: &Path, paths: &[String], category: &str) -> Result
         {
             bail!("Unsupported media type: {extension}");
         }
+        tx.execute("DELETE FROM removed_recordings WHERE path=?1", [path.to_string_lossy().as_ref()])?;
         let exists: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM media WHERE path=?1)",
             [path.to_string_lossy().as_ref()],
@@ -649,7 +651,7 @@ mod tests {
         assert_eq!(
             db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            12
+            13
         );
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error

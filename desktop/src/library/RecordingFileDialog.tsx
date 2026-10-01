@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { FilePenLine, FolderSearch, Pencil, Trash2 } from "lucide-react";
+import { FilePenLine, FolderSearch, ListX, Pencil, Trash2 } from "lucide-react";
 import { api } from "../lib/ipc.ts";
 import type { Media } from "../lib/types.ts";
 import { Button } from "../ui/Button.tsx";
 import { Dialog } from "../ui/Dialog.tsx";
 import type { MenuEntry } from "../ui/Menu.tsx";
 import { useToast } from "../ui/Toasts.tsx";
-export type FileAction = "title" | "rename" | "relink" | "trash";
+export type FileAction = "title" | "rename" | "relink" | "trash" | "remove";
 export type RecordingFileInfo = {
   id: string;
   title: string;
@@ -34,6 +34,12 @@ export const fileMenu = (
     onSelect: () => open("relink"),
   },
   {
+    label: "Remove from library",
+    icon: ListX,
+    onSelect: () => open("remove"),
+    danger: true,
+  },
+  {
     label: "Move media to Trash",
     icon: Trash2,
     onSelect: () => open("trash"),
@@ -46,6 +52,7 @@ const titles = {
   rename: "Rename recording file",
   relink: "Locate recording file",
   trash: "Move recording file to Trash?",
+  remove: "Remove recording from library?",
 };
 export function RecordingFileDialog({
   media,
@@ -89,11 +96,12 @@ export function RecordingFileDialog({
     setError("");
     try {
       if (action === "title") await api.setRecordingTitle(media.id, value);
+      else if (action === "remove") await api.removeRecording(media.id);
       else await api.recordingFileAction(media.id, action, value);
       onSaved(action);
       onClose();
       toast.success(
-        action === "title"
+        action === "remove" ? "Recording removed from library; original file kept" : action === "title"
           ? "Recording title updated"
           : action === "rename"
             ? "File renamed"
@@ -129,18 +137,18 @@ export function RecordingFileDialog({
             Cancel
           </Button>
           <Button
-            variant={action === "trash" ? "danger" : "primary"}
+            variant={action === "trash" || action === "remove" ? "danger" : "primary"}
             disabled={
               busy ||
               !info ||
               ((action === "rename" || action === "trash") && !info.exists) ||
-              (action !== "trash" && !value.trim())
+              (action !== "trash" && action !== "remove" && !value.trim())
             }
             onClick={() => void save()}
           >
             {busy
               ? "Saving…"
-              : action === "trash"
+              : action === "remove" ? "Remove from library" : action === "trash"
                 ? "Move to Trash"
                 : action === "rename"
                   ? "Rename file"
@@ -202,6 +210,12 @@ export function RecordingFileDialog({
               </Button>
             </>
           )}
+          {action === "remove" && (
+            <>
+              <p>Removes this recording, its transcript search entries, speaker assignments, summary and queued work from Concord. The original media and transcript files stay on disk. Saved notes, quoted passages and speaker profiles are kept; notes can no longer play this source.</p>
+              <p>Source scans will skip this recording so it stays removed. To add a local file again, use Add recordings and select the file.</p>
+            </>
+          )}
           {action === "trash" && (
             <p>
               This moves the media file to your desktop Trash. The recording
@@ -210,7 +224,7 @@ export function RecordingFileDialog({
               file to reconnect it.
             </p>
           )}
-          {action !== "title" && (
+          {action !== "title" && action !== "remove" && (
             <p className="muted">
               {info.shared.length > 1
                 ? `This file is shared by ${info.shared.length} recordings. ${action === "trash" ? "Their media will all become unavailable." : "Their saved file paths will all be updated."}`

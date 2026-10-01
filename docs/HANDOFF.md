@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.24.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.25.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,51 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Local folder scanning and record-only removal (0.25.0)
+
+The user found that adding a folder in Pipeline saved a source but did not scan it, and the
+YouTube default concealed the local-folder option. Sources now has separate **Add folder** and
+**Add YouTube source** buttons. Local folders use **Save & scan folder** and **Scan folder**;
+results appear on the source card. Saving starts a recursive scan, queues new recordings, and
+leaves the queue's running/paused state alone. Sources explains **Start queue** for transcription.
+
+The checklist distinguishes configured sources from actual recording/document counts, retains
+**View sources** and **Open Docs** links after configuration, and the setup Recordings step links
+to both destinations. Documents copy now accurately says Markdown/text. The first newly queued
+job also refreshes Library totals (previously the empty initial job signature prevented this).
+The user's original selected `Alwyn_Uys` folder was empty; it had scanned successfully. Their
+separate document root had indexed 520 files. No real files or library records were changed by testing.
+
+**Remove from library** is available in both Library and player menus. It deletes the selected
+entry, transcript search rows, speaker assignments, summaries, semantic chunks, pending/history
+jobs and dependent processing metadata. It never modifies media/transcript files. Notes, saved
+quoted passages, typed links and speaker profiles/training are retained. Evidence whose recording
+was removed keeps its source title, quoted text and timestamps; it stays editable and cannot open
+its now-removed source. The player returns to Library after removal.
+
+Schema **13** adds `removed_recordings` (path/URL exclusions for folder/YouTube rescans) and
+`note_anchors.source_title`. Explicit local-file import clears its exclusion so it can be added
+again. Running speech/summary/index/source-check work is protected by its existing locks and
+checks; pending jobs can be removed atomically. Backup validation accepts schema 13. Existing
+schema-12 content and repeat migration were tested.
+
+Validation: 155 Rust tests pass (8 opt-in integration tests ignored), 56 TypeScript tests pass,
+Clippy all-targets `-D warnings` passes, frontend build passes. Real WebKitGTK regression:
+`desktop/scripts/native-folder-test.py` and `native-folder-smoke.js` exercise an empty folder,
+recursive scans, duplicate prevention, paused queues, checklist navigation, player removal,
+rescan exclusion and explicit re-import; Python verifies original file hashes and DB integrity.
+Logs: `/tmp/concord-025-{tests,ts,clippy,build,native-build,native-test,package}.log`.
+
+Final native scratch root: `/tmp/concord-folder-native-6linrwzi`. The window manager tiled the
+review window at 460×353, exercising the responsive native UI; the test accommodates the absent
+sidebar at phone widths. The first native run also passed the full functional sequence. The
+harness now waits for source edit controls to become enabled after the asynchronous scan.
+
+Installed 0.25.0 at `~/.local/opt/concord-next/Concord-Next.AppImage`, verified byte-for-byte
+against the bundle; AppImage 248.41 MiB, deb 157.22 MiB. The user's existing app window was left
+open; reopening loads the update and applies migration 13. Backup (schema 12, quick_check OK):
+`/home/pc/.local/share/concord-next/backups/before-0.25.0-20261001-141931.db`.
 
 ## Discover removed (0.24.0)
 

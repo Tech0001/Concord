@@ -137,8 +137,14 @@ export function checklist(s: SetupStatus): ChecklistItem[] {
     },
     {
       id: "recordings",
-      title: "Add recordings",
-      detail: recordingsSummary(s) || "Files, a folder, YouTube, or documents",
+      title: "Add recordings or documents",
+      detail: hasRecordings(s)
+        ? [
+            s.sources.sources ? `${plural(s.sources.sources, "source")} configured` : "",
+            plural(s.library.media, "recording"),
+            s.sources.documentFolders || s.library.docs ? `${plural(s.library.docs, "document")} in Docs` : "",
+          ].filter(Boolean).join(" · ")
+        : "Files, a folder, YouTube, or documents",
       state: hasRecordings(s) ? "done" : "todo",
     },
     {

@@ -65,7 +65,7 @@ function Shell() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const phone = useMediaQuery(PHONE);
   const available = api.available();
-  const lastJobs = useRef("");
+  const lastJobs = useRef<string | null>(null);
 
   useEffect(() => {
     if (!available) return;
@@ -83,7 +83,7 @@ function Shell() {
         if (!alive) return;
         setJobs((old) => (JSON.stringify(old) === JSON.stringify(data) ? old : data));
         const signature = data.map((j) => j.id + j.status).join();
-        if (lastJobs.current && signature !== lastJobs.current) refresh();
+        if (lastJobs.current !== null && signature !== lastJobs.current) refresh();
         lastJobs.current = signature;
         timer = window.setTimeout(poll, data.some((j) => j.status === "running") ? 1500 : 5000);
       } catch (e) {

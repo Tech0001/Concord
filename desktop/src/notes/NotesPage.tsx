@@ -44,7 +44,7 @@ export function NotesPage() {
       {active.body&&<Markdown source={active.body} />}
       <div className="note-tags">{active.tags?.map(t=><button key={t} onClick={()=>setTag(t)}><Chip>{t}</Chip></button>)}</div>
       <h3>Evidence</h3>{anchorsOf(active).map((a,i)=><section className="note-evidence" key={a.id??i}>
-        <button className="evidence-source" onClick={()=>a.media_id?navigate({page:"recording",id:a.media_id,at:a.start??0}):a.doc_id&&navigate({page:"documents",id:a.doc_id})}>
+        <button className="evidence-source" disabled={!a.media_id && !a.doc_id} title={!a.media_id && !a.doc_id ? "Recording removed from library; saved passage kept" : undefined} onClick={()=>a.media_id?navigate({page:"recording",id:a.media_id,at:a.start??0}):a.doc_id&&navigate({page:"documents",id:a.doc_id})}>
           {a.title??(a.media_id?"Recording":"Document")}{a.media_id&&` · ${clock(a.start??0)}–${clock(a.end??a.start??0)}`}</button>
         {a.quote&&<blockquote className="note-quote">{a.quote}</blockquote>}</section>)}
       {!anchorsOf(active).length&&<p className="muted">A standalone thought. Add evidence when you edit the note.</p>}

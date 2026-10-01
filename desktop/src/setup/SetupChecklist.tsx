@@ -40,6 +40,12 @@ export function SetupChecklist({ variant, onNavigate }: { variant: "library" | "
   });
   const hide = run(() => api.setupSave({ checklistHidden: !setup.progress.checklistHidden }));
   const actions = (item: ChecklistItem) => {
+    if (item.id === "recordings" && item.state === "done") return (
+      <>
+        {setup.sources.sources > 0 && <Button size="sm" onClick={() => open({ page: "pipeline", tab: "sources" })}>View sources</Button>}
+        {setup.sources.documentFolders > 0 && <Button size="sm" onClick={() => open({ page: "documents" })}>Open Docs</Button>}
+      </>
+    );
     if (item.state === "done") return null;
     switch (item.id) {
       case "speech":

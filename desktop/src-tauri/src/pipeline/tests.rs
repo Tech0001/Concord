@@ -492,3 +492,23 @@ fn disabled_downloads_wait_without_blocking_local_work_or_spending_retries() {
     assert_eq!(state(root,&remote)["status"],"retry");
     assert_eq!(state(root,&remote)["attempts"],1);
 }
+
+#[test]
+fn removed_recordings_stay_out_of_folder_and_youtube_scans() {
+    let (dir,c)=fixture();let root=dir.path();let ai=crate::ai::Control::default();
+    let folder=root.join("incoming");std::fs::create_dir(&folder).unwrap();
+    let path=folder.join("keep-on-disk.ogg");std::fs::write(&path,b"recording bytes").unwrap();
+    let source=serde_json::json!({"id":"local","name":"Folder","url":folder,"category":"personal","diarize":0});
+    assert_eq!(sources::local(root,&c,&source).unwrap(),1);
+    let db=db::open(root).unwrap();let id:String=db.query_row("SELECT id FROM media",[],|r|r.get(0)).unwrap();
+    crate::media_files::remove(root,&c,&ai,&id).unwrap();
+    assert!(path.exists());assert_eq!(sources::local(root,&c,&source).unwrap(),0);
+    assert_eq!(db::import_files(root,&[path.to_string_lossy().into_owned()]).unwrap(),1);
+    assert_eq!(sources::local(root,&c,&source).unwrap(),0);
+    let remote=serde_json::json!({"id":"yt","name":"Channel","category":"personal","diarize":0,"include_shorts":1});
+    let entries=[serde_json::json!({"id":"AbCdEfGhI12","title":"Remote"})];
+    assert_eq!(sources::ingest(root,&remote,&entries,"cpu").unwrap(),1);
+    let id=serde_json::to_string(&("yt","AbCdEfGhI12")).unwrap();
+    crate::media_files::remove(root,&c,&ai,&id).unwrap();
+    assert_eq!(sources::ingest(root,&remote,&entries,"cpu").unwrap(),0);
+}

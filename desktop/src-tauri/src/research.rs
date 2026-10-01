@@ -41,7 +41,7 @@ pub fn backfill(db:&Connection)->Result<()> {
 pub fn read(root:&Path)->Result<Value> {
     let db=db::open(root)?;
     let mut notes=db::rows(&db,"SELECT n.*,m.title AS media_title FROM notes n LEFT JOIN media m ON m.id=n.media_id ORDER BY coalesce(n.updated_at,n.created_at) DESC",[])?;
-    let anchors=db::rows(&db,"SELECT a.*,coalesce(m.title,d.title) AS title,m.channel,m.date,coalesce(m.category,d.category) AS category FROM note_anchors a LEFT JOIN media m ON m.id=a.media_id LEFT JOIN docs d ON d.id=a.doc_id ORDER BY a.position",[])?;
+    let anchors=db::rows(&db,"SELECT a.*,coalesce(m.title,d.title,a.source_title) AS title,m.channel,m.date,coalesce(m.category,d.category) AS category FROM note_anchors a LEFT JOIN media m ON m.id=a.media_id LEFT JOIN docs d ON d.id=a.doc_id ORDER BY a.position",[])?;
     let tags=db::rows(&db,"SELECT * FROM note_tags ORDER BY tag",[])?;
     let mut by_note:HashMap<String,Vec<Value>>=HashMap::new();
     let mut tags_by_note:HashMap<String,Vec<Value>>=HashMap::new();
@@ -69,7 +69,12 @@ pub struct Note {
     pub anchors:Option<Vec<Anchor>>,pub tags:Option<Vec<String>>,
 }
 fn normalize_tag(tag:&str)->String { tag.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase() }
-fn validate_anchor(db:&Connection,a:&Anchor)->Result<()> {
+fn validate_anchor(db:&Connection,a:&Anchor,note_id:&str)->Result<()> {
+    if a.media_id.is_none() && a.doc_id.is_none() {
+        let detached:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM note_anchors WHERE id=?1 AND note_id=?2 AND media_id IS NULL AND doc_id IS NULL)",params![a.id,note_id],|r|r.get(0))?;
+        anyhow::ensure!(detached,"Evidence must refer to one recording or document");
+        return Ok(());
+    }
     anyhow::ensure!(a.media_id.is_some() != a.doc_id.is_some(),"Evidence must refer to one recording or document");
     if let Some(id)=&a.media_id {
         let duration:f64=db.query_row("SELECT duration FROM media WHERE id=?1",[id],|r|r.get(0)).context("Evidence recording not found")?;
@@ -92,16 +97,18 @@ pub fn save(root:&Path,n:&Note)->Result<String> {
     let anchors=n.anchors.clone().or_else(|| (!exists).then(|| n.media_id.as_ref().map(|_|vec![Anchor{media_id:n.media_id.clone(),start:n.start,end:n.end,quote:n.quote.clone(),..Default::default()}]).unwrap_or_default()));
     if let Some(anchors)=&anchors {
         anyhow::ensure!(anchors.len()<=1000,"A note can contain at most 1,000 evidence passages");
-        for a in anchors { validate_anchor(&tx,a)?; }
+        for a in anchors { validate_anchor(&tx,a,&id)?; }
     }
     tx.execute("INSERT INTO notes(id,title,body,updated_at) VALUES (?1,?2,?3,strftime('%Y-%m-%dT%H:%M:%fZ','now')) ON CONFLICT(id) DO UPDATE SET title=excluded.title,body=excluded.body,updated_at=excluded.updated_at",params![id,n.title.trim(),n.body])?;
     if let Some(anchors)=&anchors {
         // Stable IDs keep map connections attached when passages are reordered.
         let previous:Vec<String>={let mut q=tx.prepare("SELECT id FROM note_anchors WHERE note_id=?1")?;let r=q.query_map([&id],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;r};
+        let titles:HashMap<String,Option<String>>={let mut q=tx.prepare("SELECT id,source_title FROM note_anchors WHERE note_id=?1")?;let r=q.query_map([&id],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;r};
         tx.execute("DELETE FROM note_anchors WHERE note_id=?1",[&id])?;
         for (position,a) in anchors.iter().enumerate() {
             let aid=a.id.clone().filter(|a|previous.contains(a)).unwrap_or_else(||uuid::Uuid::new_v4().to_string());
             tx.execute("INSERT INTO note_anchors(id,note_id,position,media_id,doc_id,start,end,quote,doc_start,doc_end) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![aid,id,position,a.media_id,a.doc_id,a.start,a.end,a.quote,a.doc_start,a.doc_end])?;
+            if a.media_id.is_none() && a.doc_id.is_none() { tx.execute("UPDATE note_anchors SET source_title=?1 WHERE id=?2",params![titles.get(&aid).and_then(|t|t.as_deref()),aid])?; }
         }
         // A removed passage's explicit links are removed too; ordinary note links survive.
         tx.execute("DELETE FROM links WHERE (source=?1 AND source_anchor<>'' AND source_anchor NOT IN (SELECT id FROM note_anchors WHERE note_id=?1)) OR (target=?1 AND target_anchor<>'' AND target_anchor NOT IN (SELECT id FROM note_anchors WHERE note_id=?1))",[&id])?;

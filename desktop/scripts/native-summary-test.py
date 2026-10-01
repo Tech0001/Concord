@@ -49,7 +49,7 @@ try:
     assert len(requests) == 2, requests
     with sqlite3.connect(root / 'library.db') as db:
         assert db.execute('SELECT status FROM summary_jobs ORDER BY rowid').fetchall() == [('cancelled',), ('complete',)]
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 12
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
     print(json.dumps({'root': str(root), **report}, indent=2))
 finally:
     release.set()

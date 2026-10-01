@@ -1,0 +1,81 @@
+const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const assert = (ok, message) => { if (!ok) throw Error(message); };
+const until = async (check, label) => {
+  for (let i = 0; i < 300; i++) { if (await check()) return; await sleep(100); }
+  throw Error(`Timed out: ${label}`);
+};
+const click = (text, scope = document) => {
+  const button = [...scope.querySelectorAll('button')].find(e => e.textContent.trim() === text);
+  assert(button && !button.disabled, `Available button: ${text}`); button.click();
+};
+const input = (label, value) => {
+  const element = document.querySelector(`[aria-label="${label}"]`);
+  assert(element, `Input: ${label}`);
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(element, value);
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+};
+const passed = []; window.__concordSmokePassed = passed;
+await until(() => document.querySelector('.setup'), 'fresh setup');
+await invoke('start_library'); await invoke('setup_save', { patch: { completed: true } });
+location.hash = '#/pipeline?tab=sources';
+await until(() => document.querySelector('.pipeline-sources'), 'sources');
+click('Add folder');
+await until(() => document.querySelector('[aria-label="Source address"]'), 'folder editor');
+assert(document.querySelector('[role=dialog]').textContent.includes('Recording folder'), 'Local folder selected directly');
+assert([...document.querySelectorAll('[role=dialog] button')].some(b => b.textContent.trim() === 'Browse'), 'Folder picker available');
+input('Source name', 'Native folder'); input('Source address', config.root + '/empty');
+await sleep(100); click('Save & scan folder');
+await until(() => !document.querySelector('[role=dialog]'), 'saved folder');
+await until(async () => (await invoke('pipeline_state')).sources[0]?.check_status === 'complete', 'initial scan starts automatically');
+assert((await invoke('overview')).media === 0, 'Empty folder creates no recordings');
+await until(() => { const b = document.querySelector('[aria-label="Edit Native folder source"]'); return b && !b.disabled; }, 'source card ready after scan');
+document.querySelector('[aria-label="Edit Native folder source"]').click();
+await until(() => document.querySelector('[aria-label="Source address"]'), 'edit folder');
+input('Source address', config.root + '/incoming'); await sleep(100); click('Save & scan folder');
+await until(async () => (await invoke('overview')).media === 2, 'recursive scan finds two WAV files');
+await until(() => document.querySelector('.pipeline-source')?.textContent.includes('2 recordings'), 'source results visible');
+// The window manager can tile the review window at phone width, where the sidebar is absent.
+if (document.querySelector('.sidebar')) {
+  document.querySelector('[aria-label="Open sidebar"]')?.click();
+  await until(() => document.querySelector('.nav-count')?.textContent === '2', 'library badge updates after first scan');
+  document.querySelector('[aria-label="Close sidebar"]')?.click();
+}
+const state = await invoke('pipeline_state');
+assert(!state.running && state.jobs.length === 2 && state.jobs.every(j => j.status === 'queued'), 'Queued without starting transcription');
+await until(() => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Scan folder' && !b.disabled), 'scan button ready');
+click('Scan folder');
+await until(async () => !(await invoke('pipeline_state')).checking, 'repeat scan complete');
+assert((await invoke('overview')).media === 2, 'Repeat scan does not duplicate files');
+passed.push('Add folder opens local form; Save & scan finds nested media; manual rescan deduplicates; queue stays paused');
+await invoke('add_document_root', { path: config.root + '/documents', label: 'Native docs' });
+await invoke('documents_sync');
+location.hash = '#/library';
+await until(() => document.querySelector('.setup-checklist')?.textContent.includes('2 recordings'), 'checklist recording count');
+await until(() => document.querySelector('.setup-checklist')?.textContent.includes('1 document in Docs'), 'checklist document count');
+click('Open Docs', document.querySelector('.setup-checklist'));
+await until(() => location.hash.startsWith('#/documents'), 'Docs link');
+location.hash = '#/library';
+await until(() => document.querySelector('.setup-checklist'), 'library checklist');
+click('View sources', document.querySelector('.setup-checklist'));
+await until(() => document.querySelector('.pipeline-sources'), 'source shortcut');
+passed.push('Checklist distinguishes actual recordings from documents and links to both destinations');
+const first = state.jobs[0].media_id;
+location.hash = '#/recording/' + encodeURIComponent(first);
+await until(() => document.querySelector('.player-actions [aria-label="More actions"]'), 'player');
+document.querySelector('.player-actions [aria-label="More actions"]').click();
+await until(() => document.querySelector('[role=menu]'), 'recording menu');
+click('Remove from library', document.querySelector('[role=menu]'));
+await until(() => document.querySelector('.recording-file-form'), 'remove dialog');
+assert(document.querySelector('.recording-file-form').textContent.includes('stay on disk'), 'File preservation explained');
+click('Remove from library', document.querySelector('.dialog-foot'));
+await until(() => location.hash === '#/library' && !document.querySelector('[role=dialog]'), 'returns to library after removal');
+assert((await invoke('overview')).media === 1, 'Only selected entry removed');
+await invoke('pipeline_check', { id: state.sources[0].id, full: false });
+await until(async () => !(await invoke('pipeline_state')).checking, 'scan after removal');
+assert((await invoke('overview')).media === 1, 'Removed entry stays removed during scan');
+assert((await invoke('pipeline_state')).jobs.length === 1, 'Removed recording pending job cleaned up');
+const restored = await invoke('import_media', { paths: [config.root + '/incoming/first.wav', config.root + '/incoming/nested/second.wav'], category: 'personal' });
+assert(restored === 1 && (await invoke('overview')).media === 2, 'Explicit file import can restore removed entry');
+passed.push('Remove from library works in player, removes pending work, survives rescan, and permits explicit re-import');
+return { passed, viewport: {width: innerWidth, height: innerHeight} };

@@ -53,7 +53,7 @@ export function RecordingsStep({ status, next, skip, back, detour }: StepProps) 
   const addSource = async (kind: "folder" | "youtube", name: string, address: string) => {
     const id = await api.pipelineSaveSource({ name, kind, url: address, enabled: true, diarize: true, includeShorts: false, category: target });
     await api.pipelineCheck(id);
-    add({ kind, title: name, path: address, meta: kind === "folder" ? "Queued as recordings are found" : "Videos queued for download", category: target, sourceId: id });
+    add({ kind, title: name, path: address, meta: "Scan started · see Sources for results", category: target, sourceId: id });
   };
   const addFiles = () =>
     run("files", async () => {
@@ -149,7 +149,7 @@ export function RecordingsStep({ status, next, skip, back, detour }: StepProps) 
             tools === false ? "Enable YouTube downloads in Settings first." : "Queues its videos to download and transcribe.",
             () => tools ? setYoutube(true) : navigate({ page: "settings", section: "youtube" }),
           )}
-          {tile("docs", "Documents folder", "PDF, Word and Markdown files, searchable in Docs.", () => void addDocuments())}
+          {tile("docs", "Documents folder", "Markdown and text files, searchable on the Docs page.", () => void addDocuments())}
         </div>
         <section className="setup-section" aria-label="Added">
           <span className="setup-label">
@@ -175,9 +175,13 @@ export function RecordingsStep({ status, next, skip, back, detour }: StepProps) 
             </div>
           ) : (
             <div className="setup-empty-added">
-              {existing ? `${existing} ${existing === 1 ? "source is" : "sources are"} already set up. Manage them in Pipeline › Sources.` : "Nothing added yet"}
+              {existing ? "Your folders and sources are already set up. View scan results below." : "Nothing added yet"}
             </div>
           )}
+          <div className="setup-source-actions">
+            {(status.sources.sources > 0 || added.some(item => item.sourceId)) && <Button size="sm" onClick={() => navigate({ page: "pipeline", tab: "sources" })}>View sources & scan results</Button>}
+            {(status.sources.documentFolders > 0 || added.some(item => item.kind === "docs")) && <Button size="sm" onClick={() => navigate({ page: "documents" })}>Open Docs</Button>}
+          </div>
         </section>
       </div>
       <SetupFoot
