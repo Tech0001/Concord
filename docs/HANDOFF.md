@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.21.1**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.22.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -10,12 +10,31 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
-## First-run setup (branch `feature/onboarding`, not yet merged or installed)
+## First-run setup (0.22.0 merged and installed)
 
 Built by Claude on October 1, 2026 at the user's request, from the approved design in
-`docs/superpowers/briefs/2026-10-01-codex-onboarding.md`. It is on the `feature/onboarding` branch,
-in the worktree `/home/pc/Documents/GitHub/Concord-onboarding`, cut from `rewrite/rust-tauri` at
-`d60bc63`. It replaces the 0.21.1 Welcome screen (`library/Welcome.tsx` is deleted).
+`docs/superpowers/briefs/2026-10-01-codex-onboarding.md`. The four commits on `feature/onboarding` through `5b32c5c` were fast-forwarded into
+`rewrite/rust-tauri` by Codex at the user's request. The original worktree remains at
+`/home/pc/Documents/GitHub/Concord-onboarding`. This replaces the 0.21.1 Welcome screen
+(`library/Welcome.tsx` is deleted).
+
+**Release integration and installation (Codex):**
+- Published locally as **0.22.0**, installed at `~/.local/opt/concord-next/Concord-Next.AppImage`
+  and launched with the default data root. No remote push.
+- Kept the user's new-library-first decision: Start a new library is the first, accented option;
+  generic import and the detected previous-library card are secondary. The legacy-card dismiss
+  action now says Dismiss rather than suggesting it starts a new library.
+- 150 Rust tests passed (7 opt-in integration tests ignored), 58 TypeScript tests passed,
+  Clippy all-targets with `-D warnings` passed, and the frontend/release bundle built successfully.
+  AppImage: 286.67 MiB; deb: 195.48 MiB. Vite retains its advisory about large JS chunks.
+- Inspected the actual installed WebKitGTK window through accessibility: setup opened on Library,
+  with Start a new library followed by Import a library. No setup choice was clicked; the user's
+  empty library remains empty. Native startup log is clean. This release check did not repeat
+  Claude's full download/pause/resume exercise described below.
+- Logs: `/tmp/concord-022-{rust-tests,ts-tests,clippy,package}.log`,
+  `/tmp/concord-next-022-installed.log`, and `/tmp/concord-022-installed-ui.json`.
+- Database backup before installing: `/home/pc/.local/share/concord-next/backups/before-0.22.0-20261001-114256.db`.
+- Full Electron parity remains unfinished; the outstanding items under 0.21.0 still apply.
 
 - **Flow.** A fresh library opens `#/setup`, a full-window flow with a step rail. On windows narrower
   than 960px the rail becomes a top bar with progress segments.
@@ -55,7 +74,7 @@ in the worktree `/home/pc/Documents/GitHub/Concord-onboarding`, cut from `rewrit
 - **The user's previous library** (`~/.local/share/concord`) has the two Nemotron models but no
   TitaNet. Setup reuses the two and downloads only TitaNet (101.6 MB).
 - **Verification.**
-  - 141 Rust tests and 58 TS tests pass, and Clippy reports no warnings.
+  - 150 Rust tests and 58 TS tests pass, and Clippy reports no warnings.
   - Mock screens: `?mock&setup=fresh|legacy|installing|failed|checklist|connected`, plus
     `preflight=lowdisk|offline|noffmpeg`.
   - The real WebKitGTK window was exercised with the debug smoke runner

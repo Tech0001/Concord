@@ -247,6 +247,7 @@
 .setup-option:hover:not(:disabled) {
   border-color: color-mix(in oklab, var(--primary) 45%, var(--border));
 }
+.setup-option.is-primary,
 .setup-option[aria-checked="true"] {
   background: var(--sidebar-accent);
   border-color: var(--primary);

@@ -72,6 +72,22 @@ export function LibraryStep({ status, next }: StepProps) {
           Concord keeps your recordings, transcripts, speakers and notes on this computer. Setup takes a few minutes, and only this first
           choice is required.
         </SetupHead>
+        <div className="setup-grid">
+          <button type="button" className="setup-option is-primary" disabled={!!busy} onClick={() => void startNew()}>
+            <span className="setup-option-icon">{busy === "new" ? <LoaderCircle size={19} className="spin" aria-hidden /> : <Plus size={19} aria-hidden />}</span>
+            <span className="setup-option-text">
+              <span className="setup-option-title">Start a new library</span>
+              <span className="setup-option-desc">An empty library. You'll add recordings in a moment.</span>
+            </span>
+          </button>
+          <button type="button" className="setup-option" disabled={!!busy} onClick={() => void run("pick", () => importLegacy())}>
+            <span className="setup-option-icon">{busy === "pick" ? <LoaderCircle size={19} className="spin" aria-hidden /> : <FolderOpen size={19} aria-hidden />}</span>
+            <span className="setup-option-text">
+              <span className="setup-option-title">Import a library…</span>
+              <span className="setup-option-desc">From another computer or a backup. Recordings, speaker profiles and notes come across.</span>
+            </span>
+          </button>
+        </div>
         {legacy && (
           <section className="setup-callout" aria-label="Previous library found">
             <span className="setup-callout-icon">
@@ -90,7 +106,7 @@ export function LibraryStep({ status, next }: StepProps) {
               </div>
               <div className="setup-actions">
                 <Button
-                  variant="primary"
+                  variant="secondary"
                   className="setup-cta"
                   icon={busy === "legacy" ? LoaderCircle : undefined}
                   disabled={!!busy}
@@ -99,28 +115,13 @@ export function LibraryStep({ status, next }: StepProps) {
                   {busy === "legacy" ? "Importing…" : "Import this library"}
                 </Button>
                 <Button variant="ghost" className="setup-cta" disabled={!!busy} onClick={() => setDismissed(true)}>
-                  Start fresh instead
+                  Dismiss
                 </Button>
               </div>
             </div>
           </section>
         )}
-        <div className="setup-grid">
-          <button type="button" className="setup-option" disabled={!!busy} onClick={() => void startNew()}>
-            <span className="setup-option-icon">{busy === "new" ? <LoaderCircle size={19} className="spin" aria-hidden /> : <Plus size={19} aria-hidden />}</span>
-            <span className="setup-option-text">
-              <span className="setup-option-title">Start a new library</span>
-              <span className="setup-option-desc">An empty library. You'll add recordings in a moment.</span>
-            </span>
-          </button>
-          <button type="button" className="setup-option" disabled={!!busy} onClick={() => void run("pick", () => importLegacy())}>
-            <span className="setup-option-icon">{busy === "pick" ? <LoaderCircle size={19} className="spin" aria-hidden /> : <FolderOpen size={19} aria-hidden />}</span>
-            <span className="setup-option-text">
-              <span className="setup-option-title">Import a library…</span>
-              <span className="setup-option-desc">From another computer or a backup. Recordings, speaker profiles and notes come across.</span>
-            </span>
-          </button>
-        </div>
+
       </div>
       <SetupFoot note={storage} />
     </>
