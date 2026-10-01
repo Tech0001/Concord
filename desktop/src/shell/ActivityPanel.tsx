@@ -1,3 +1,4 @@
+import { AskHelp } from "../ai/ConcordHelp.tsx";
 import { ArchiveWorkspace } from "../health/ArchiveWorkspace.tsx";
 import { useEffect, useState } from "react";
 import { Activity, LoaderCircle, RefreshCw, Square, X } from "lucide-react";
@@ -120,6 +121,7 @@ export function ActivityPanel({
         </small>
       )}
       {j.message && <p className="job-message">{j.message}</p>}
+      {["failed","interrupted","retry"].includes(j.status) && <AskHelp topic="queue" error={j.message} onNavigate={()=>onOpenChange(false)} />}
       {j.status === "running" ? (
         <Button
           size="sm"

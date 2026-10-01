@@ -1,3 +1,4 @@
+export type ChatContext = "archive" | "help" | "none";
 export type Provider = {
   enabled: boolean;
   kind: "builtin" | "local" | "openrouter" | "custom" | "chatgpt" | "codex" | "claude-code";
@@ -74,6 +75,7 @@ export type Conversation = {
   messages: number;
 };
 export type ChatMessage = {
+  context_kind?: ChatContext;
   id: string;
   role: "user" | "assistant";
   content: string;

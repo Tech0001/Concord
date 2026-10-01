@@ -12,6 +12,7 @@ import { useToast } from "../ui/Toasts.tsx";
 const DocumentContext = createContext<{
   id?: string;
   onDocument?: (id: string) => void;
+  appLinks?: Record<string, () => void>;
 }>({});
 
 /**
@@ -25,10 +26,12 @@ export function Markdown({
   documentId,
   onDocument,
   omitTitle,
+  appLinks,
 }: {
   source: string;
   documentId?: string;
   onDocument?: (id: string) => void;
+  appLinks?: Record<string, () => void>;
   omitTitle?: string;
 }) {
   const blocks = parseBlocks(stripFrontmatter(stripExcalidrawScene(source)));
@@ -39,7 +42,7 @@ export function Markdown({
   )
     blocks.shift();
   return (
-    <DocumentContext.Provider value={{ id: documentId, onDocument }}>
+    <DocumentContext.Provider value={{ id: documentId, onDocument, appLinks }}>
       <div className="md">
         {blocks.map((block, i) => renderBlock(block, i))}
       </div>
@@ -241,8 +244,9 @@ function MarkdownLink({
   href: string;
   children: ReactNode;
 }) {
-  const { id, onDocument } = useContext(DocumentContext);
+  const { id, onDocument, appLinks } = useContext(DocumentContext);
   const toast = useToast();
+  if (appLinks && Object.hasOwn(appLinks, href)) return <button type="button" className="md-link" onClick={appLinks[href]}>{children}</button>;
   if (/^https?:\/\//i.test(href))
     return (
       <a

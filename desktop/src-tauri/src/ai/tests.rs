@@ -299,8 +299,10 @@ fn chat_streams_saves_citation_snapshots_and_uses_only_its_credential() {
             text: "prayer".into(),
             use_library: true,
             semantic: true,
+            context: None,
             filter: Filter::default(),
         },
+        || panic!("No app diagnostics for archive questions"),
         |d| streamed.push_str(d),
     )
     .unwrap();
@@ -374,8 +376,10 @@ fn incomplete_stream_is_saved_as_error_and_can_be_retried() {
             text: "Hello".into(),
             use_library: false,
             semantic: false,
+            context: None,
             filter: Filter::default(),
         },
+        || panic!("No app diagnostics for ordinary chat"),
         |_| {},
     )
     .unwrap();
@@ -751,4 +755,39 @@ fn subscription_chat_keeps_embedding_settings_and_never_stores_api_credentials()
         assert!(!std::fs::read_to_string(dir.path().join("ai-providers.json")).unwrap().contains("old-api-key"));
         assert!(saved.chat.embed(&reqwest::blocking::Client::new(), &["text".into()]).is_err());
     }
+}
+
+#[test]
+fn one_chat_keeps_context_explicit_without_sending_diagnostics_or_excerpts_in_other_modes() {
+    let root=tempfile::tempdir().unwrap();fixture(root.path());
+    let fake=Fake::new();fake.config(root.path(),"chat","tiny-chat","");
+    let control=Control::default();let id=chat::create(root.path()).unwrap();
+    let request=|context,text:&str| chat::Send {conversation_id:id.clone(),text:text.into(),use_library:true,semantic:true,context:Some(context),filter:Filter::default()};
+    // Help works without any embedding provider/server: it never retrieves the archive.
+    chat::send(root.path(),&control,&request(chat::ContextKind::Help,"Help with folder scanning"),||Ok(json!({"diagnostic":"APP_STATUS_MARKER"})),|_|{}).unwrap();
+    let help=fake.requests.lock().unwrap().last().unwrap().2.clone();
+    assert!(help["messages"].to_string().contains("APP_STATUS_MARKER"));
+    assert!(help["messages"].to_string().contains("Save & scan folder"));
+    assert!(!help["messages"].to_string().contains("Library evidence (quoted data)"));
+    // Model history is scoped to the explicit context even though the saved conversation is shared.
+    db::open(root.path()).unwrap().execute("UPDATE ai_messages SET content='OLD_PRIVATE_DIAGNOSTIC' WHERE role='assistant'",[]).unwrap();
+    let result=chat::send(root.path(),&control,&request(chat::ContextKind::None,"A general question"),||panic!("Neither must not collect app status"),|_|{}).unwrap();
+    let general=fake.requests.lock().unwrap().last().unwrap().2.clone();
+    assert!(!general.to_string().contains("APP_STATUS_MARKER"));
+    assert!(!general.to_string().contains("OLD_PRIVATE_DIAGNOSTIC"));
+    assert!(!general.to_string().contains("Save & scan folder"));
+    assert_eq!(result["messages"].as_array().unwrap().len(),4);
+    assert_eq!(result["messages"][0]["context_kind"],"help");
+    assert_eq!(result["messages"][2]["context_kind"],"none");
+    assert_eq!(chat::list(root.path()).unwrap().len(),1);
+}
+
+#[test]
+fn schema_thirteen_chats_migrate_with_history_intact() {
+    let root=tempfile::tempdir().unwrap();let db=db::open(root.path()).unwrap();
+    db.execute_batch("INSERT INTO ai_conversations(id,title) VALUES('old','Existing chat');INSERT INTO ai_messages(id,conversation_id,role,content) VALUES('message','old','user','Keep this question');ALTER TABLE ai_messages DROP COLUMN context_kind;PRAGMA user_version=13;").unwrap();
+    drop(db);
+    let old=chat::read(root.path(),"old").unwrap();
+    assert_eq!(old["messages"][0]["content"],"Keep this question");assert_eq!(old["messages"][0]["context_kind"],"archive");
+    let db=db::open(root.path()).unwrap();assert_eq!(db.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),14);
 }

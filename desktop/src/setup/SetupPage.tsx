@@ -1,3 +1,4 @@
+import { AskHelp } from "../ai/ConcordHelp.tsx";
 import { useEffect, useRef } from "react";
 import { Check, ChevronLeft, CircleAlert, LoaderCircle, Minus } from "lucide-react";
 import icon from "../../../assets/brand/concord-icon.svg";
@@ -153,6 +154,7 @@ export function SetupPage({ route }: { route: SetupRoute }) {
           </div>
           <Segments states={NUMBERED.map((step) => stepState(setup, step, current))} />
         </div>
+        <div className="setup-help"><AskHelp topic={current} error={current === "speech" && setup.speech.setup.status === "failed" ? setup.speech.setup.message : undefined} /></div>
         {current === "library" ? (
           <LibraryStep {...props} />
         ) : current === "speech" ? (

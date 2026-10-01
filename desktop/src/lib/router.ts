@@ -24,7 +24,7 @@ export type Route =
   | { page: "notes" }
   | { page: "map" }
   | { page: "pipeline"; tab?: PipelineTab }
-  | { page: "ai" }
+  | { page: "ai"; context?: "archive" | "help" | "none"; question?: string }
   | { page: "settings"; section?: SettingsSection }
   | { page: "setup"; step?: SetupStep; returnTo?: (typeof RETURNS)[number]; chat?: ChatChoice }
   | { page: "tools"; tab?: "extract" | "record"; source?: string };
@@ -46,7 +46,7 @@ export function parseRoute(hash: string): Route {
       return params.has("t") && Number.isFinite(at) && at >= 0 ? { page: "recording", id, at } : { page: "recording", id };
     }
     case "tools":
-      return {page:"tools",tab:params.get("tab")==="record"?"record":"extract",source:params.get("source")??undefined};
+      return defined({page:"tools",tab:params.get("tab")==="record"?"record":"extract",source:params.get("source")??undefined});
     case "search":
       return { page: "search", q: params.get("q") ?? "" };
     case "documents":
@@ -64,9 +64,10 @@ export function parseRoute(hash: string): Route {
         returnTo: pick(RETURNS, params.get("return")),
         chat: pick(CHATS, params.get("chat")),
       });
+    case "ai":
+      return defined({page:"ai",context:pick(["archive","help","none"] as const,params.get("context")),question:params.get("question")?.slice(0,4000)||undefined});
     case "notes":
     case "map":
-    case "ai":
       return { page: head };
     default:
       return { page: "library" };
@@ -79,6 +80,9 @@ export function formatRoute(route: Route): string {
       return `#/recording/${encodeURIComponent(route.id)}${route.at != null ? `?t=${Math.round(route.at * 10) / 10}` : ""}`;
     case "tools": {
       const params=new URLSearchParams();if(route.tab)params.set("tab",route.tab);if(route.source)params.set("source",route.source);return "#/tools"+(params.size?"?"+params:"");
+    }
+    case "ai": {
+      const params=new URLSearchParams();if(route.context)params.set("context",route.context);if(route.question)params.set("question",route.question);return "#/ai"+(params.size?`?${params}`:"");
     }
     case "search":
       return route.q ? `#/search?${new URLSearchParams({ q: route.q })}` : "#/search";

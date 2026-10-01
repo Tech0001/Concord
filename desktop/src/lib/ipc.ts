@@ -5,7 +5,7 @@ import type { AutomaticAi, SourceInput, PipelineState, PipelineConfig, Batch, Ca
 import type { DocumentsState, DocumentSync } from "../documents/types.ts";
 import type { ArchiveStatus, Audit, BackupValidation, LogEntry, MaintenanceJob } from "../health/types.ts";
 import type { SetupStatus, SetupProgress, Preflight, LocalServer, ModelDownload } from "../setup/types.ts";
-import type { ChatGPTStatus, AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, SummaryState } from "../ai/types.ts";
+import type { ChatContext, ChatGPTStatus, AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, SummaryState } from "../ai/types.ts";
 import { invoke, isTauri, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
@@ -165,11 +165,13 @@ export const api = {
   aiClearIndex: () => call<void>("ai_clear_index"),
   researchSearch: (query: string, semantic: boolean, filter: SearchFilter) => call<ResearchHit[]>("research_search", { query, semantic, filter }),
   searchFilters: () => call<FilterOptions>("search_filters"),
+  aiHelpContext: () => call<Record<string, unknown>>("ai_help_context"),
+  aiHelpPrompt: (topic:string,error?:string) => call<string>("ai_help_prompt",{topic,error:error??null}),
   aiConversations: () => call<Conversation[]>("ai_conversations"),
   aiCreateChat: () => call<string>("ai_create_chat"),
   aiReadChat: (id: string) => call<ChatDetail>("ai_read_chat", { id }),
   aiEditChat: (id: string, options: { title?: string; pinned?: boolean; remove?: boolean }) => call<void>("ai_edit_chat", { id, title: options.title ?? null, pinned: options.pinned ?? null, remove: options.remove ?? false }),
-  aiSend: (request: { conversationId: string; text: string; useLibrary: boolean; semantic: boolean; filter: SearchFilter }) => call<ChatDetail>("ai_send", { request }),
+  aiSend: (request: { conversationId: string; text: string; useLibrary: boolean; semantic: boolean; context?: ChatContext; filter: SearchFilter }) => call<ChatDetail>("ai_send", { request }),
   aiCancelChat: (id: string) => call<void>("ai_cancel_chat", { id }),
   aiStarMessage: (id: string, starred: boolean) => call<void>("ai_star_message", { id, starred }),
   aiSummaryState: (id:string) => call<SummaryState>("ai_summary_state",{id}),

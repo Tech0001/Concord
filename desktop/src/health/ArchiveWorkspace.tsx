@@ -1,3 +1,4 @@
+import { AskHelp } from "../ai/ConcordHelp.tsx";
 import { SetupChecklist } from "../setup/SetupChecklist.tsx";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
@@ -82,10 +83,12 @@ function CoverageCard({
   );
 }
 function Jobs({
+  onHelp,
   jobs,
   aiJobs,
   onChange,
 }: {
+  onHelp: () => void;
   jobs: MaintenanceJob[];
   aiJobs: MaintenanceJob[];
   onChange: () => void;
@@ -119,6 +122,7 @@ function Jobs({
       <p>
         {j.done} / {j.total} · {j.message}
       </p>
+      {["failed","interrupted"].includes(j.status) && <AskHelp topic={j.type === "index" ? "index" : "health"} error={j.message} onNavigate={onHelp} />}
       {j.status === "running" && (
         <Button
           size="sm"
@@ -402,7 +406,7 @@ export function ArchiveWorkspace({
               </span>
               {linked("pipeline", "Open Pipeline")}
             </div>
-            <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />
+            <Jobs {...jobs} onHelp={onClose} onChange={() => void reload().catch(toast.error)} />
             <div className="archive-coverage-grid">
               <CoverageCard
                 title="Transcripts"
@@ -628,7 +632,7 @@ export function ArchiveWorkspace({
                   </section>
                 ),
               )}
-            <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />
+            <Jobs {...jobs} onHelp={onClose} onChange={() => void reload().catch(toast.error)} />
             <section className="archive-section">
               <h3>
                 <DatabaseBackup size={16} /> Backup and restore
@@ -755,7 +759,7 @@ export function ArchiveWorkspace({
         {tab === "activity" && (
           <>
             {activities}
-            <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />
+            <Jobs {...jobs} onHelp={onClose} onChange={() => void reload().catch(toast.error)} />
           </>
         )}
         {tab === "terminal" && (

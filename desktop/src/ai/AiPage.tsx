@@ -1,3 +1,5 @@
+import { HelpContext } from "./ConcordHelp.tsx";
+import { HELP_LINKS, PENDING_HELP } from "./help-links.ts";
 import { ChatGPTUsage } from "./ChatGPTSettings.tsx";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -11,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "../lib/ipc.ts";
+import { COARSE, useMediaQuery } from "../lib/media-query.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { useApp } from "../shell/AppContext.tsx";
 import { Button, IconButton } from "../ui/Button.tsx";
@@ -24,6 +27,7 @@ import { SearchFilters, SearchPanel, SourceHit } from "./SearchPanel.tsx";
 import {
   chatReady,
   EMPTY_FILTER,
+  type ChatContext,
   type AiConfig,
   type ChatDetail,
   type Conversation,
@@ -45,8 +49,8 @@ function ConnectChat() {
   return (
     <Empty
       icon={MessageCircle}
-      title="Ask questions about your archive"
-      text="Connect a chat provider to get answers quoted from your recordings, each linked to the moment it was said."
+      title="Connect chat"
+      text="Ask about your recordings, get help setting up Concord, or have a general conversation. Choose what to share with each message."
       action={
         <div className="setup-connect-options">
           <Button onClick={() => go("codex")}>Use Codex<small>ChatGPT subscription</small></Button>
@@ -69,23 +73,34 @@ function ConnectChat() {
     />
   );
 }
-function Chat({ config }: { config: AiConfig }) {
-  const { openNote, category } = useApp();
+function Chat({ config, initialContext, initialQuestion }: { config: AiConfig; initialContext?: ChatContext; initialQuestion?: string }) {
+  const { openNote, category, navigate, openActivity } = useApp();
+  const appLinks = Object.fromEntries(Object.entries(HELP_LINKS).map(([href,route])=>[href,()=>route === "health" ? openActivity() : navigate(route)]));
   const toast = useToast();
   const [list, setList] = useState<Conversation[]>([]);
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(() => sessionStorage.getItem("concord.activeChat") ?? "");
   const [detail, setDetail] = useState<ChatDetail>();
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [stream, setStream] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
   const [remove, setRemove] = useState(false);
-  const [useLibrary, setUseLibrary] = useState(true);
+  const [context, setContext] = useState<ChatContext>(initialContext ?? "archive");
+  const useLibrary = context === "archive";
+  const touchKeyboard = useMediaQuery(COARSE);
+  const received = useRef<string | undefined>(undefined);
   const [semantic, setSemantic] = useState(true);
   const [filter, setFilter] = useState<SearchFilter>({ ...EMPTY_FILTER });
   const [onlyStarred, setOnlyStarred] = useState(false);
   const current = useRef("");
-  const reload = () => api.aiConversations().then(setList).catch(toast.error);
+  const reload = () => api.aiConversations().then(rows => {
+    setList(rows);
+    setSelected(id => id === selected && id && !rows.some(row => row.id === id) ? "" : id);
+  }).catch(toast.error);
+  useEffect(() => {
+    if (selected) sessionStorage.setItem("concord.activeChat", selected);
+    else sessionStorage.removeItem("concord.activeChat");
+  }, [selected]);
   useEffect(() => {
     void reload();
   }, []);
@@ -135,6 +150,14 @@ function Chat({ config }: { config: AiConfig }) {
       toast.error(e);
     }
   };
+  useEffect(() => {
+    if (busy || !initialQuestion || received.current === initialQuestion) return;
+    received.current = initialQuestion;
+    setQuestion(initialQuestion); setContext(initialContext ?? "help");
+    sessionStorage.removeItem(PENDING_HELP);
+    navigate({page:"ai"}, {replace:true});
+    if (!selected) void create();
+  }, [initialQuestion, initialContext, busy]);
   const send = async () => {
     if (!selected || !question.trim()) return;
     const text = question;
@@ -150,6 +173,7 @@ function Chat({ config }: { config: AiConfig }) {
             {
               id: "pending",
               role: "user",
+              context_kind: context,
               content: text,
               model: "",
               sources: [],
@@ -165,6 +189,7 @@ function Chat({ config }: { config: AiConfig }) {
         conversationId: selected,
         text,
         useLibrary,
+        context,
         semantic,
         filter: { ...filter, category },
       });
@@ -222,7 +247,7 @@ function Chat({ config }: { config: AiConfig }) {
           <Empty
             icon={MessageCircle}
             title="Ask your library"
-            text="Start a conversation. Answers can cite passages from recordings, documents and notes."
+            text="Use one conversation for research, help with Concord, or general questions. Choose what to include with each message."
             action={
               <Button variant="primary" onClick={() => void create()}>
                 New conversation
@@ -283,8 +308,9 @@ function Chat({ config }: { config: AiConfig }) {
                         {m.role === "user" ? "You" : "Concord AI"}
                       </strong>
                       {m.model && <small>{m.model}</small>}
+                      <small>{m.context_kind === "help" ? "Concord help" : m.context_kind === "none" ? "Neither" : "My archive"}</small>
                     </header>
-                    <Markdown source={m.content} />
+                    <Markdown source={m.content} appLinks={m.context_kind === "help" ? appLinks : undefined} />
                     {m.id !== "pending" && (
                       <div className="ai-actions">
                         <IconButton
@@ -357,9 +383,9 @@ function Chat({ config }: { config: AiConfig }) {
                   aria-live="polite"
                 >
                   <strong>Concord AI</strong>
-                  <Markdown
+                  <Markdown appLinks={context === "help" ? appLinks : undefined}
                     source={
-                      stream || "Finding sources and preparing a response…"
+                      stream || (context === "help" ? "Checking app status and preparing guidance…" : useLibrary ? "Finding sources and preparing a response…" : "Preparing a response…")
                     }
                   />
                 </article>
@@ -373,15 +399,10 @@ function Chat({ config }: { config: AiConfig }) {
               }}
             >
               <div className="ai-actions">
-                <label className="check-label">
-                  <input
-                    type="checkbox"
-                    checked={useLibrary}
-                    disabled={busy}
-                    onChange={(e) => setUseLibrary(e.target.checked)}
-                  />{" "}
-                  Use library sources
-                </label>
+                <fieldset className="chat-context-picker" disabled={busy}>
+                  <legend>What to use for this message</legend>
+                  {([['archive','My archive'],['help','Concord help'],['none','Neither']] as const).map(([value,label])=><label key={value}><input type="radio" name="chat-context" value={value} checked={context===value} onChange={()=>setContext(value)} />{label}</label>)}
+                </fieldset>
                 {useLibrary && (
                   <label className="check-label">
                     <input
@@ -394,6 +415,8 @@ function Chat({ config }: { config: AiConfig }) {
                   </label>
                 )}
               </div>
+              {context === "help" && <HelpContext />}
+              <small className="muted">History stays together here. The AI receives earlier messages with the same context choice.</small>
               {useLibrary && (
                 <SearchFilters filter={filter} onChange={setFilter} />
               )}
@@ -403,13 +426,20 @@ function Chat({ config }: { config: AiConfig }) {
                 value={question}
                 disabled={busy}
                 onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && !touchKeyboard && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
+                    e.preventDefault();
+                    if (!busy) e.currentTarget.form?.requestSubmit();
+                  }
+                }}
                 rows={3}
               />
+              {!touchKeyboard && <small className="muted">Enter to send · Shift+Enter for a new line</small>}
               <div className="ai-actions">
                 <small className="muted">
                   {config.chat.local
                     ? "Chat runs on this computer."
-                    : `Messages${useLibrary ? " and matching excerpts" : ""} go to ${config.chat.kind === "openrouter" ? "OpenRouter" : config.chat.kind === "chatgpt" ? "OpenAI" : "your chat provider"}.`}
+                    : `Messages${useLibrary ? " and matching excerpts" : context === "help" ? ", setup status and error categories" : ""} go to ${config.chat.kind === "openrouter" ? "OpenRouter" : config.chat.kind === "chatgpt" ? "OpenAI" : "your chat provider"}.`}
                 </small>
                 {config.chat.kind === "chatgpt" && <ChatGPTUsage/>}
                 {busy ? (
@@ -448,10 +478,13 @@ function Chat({ config }: { config: AiConfig }) {
   );
 }
 export function AiPage() {
-  const { navigate } = useApp();
+  const { navigate, route } = useApp();
   const toast = useToast();
   const [config, setConfig] = useState<AiConfig>();
-  const [tab, setTab] = useState<"semantic" | "chat">("semantic");
+  const intent = route.page === "ai" ? route : undefined;
+  const initialQuestion = intent?.question || sessionStorage.getItem(PENDING_HELP) || undefined;
+  const [tab, setTab] = useState<"semantic" | "chat">(intent?.context || initialQuestion ? "chat" : "semantic");
+  useEffect(()=>{if(intent?.context || initialQuestion)setTab("chat");},[intent?.context,initialQuestion]);
   useEffect(() => {
     api.aiConfig().then(setConfig).catch(toast.error);
   }, [toast]);
@@ -463,7 +496,7 @@ export function AiPage() {
         actions={
           <Button
             icon={Settings2}
-            onClick={() => navigate({ page: "settings" })}
+            onClick={() => navigate({ page: "settings", section: "ai" })}
           >
             AI settings
           </Button>
@@ -502,7 +535,7 @@ export function AiPage() {
       ) : !ready ? (
         config && <ConnectChat />
       ) : (
-        config && <Chat config={config} />
+        config && <Chat config={config} initialContext={intent?.context ?? (initialQuestion ? "help" : undefined)} initialQuestion={initialQuestion} />
       )}
     </div>
   );

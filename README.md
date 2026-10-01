@@ -65,6 +65,14 @@ selected source excerpts go to its provider; subscription limits and extra-usage
 These subscriptions do not supply embeddings. See [Codex non-interactive mode](https://developers.openai.com/codex/noninteractive)
 and [Claude Code integrations](https://code.claude.com/docs/en/legal-and-compliance).
 
+Chat uses one saved conversation with an explicit context choice for each message:
+**My archive**, **Concord help**, or **Neither**. Help includes the installed version’s guide
+and filtered setup/queue diagnostics, with a local preview before sending. It omits credentials,
+file paths, source names, raw logs and recording/document contents. Earlier messages are sent
+only within the same context choice. Setup steps, sources and failed jobs offer **Ask for help**;
+the question is prefilled, never sent automatically. Help links open the relevant screen and do
+not execute operations or change settings.
+
 Chat also supports **Continue
 with ChatGPT**: choose ChatGPT in Settings → AI providers, authorize Concord, load the
 account’s models, select one and save. ChatGPT plan eligibility and usage limits are controlled

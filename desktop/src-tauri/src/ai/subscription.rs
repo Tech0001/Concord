@@ -226,7 +226,7 @@ fn command(provider: &Provider) -> Result<Command> {
             cmd.args(["-c", value]);
         }
     } else {
-        cmd.args(["--print", "--safe-mode", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--no-chrome", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--system-prompt", "Answer the supplied archive conversation. Follow its system instructions. Use only supplied excerpts; preserve citation markers. Do not use tools or access files."]);
+        cmd.args(["--print", "--safe-mode", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--no-chrome", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--system-prompt", "Answer the supplied archive conversation. Follow its system instructions. Use the supplied product guide or excerpts when present; preserve citation markers and navigation links. Do not use tools or access files."]);
     }
     if provider.model != "default" {
         cmd.args(["--model", &provider.model]);

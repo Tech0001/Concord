@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.26.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.27.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,52 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Shared chat with explicit app help (0.27.0)
+
+The user chose **one chat and one saved history**, with **My archive · Concord help · Neither**
+chosen for each message. Do not split Help into a separate page, chat history or automatically
+inferred mode. Semantic search remains on AI per the earlier product decision. A later pasted
+UI proposal recommends a global Ask panel, a narrower thread, a docked composer, better citation
+chips and a This recording scope; those are future UI work, not part of this delivery.
+
+Help adds a compiled product guide (`src-tauri/src/ai/help-guide.md`) and a server-collected,
+explicitly allowlisted status snapshot (`ai/help.rs`). It reuses onboarding readiness, then
+includes counts, device/readiness flags, pipeline state, provider kinds/models and generalized
+error categories. It excludes keys/account IDs, URLs/paths, source names, raw errors/logs and
+recording/document/note text. The Help composer previews the local snapshot; a fresh one is
+collected only for a Help send. Prompts from failed jobs use an error category, never raw error
+text. Unknown failures ask the user for the visible error with private details removed.
+
+Schema **14** adds `ai_messages.context_kind`. Both user and assistant turns retain context;
+old messages default to archive. The screen shows all messages in one conversation, while
+provider requests include only history with the selected context. This prevents earlier app
+status from being forwarded in archive/general requests, and archive excerpts from reaching
+help requests. Backups accept schema 14. The active conversation is remembered within the
+window session so following a help link and returning to chat preserves the thread.
+
+**Ask for help** appears on setup steps, source cards, failed/retrying processing jobs and failed
+maintenance/index jobs. It prefills the existing chat, selects Help and waits for Send. Intent
+survives connecting a provider. Consumed prefills are removed from navigation so switching tabs
+does not insert the question again. The Markdown renderer accepts an exact help-only navigation
+allowlist; no generated link can run an operation or change settings. Suggested actions still
+happen through the existing controls. Help works with all existing chat providers, including
+Codex and Claude Code subscriptions; it requires no embedding model.
+
+On desktop, **Enter sends; Shift+Enter inserts a newline**. IME composition Enter is left to the
+input method. Touch-first devices keep normal multiline input and the Send button.
+
+Validation: 161 Rust tests (9 existing opt-in tests ignored), 58 interface tests, clean Clippy.
+`desktop/scripts/native-help-smoke.js` plus `native-help-provider.py` exercise a real WebKitGTK
+window with a fresh scratch library and a synthetic local provider. Requests are checked for
+context separation and private-field omission. The flow covers setup/connection/prefill, three
+contexts in one history, source citations, answer navigation, a source help shortcut, and no
+implicit scanning/queue start. Keyboard behavior is included. Final native scratch root: `/tmp/concord-help-native-rcgumblv`
+(896×686 window). The same flow also passed at 406×353. No real archive content is used.
+Logs are `/tmp/concord-027-{rust,ts,clippy,native-build,native-test,package}.log`.
+Installed and byte-verified the 0.27.0 AppImage at `~/.local/opt/concord-next/Concord-Next.AppImage`.
+The current app window was left open; reopen to use the update. Verified SQLite backup:
+`~/.local/share/concord-next/backups/before-0.27.0-20261001-154234.db`.
 
 ## GPU semantic indexing and subscription chat (0.26.0)
 

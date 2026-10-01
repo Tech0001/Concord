@@ -1,3 +1,4 @@
+import { AskHelp } from "../ai/ConcordHelp.tsx";
 import type { PipelineTab } from "../lib/router.ts";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowUpRight, Check, Clock, ListOrdered, LoaderCircle, Pause, Play, RefreshCw, Settings2, Square, Rss, X } from "lucide-react";
@@ -56,6 +57,7 @@ export function PipelinePage({ tab: linked }: { tab?: PipelineTab }) {
       <button className="pipeline-job-title" onClick={() => navigate({ page: "recording", id: j.media_id })}>{j.title}<ArrowUpRight size={13}/></button>
       <small>{j.channel} · {j.kind === "download" && !j.path ? "Download + " : ""}Nemotron 3.5 · {j.device === "auto" ? "Automatic device" : j.device}{j.attempts > 0 && ` · Attempt ${j.attempts}`}</small>
       <p>{j.message}</p>
+      {["failed", "retry", "interrupted"].includes(j.status) && <AskHelp topic="queue" error={j.message} />}
       {["retry", "waiting_live"].includes(j.status) && <small>Next attempt {new Date(j.retry_at * 1000).toLocaleString()}</small>}
     </div>
     <div className="pipeline-job-actions">

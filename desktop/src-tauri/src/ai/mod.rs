@@ -1,6 +1,7 @@
 pub mod subscription;
 pub mod automation;
 pub mod builtin;
+pub mod help;
 pub mod chat;
 pub mod chatgpt;
 pub mod config;

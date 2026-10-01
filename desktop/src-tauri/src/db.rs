@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 13 {
+    if version >= 14 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -119,7 +119,11 @@ fn migrate(db: &mut Connection) -> Result<()> {
     crate::ai::summary::migrate(&tx)?;
     crate::ai::automation::migrate(&tx)?;
     if version < 13 { crate::media_files::migrate(&tx)?; }
-    tx.execute_batch("PRAGMA user_version=13")?;
+    if version < 14 {
+        let present: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('ai_messages') WHERE name='context_kind')",[],|r|r.get(0))?;
+        if !present { tx.execute_batch("ALTER TABLE ai_messages ADD COLUMN context_kind TEXT NOT NULL DEFAULT 'archive' CHECK(context_kind IN ('archive','help','none'))")?; }
+    }
+    tx.execute_batch("PRAGMA user_version=14")?;
     tx.commit()?;
     Ok(())
 }
@@ -651,7 +655,7 @@ mod tests {
         assert_eq!(
             db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            13
+            14
         );
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
