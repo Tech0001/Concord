@@ -66,6 +66,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   youtube_save_key: ({key}) => ({hasKey:!!key}),
   youtube_search: () => ({hits:[{videoId:"aqz-KE-bpKQ",title:"Big Buck Bunny · open movie",channelId:"fixture",channelName:"Blender Foundation",description:"A public demonstration recording, ready to queue.",publishedAt:"2026-09-30",live:false}],nextPageToken:null}),
   youtube_queue: () => ({id:"rec-01",action:"queued"}),
+  chatgpt_status: () => ({accounts:[],pending:{attemptId:"",running:false,message:"",error:"",accountId:""}}),
   tools_state: () => {
     const preview = new URLSearchParams(location.search).has("voice-preview");
     return {

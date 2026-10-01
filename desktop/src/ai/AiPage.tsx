@@ -1,3 +1,4 @@
+import { ChatGPTUsage } from "./ChatGPTSettings.tsx";
 import { useEffect, useRef, useState } from "react";
 import {
   Copy,
@@ -370,8 +371,9 @@ function Chat({ config }: { config: AiConfig }) {
                 <small className="muted">
                   {config.chat.local
                     ? "Chat runs on this computer."
-                    : `Messages${useLibrary ? " and matching excerpts" : ""} go to ${config.chat.kind === "openrouter" ? "OpenRouter" : "your chat provider"}.`}
+                    : `Messages${useLibrary ? " and matching excerpts" : ""} go to ${config.chat.kind === "openrouter" ? "OpenRouter" : config.chat.kind === "chatgpt" ? "OpenAI" : "your chat provider"}.`}
                 </small>
+                {config.chat.kind === "chatgpt" && <ChatGPTUsage/>}
                 {busy ? (
                   <Button
                     icon={Square}

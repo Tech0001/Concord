@@ -1,3 +1,4 @@
+import { ChatGPTUsage } from "./ChatGPTSettings.tsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FileText, RefreshCw, Square } from "lucide-react";
 import { api } from "../lib/ipc.ts";
@@ -156,6 +157,7 @@ export function SummaryPane({ id, title }: { id: string; title: string }) {
                 ? "Uses the chat model on this computer."
                 : "Sends transcript text to your chat provider. Long recordings require multiple requests."}
             </p>
+            {config?.chat.kind === "chatgpt" && <ChatGPTUsage/>}
             <Button
               icon={RefreshCw}
               disabled={busy || !state}

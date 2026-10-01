@@ -5,7 +5,7 @@ import type { FileAction, RecordingFileInfo } from "../library/RecordingFileDial
 import type { SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
 import type { DocumentsState, DocumentSync } from "../documents/types.ts";
 import type { ArchiveStatus, Audit, BackupValidation, LogEntry, MaintenanceJob } from "../health/types.ts";
-import type { AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, SummaryState } from "../ai/types.ts";
+import type { ChatGPTStatus, AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, SummaryState } from "../ai/types.ts";
 import { invoke, isTauri, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
@@ -79,6 +79,11 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const MEDIA_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "ogg", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 
 export const api = {
+  chatgptStatus: () => call<ChatGPTStatus>("chatgpt_status"),
+  chatgptStart: (accountId:string|null,consent=false) => call<void>("chatgpt_start",{accountId,consent}),
+  chatgptCancel: () => call<void>("chatgpt_cancel"),
+  chatgptSignOut: (id:string) => call<string>("chatgpt_sign_out",{id}),
+  chatgptAcknowledge: (id:string) => call<void>("chatgpt_acknowledge",{id}),
   popoutState: () => call<PopoutSession | null>("popout_state"),
   popoutOpen: (id:string,position:PlaybackPosition,skipGaps:boolean) => call<PopoutSession>("popout_open",{id,position,skipGaps}),
   popoutUpdate: (token:string,position:PlaybackPosition) => call<void>("popout_update",{token,position}),

@@ -20,6 +20,7 @@ pub struct Provider {
     pub kind: String,
     pub base_url: String,
     pub model: String,
+    pub account_id: String,
     #[serde(skip_serializing)]
     pub api_key: String,
 }
@@ -30,6 +31,7 @@ impl Default for Provider {
             kind: "local".into(),
             base_url: "http://127.0.0.1:11434/v1".into(),
             model: String::new(),
+            account_id: String::new(),
             api_key: String::new(),
         }
     }
@@ -65,6 +67,11 @@ pub fn view(root: &Path) -> Result<Value> {
         let mut v = json!(p);
         v["hasKey"] = json!(!p.api_key.is_empty());
         v["local"] = json!(p.kind == "builtin" || p.is_loopback());
+        if p.kind == "chatgpt" {
+            let connected = super::chatgpt::available(root, &p.account_id);
+            v["connected"] = json!(connected);
+            v["enabled"] = json!(p.enabled && connected);
+        }
         v
     };
     Ok(json!({"embedding":expose(&c.embedding),"chat":expose(&c.chat)}))
@@ -78,6 +85,7 @@ pub fn save(root: &Path, task: &str, mut provider: Provider, key: Option<String>
         );
         provider = super::builtin::default_provider();
     }
+    if provider.kind == "chatgpt" {ensure!(task == "chat", "ChatGPT sign-in is only available for chat, summaries and tags");}
     let _guard = CONFIG_LOCK.lock().unwrap();
     let mut c = read_unlocked(root)?;
     let old = if task == "embedding" {
@@ -103,6 +111,8 @@ pub fn save(root: &Path, task: &str, mut provider: Provider, key: Option<String>
         !provider.api_key.contains(['\r', '\n']),
         "API key contains a line break"
     );
+    if provider.kind == "chatgpt" {provider.api_key.clear();}
+    else {provider.account_id.clear();}
     *old = provider;
     let mut value = json!(c);
     value["embedding"]["apiKey"] = json!(c.embedding.api_key);
@@ -148,9 +158,13 @@ impl Provider {
     }
     pub fn validate(&self, model_required: bool) -> Result<()> {
         ensure!(
-            ["builtin", "local", "openrouter", "custom"].contains(&self.kind.as_str()),
+            ["builtin", "local", "openrouter", "custom", "chatgpt"].contains(&self.kind.as_str()),
             "Unknown AI provider"
         );
+        if self.kind == "chatgpt" {
+            ensure!(self.base_url == super::chatgpt::RESOURCE, "Use the official ChatGPT API endpoint");
+            ensure!(!model_required || !self.account_id.is_empty(), "Choose a connected ChatGPT account in Settings");
+        }
         let url = url::Url::parse(&self.base_url).context("Enter a valid API base URL")?;
         ensure!(
             ["http", "https"].contains(&url.scheme()) && url.host_str().is_some(),
@@ -253,6 +267,7 @@ impl Provider {
         serde_json::from_slice(&bytes).context("AI provider returned invalid JSON")
     }
     pub fn models(&self, task: &str) -> Result<Vec<Value>> {
+        ensure!(self.kind != "chatgpt", "Load ChatGPT models through the selected account");
         if self.kind == "builtin" {
             return Ok(vec![
                 json!({"id":super::builtin::MODEL,"name":"Built-in Qwen3 Embedding · CPU"}),
@@ -278,6 +293,7 @@ impl Provider {
         Ok(models)
     }
     pub fn embed(&self, client: &Client, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
+        ensure!(self.kind != "chatgpt", "ChatGPT sign-in cannot be used for embeddings");
         self.validate(true)?;
         let result = self.json(
             client,

@@ -323,3 +323,9 @@
 .summary-job progress { width: 100%; accent-color: var(--primary); }
 .summary-job .btn { justify-self: start; }
 .summary-job p { margin: 0; }
+
+.chatgpt-settings { display:grid; gap:12px; padding:16px; border:1px solid var(--border); border-radius:var(--r-2); }
+.chatgpt-settings p { margin:0; }
+.chatgpt-usage { font-size:var(--text-sm); color:var(--muted-foreground); }
+.chatgpt-signin { background:#fff; color:#111; border-color:#ccc; }
+.chatgpt-signin:hover { background:#eee; }

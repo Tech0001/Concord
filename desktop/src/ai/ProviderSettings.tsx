@@ -1,3 +1,4 @@
+import { ChatGPTSettings } from "./ChatGPTSettings.tsx";
 import { useEffect, useState } from "react";
 import { Check, RefreshCw, Save } from "lucide-react";
 import { api } from "../lib/ipc.ts";
@@ -33,21 +34,28 @@ function ProviderEditor({
     value.kind,
     value.baseUrl,
     value.model,
+    value.accountId,
+    value.connected,
     value.hasKey,
     value.local,
   ]);
   const builtin = draft.kind === "builtin";
+  const chatgpt = draft.kind === "chatgpt";
   const changed = (kind: Provider["kind"]) => {
     setDraft({
       ...draft,
       kind,
       baseUrl:
-        kind === "openrouter"
-          ? "https://openrouter.ai/api/v1"
-          : "http://127.0.0.1:11434/v1",
+        kind === "chatgpt"
+          ? "https://api.openai.com/v1"
+          : kind === "openrouter"
+            ? "https://openrouter.ai/api/v1"
+            : "http://127.0.0.1:11434/v1",
       model: kind === "builtin" ? "Qwen3-Embedding-0.6B-Q8_0" : "",
       enabled: kind === "builtin" || draft.enabled,
       hasKey: false,
+      accountId: "",
+      connected: false,
     });
     setKey("");
     setRemoveKey(true);
@@ -105,6 +113,14 @@ function ProviderEditor({
                   },
                 ]
               : []),
+            ...(task === "chat"
+              ? [
+                  {
+                    value: "chatgpt",
+                    label: "ChatGPT · sign in with your account",
+                  },
+                ]
+              : []),
             { value: "local", label: "Local server · Ollama / LM Studio" },
             { value: "openrouter", label: "OpenRouter" },
             { value: "custom", label: "Custom OpenAI-compatible server" },
@@ -118,6 +134,20 @@ function ProviderEditor({
         </p>
       ) : (
         <>
+          {chatgpt && (
+            <ChatGPTSettings
+              accountId={draft.accountId || ""}
+              onAccount={(id, ready) =>
+                setDraft((old) => ({
+                  ...old,
+                  accountId: id,
+                  model: old.accountId === id ? old.model : "",
+                  enabled: ready,
+                  connected: ready,
+                }))
+              }
+            />
+          )}
           <label className="check-label">
             <input
               type="checkbox"
@@ -128,49 +158,54 @@ function ProviderEditor({
             />{" "}
             Enable {task === "embedding" ? "this embedding provider" : "chat"}
           </label>
-          <label className="field">
-            <span>API base URL</span>
-            <input
-              aria-label={`${task} API base URL`}
-              value={draft.baseUrl}
-              readOnly={draft.kind === "openrouter"}
-              onChange={(e) =>
-                setDraft((old) => ({ ...old, baseUrl: e.target.value }))
-              }
-            />
-          </label>
-          <label className="field">
-            <span>
-              API key {value.hasKey && draft.kind === value.kind && "· saved"}
-            </span>
-            <input
-              type="password"
-              autoComplete="off"
-              aria-label={`${task} API key`}
-              placeholder={
-                value.hasKey
-                  ? "Leave blank to keep saved key"
-                  : "Optional for local servers"
-              }
-              value={key}
-              onChange={(e) => {
-                setKey(e.target.value);
-                setRemoveKey(false);
-              }}
-            />
-          </label>
-          {value.hasKey && (
-            <label className="check-label">
-              <input
-                type="checkbox"
-                checked={removeKey}
-                onChange={(e) => {
-                  setRemoveKey(e.target.checked);
-                  setKey("");
-                }}
-              />{" "}
-              Remove saved key
-            </label>
+          {!chatgpt && (
+            <>
+              <label className="field">
+                <span>API base URL</span>
+                <input
+                  aria-label={`${task} API base URL`}
+                  value={draft.baseUrl}
+                  readOnly={draft.kind === "openrouter"}
+                  onChange={(e) =>
+                    setDraft((old) => ({ ...old, baseUrl: e.target.value }))
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>
+                  API key{" "}
+                  {value.hasKey && draft.kind === value.kind && "· saved"}
+                </span>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  aria-label={`${task} API key`}
+                  placeholder={
+                    value.hasKey
+                      ? "Leave blank to keep saved key"
+                      : "Optional for local servers"
+                  }
+                  value={key}
+                  onChange={(e) => {
+                    setKey(e.target.value);
+                    setRemoveKey(false);
+                  }}
+                />
+              </label>
+              {value.hasKey && (
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={removeKey}
+                    onChange={(e) => {
+                      setRemoveKey(e.target.checked);
+                      setKey("");
+                    }}
+                  />{" "}
+                  Remove saved key
+                </label>
+              )}
+            </>
           )}
           <label className="field">
             <span>Model</span>
@@ -196,11 +231,13 @@ function ProviderEditor({
             </datalist>
           </label>
           <p className="settings-note">
-            {draft.kind === "local"
-              ? "Requests go to a server on this computer."
-              : task === "embedding"
-                ? "Indexing sends passages to this provider. Semantic searches send the query; the vector index stays on this computer."
-                : "Chat sends your messages and selected library excerpts to this provider. Summaries send transcript text. Provider usage may incur charges."}
+            {chatgpt
+              ? "Model choices come from the selected ChatGPT account. Requests use that account’s plan or credits."
+              : draft.kind === "local"
+                ? "Requests go to a server on this computer."
+                : task === "embedding"
+                  ? "Indexing sends passages to this provider. Semantic searches send the query; the vector index stays on this computer."
+                  : "Chat sends your messages and selected library excerpts to this provider. Summaries send transcript text. Provider usage may incur charges."}
           </p>
         </>
       )}
@@ -219,7 +256,12 @@ function ProviderEditor({
             </Button>
             <Button
               icon={Check}
-              disabled={busy || !draft.enabled || !draft.model}
+              disabled={
+                busy ||
+                !draft.enabled ||
+                !draft.model ||
+                (chatgpt && !draft.connected)
+              }
               onClick={() => void action("check")}
             >
               Test {task}

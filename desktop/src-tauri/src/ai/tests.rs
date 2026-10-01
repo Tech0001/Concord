@@ -96,6 +96,7 @@ impl Fake {
             root,
             task,
             Provider {
+                account_id: String::new(),
                 enabled: true,
                 kind: "local".into(),
                 base_url: self.url.clone(),
@@ -483,6 +484,7 @@ fn summary_reentry_does_not_duplicate_requests_and_stop_keeps_the_previous_summa
         root.path(),
         "chat",
         Provider {
+            account_id: String::new(),
             enabled: true,
             kind: "local".into(),
             base_url: url,
@@ -537,6 +539,7 @@ fn stop_chat_interrupts_before_first_token() {
         signal.store(true, Ordering::SeqCst);
     });
     let p = Provider {
+        account_id: String::new(),
         enabled: true,
         kind: "local".into(),
         base_url: url,
@@ -545,6 +548,7 @@ fn stop_chat_interrupts_before_first_token() {
     };
     let start = Instant::now();
     let result = chat::complete(
+        Path::new("/unused-chat-fixture"),
         &p,
         &[json!({"role":"user","content":"Hello"})],
         &cancel,

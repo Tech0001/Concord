@@ -1,8 +1,10 @@
 export type Provider = {
   enabled: boolean;
-  kind: "builtin" | "local" | "openrouter" | "custom";
+  kind: "builtin" | "local" | "openrouter" | "custom" | "chatgpt";
   baseUrl: string;
   model: string;
+  accountId?: string;
+  connected?: boolean;
   hasKey: boolean;
   local: boolean;
 };
@@ -90,7 +92,10 @@ export type Summary = {
   created_at: string;
 };
 export const chatReady = (p?: Provider) =>
-  !!p?.enabled && !!p.model && (p.kind !== "openrouter" || p.hasKey);
+  !!p?.enabled && !!p.model && (p.kind !== "openrouter" || p.hasKey) && (p.kind !== "chatgpt" || !!p.connected);
 
 export type SummaryJob = {id:string;media_id:string;model:string;status:string;message:string;done:number;total:number;created_at:string};
 export type SummaryState = {summary:Summary|null;job:SummaryJob|null};
+
+export type ChatGPTAccount = { id:string; label:string; email:string; connected:boolean; planEnabled:boolean; welcomeSeen:boolean };
+export type ChatGPTStatus = { accounts:ChatGPTAccount[]; pending:{attemptId:string;running:boolean;message:string;error:string;accountId:string} };

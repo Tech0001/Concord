@@ -1,0 +1,12 @@
+{
+  "keys": [
+    {
+      "kty": "RSA",
+      "use": "sig",
+      "alg": "RS256",
+      "kid": "concord-test-only",
+      "n": "rxl60l1IRZrTU9ObJqxamkZ18RAACR8KF6ntddU-L8qyYSpMKrG8TQWdULzOfmpNOt_qCIFwsWTN7pWKq-ngHFZLAO-CMDnaYp-gSsQMjl8BqOkX6ZRbI4VBpNRctTphUcdGmSgURXIX7UvCkt8QtqGXbPJV64Btnk3uFWFeIYEKnlM4_3_WT5myxjopMKD4-Z5xT7kxo6LEp6T9j61oFn20FDPPoRJcobakaL335mZoYVBswDrWaMKnIhtpby8afa3mVcd-DqrVFSO4XkjmfI1XB77qTVNnuWwKtv5dHK0iv4ocOarq-hAct9jOMfi4lDGLkIoWJLVdKdsPnrfjYQ",
+      "e": "AQAB"
+    }
+  ]
+}

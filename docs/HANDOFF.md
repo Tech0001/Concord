@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.19.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.20.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,51 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## ChatGPT account connection (0.20.0 installed)
+
+Settings → AI providers → Chat model now offers ChatGPT. Continue with ChatGPT opens the
+system browser; a local 127.0.0.1 callback is bound first, with fresh state/nonce/PKCE. Dynamic
+registration retains the issued client ID and a stable host UUID. Existing account sign-in
+reuses that registration; a consumed authorization code retries using its issued client ID.
+Identity signatures, issuer, audience, expiry, nonce and subject are checked against OpenAI's
+published signing keys. Missing plan permission preserves sign-in but disables ChatGPT inference.
+No Codex credential files or private ChatGPT backend endpoints are used.
+
+Saved account registrations have separate labels/tokens; the selected account belongs to the
+chat provider configuration. Tokens remain in atomically written 0600 chatgpt-auth.json, outside
+IPC/database/browser storage, and rotating refreshes use a cross-process file lock. Failed or
+cancelled sign-in retains prior working accounts. Sign-out stops requests, clears local tokens,
+and attempts session revocation; an unconfirmed revocation is reported. First-use confirmation,
+account model catalog, reauthorization, Manage usage links and disabled-chat status are present.
+Embeddings remain independent and cannot use ChatGPT credentials or its inference route.
+
+Chat, summaries and tag suggestions use public /v1/responses with store=false and stream=true,
+full bounded input history and developer instructions. Completion requires response.completed;
+failures, incomplete output and disconnections preserve prior summaries. Usage-limit errors point
+to Manage usage. No silent provider/billing substitution. Account sign-out also interrupts requests
+that are waiting for their first token. Status & Health reflects a signed-out ChatGPT provider.
+
+Validation: 114 Rust tests (113 full suite plus registration retry), 48 TS tests, Clippy and
+frontend build. Native WebKitGTK passed sign-in, welcome dismissal, model selection, connection
+test, real streamed chat, cancellation, revocation, sign-out disabling Chat, and reauthorization
+without duplicate account/onboarding. It caught and fixed a UI race when reconnecting the same
+account; attempts now have their own IDs. Stopping semantic indexing leaves sign-in untouched.
+Final native report: `/tmp/concord-health-native-kjscdokg/native-test-result.json`.
+Reproduce with `desktop/scripts/native-chatgpt-test.py` after a native-review debug build.
+All OAuth and inference tests use a loopback synthetic service and explicitly public test-only
+RSA fixtures; no real account was authorized and no archive text was sent to OpenAI. Actual
+account eligibility and production authorization remain user-initiated checks. Layouts checked
+at desktop/phone widths in `/tmp/concord-020-screens`.
+
+Official protocol references: [registration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
+[account sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions),
+[Responses inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
+Remaining: optional post-transcription AI actions, final Electron parity/installation checks,
+and platform expansion. Schema 11 is unchanged.
+
+0.20.0 is installed beside Electron. Backup:
+`~/.local/share/concord-next/backups/before-0.20.0-20261001-022021.db`.
 
 ## Local voice transcript preview and Markdown fence fix (0.19.0 installed)
 

@@ -1,5 +1,6 @@
 pub mod builtin;
 pub mod chat;
+pub mod chatgpt;
 pub mod config;
 pub mod index;
 pub mod summary;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 use std::sync::{atomic::AtomicBool, Mutex};
 #[derive(Default)]
 pub struct Control {
+    pub chatgpt: Arc<chatgpt::Control>,
     pub indexing: AtomicBool,
     pub cancel_index: AtomicBool,
     pub chats: Mutex<HashMap<String, Arc<AtomicBool>>>,

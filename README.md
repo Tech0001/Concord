@@ -49,7 +49,13 @@ A cancelled or failed repair keeps the previous working environment.
 
 Semantic search uses a separate app-managed local Qwen3 embedding model, prepared from the
 AI page or Settings. Chat remains disabled until a provider is configured. Local/OpenRouter/
-custom embedding and chat services are supported independently. If you choose a remote
+custom embedding and chat services are supported independently. Chat also supports **Continue
+with ChatGPT**: choose ChatGPT in Settings → AI providers, authorize Concord, load the
+account’s models, select one and save. ChatGPT plan eligibility and usage limits are controlled
+by OpenAI; the app links to Manage usage. This uses Concord’s own connection and does not
+read Codex credentials. See [OpenAI’s sign-in flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in).
+
+If you choose a remote
 provider, relevant text is sent to that provider. Speech processing stays local. Discover
 uses a separate YouTube Data API key in Settings and sends search queries to Google. It
 never starts recurring searches or adds subscriptions automatically.
@@ -119,7 +125,7 @@ Native code: `desktop/src-tauri/`. Interface: `desktop/src/`. Electron reference
 
 ## Remaining work
 
-Remaining work includes ChatGPT sign-in, optional post-transcription AI actions, final
+Remaining work includes optional post-transcription AI actions, final
 Electron parity checks and broad installation validation. macOS follows Linux, then Windows. Watchers and the standalone Compare screen
 are intentionally omitted. Eleven-speaker recordings have been exercised; a recording with
 sixteen distinct speakers still needs validation.

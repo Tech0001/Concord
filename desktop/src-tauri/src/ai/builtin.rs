@@ -45,6 +45,7 @@ pub fn ready(root: &Path) -> bool {
 }
 pub fn default_provider() -> Provider {
     Provider {
+        account_id: String::new(),
         enabled: true,
         kind: "builtin".into(),
         base_url: "http://127.0.0.1".into(),
