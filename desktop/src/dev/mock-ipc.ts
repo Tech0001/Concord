@@ -8,7 +8,15 @@ const listeners = new Map<string, Set<(p: unknown) => void>>();
 const emit = (event: string, payload: unknown) => listeners.get(event)?.forEach((h) => h(payload));
 
 const DEFAULT_FILTER: LibraryFilter = {
-  query: "", channel: "", kind: "", transcribed: "", starred: false, review: "", sort: "newest", offset: 0, limit: 60,
+  query: "",
+  channel: "",
+  kind: "",
+  transcribed: "",
+  starred: false,
+  review: "",
+  sort: "newest",
+  offset: 0,
+  limit: 60,
 };
 
 function library(f: LibraryFilter) {
@@ -45,8 +53,12 @@ const find = (id: string) => fx.mediaList.find((m) => m.id === id);
 // Handlers receive the IPC argument object; `any` keeps this dev shim short.
 const handlers: Record<string, (a: any) => unknown> = {
   overview: () => ({
-    media: fx.mediaList.length, speakers: fx.speakerList.length, notes: fx.notesList.length, docs: fx.docsList.length,
-    dataRoot: "/home/you/.local/share/concord-next", legacyDatabase: "/home/you/.local/share/concord/pipeline.db",
+    media: fx.mediaList.length,
+    speakers: fx.speakerList.length,
+    notes: fx.notesList.length,
+    docs: fx.docsList.length,
+    dataRoot: "/home/you/.local/share/concord-next",
+    legacyDatabase: "/home/you/.local/share/concord/pipeline.db",
   }),
   library: ({ filter }) => library({ ...DEFAULT_FILTER, ...filter }),
   recording: ({ id }) => fx.recordingFor(id),
@@ -62,17 +74,45 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   research: () => ({
     notes: fx.notesList,
-    links: [{ source: fx.notesList[0].id, target: fx.notesList[1].id, kind: "related" }],
+    links: [
+      {
+        source: fx.notesList[0].id,
+        target: fx.notesList[1].id,
+        kind: "related",
+      },
+    ],
     docs: fx.docsList,
   }),
-  document: ({ id }) => ({ id, title: fx.docsList.find((d) => d.id === id)?.title ?? "Document", body: fx.docBody(id) }),
+  document: ({ id }) => ({
+    id,
+    title: fx.docsList.find((d) => d.id === id)?.title ?? "Document",
+    body: fx.docBody(id),
+  }),
   jobs: () => [
-    { id: "j1", media_id: fx.mediaList[3].id, title: fx.mediaList[3].title, status: "running", message: "Transcribing · 42%" },
-    { id: "j0", media_id: fx.mediaList[8].id, title: fx.mediaList[8].title, status: "complete", message: "Transcript saved" },
+    {
+      id: "j1",
+      media_id: fx.mediaList[3].id,
+      title: fx.mediaList[3].title,
+      status: "running",
+      message: "Transcribing · 42%",
+    },
+    {
+      id: "j0",
+      media_id: fx.mediaList[8].id,
+      title: fx.mediaList[8].title,
+      status: "complete",
+      message: "Transcript saved",
+    },
   ],
   speech_status: () => ({
-    ready: true, device: "vulkan:0", gpu: "NVIDIA GeForce RTX 2080 Ti", modelsReady: true, voiceMatchingReady: true,
-    model: "nemotron", models: "", python: "",
+    ready: true,
+    device: "vulkan:0",
+    gpu: "NVIDIA GeForce RTX 2080 Ti",
+    modelsReady: true,
+    voiceMatchingReady: true,
+    model: "nemotron",
+    models: "",
+    python: "",
   }),
   waveform: ({ id }) => fx.peaksFor(id),
   set_starred: ({ id, starred }) => {
@@ -94,7 +134,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     const id = note.id ?? `note-${Date.now()}`;
     const existing = fx.notesList.find((n) => n.id === id);
     if (existing) Object.assign(existing, note);
-    else fx.notesList.unshift({ ...note, id, created_at: new Date().toISOString() });
+    else
+      fx.notesList.unshift({
+        ...note,
+        id,
+        created_at: new Date().toISOString(),
+      });
     return id;
   },
   transcript_text: () => "Harbour conversation\nTuesday Study · 2025-09-02 · 1:05–1:40\n\n[1:05] Ada Marsh: Mock transcript text.",
@@ -115,7 +160,10 @@ export function installMock(): void {
     available: () => true,
     call: async (command, args) => {
       const handler = handlers[command];
-      return delay(handler ? await handler(args ?? {}) : null) as never;
+      const value = new URLSearchParams(location.search).get(`delay.${command}`);
+      const ms = value === null ? 120 : Math.max(0, Math.min(10000, Number(value) || 0));
+      await delay(null, ms);
+      return (handler ? await handler(args ?? {}) : null) as never;
     },
     listen: async (event, handler) => {
       const set = listeners.get(event) ?? new Set();

@@ -1,13 +1,25 @@
-import { useCallback, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import { readStored, writeStored } from "../lib/storage.ts";
 import { scopeTweakcn, themeNameFromPath } from "./scope.ts";
 
-const files = import.meta.glob("./themes/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+const files = import.meta.glob("./themes/*.css", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
 
 export type ThemeMode = "system" | "dark" | "light";
 export type ReadingFont = "serif" | "sans";
-export type Appearance = { theme: string; mode: ThemeMode; reading: ReadingFont };
-export const DEFAULT_APPEARANCE: Appearance = { theme: "concord", mode: "dark", reading: "serif" };
+export type Appearance = {
+  theme: string;
+  mode: ThemeMode;
+  reading: ReadingFont;
+};
+export const DEFAULT_APPEARANCE: Appearance = {
+  theme: "concord",
+  mode: "dark",
+  reading: "serif",
+};
 const KEY = "appearance-v1";
 
 export const THEMES: string[] = [
@@ -39,8 +51,20 @@ export function loadAppearance(): Appearance {
   };
 }
 
+const appearanceListeners = new Set<() => void>();
+let appearanceSnapshot: Appearance | undefined;
+const getAppearance = () => (appearanceSnapshot ??= loadAppearance());
+const subscribeAppearance = (listener: () => void) => {
+  appearanceListeners.add(listener);
+  return () => {
+    appearanceListeners.delete(listener);
+  };
+};
+
 export function saveAppearance(a: Appearance): void {
   writeStored(KEY, a);
+  appearanceSnapshot = a;
+  appearanceListeners.forEach((listener) => listener());
 }
 
 let stopFollowingSystem: (() => void) | null = null;
@@ -65,11 +89,10 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
 }
 
 export function useAppearance(): [Appearance, (a: Appearance) => void] {
-  const [appearance, setAppearance] = useState(loadAppearance);
+  const appearance = useSyncExternalStore(subscribeAppearance, getAppearance, getAppearance);
   const update = useCallback((a: Appearance) => {
     applyAppearance(a);
     saveAppearance(a);
-    setAppearance(a);
   }, []);
   return [appearance, update];
 }

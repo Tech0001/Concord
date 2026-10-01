@@ -5,7 +5,12 @@ import { useTime, type TimeStore } from "../lib/timeStore.ts";
 import { clock } from "../lib/format.ts";
 import { cx } from "../lib/cx.ts";
 
-export type LaneTurn = { start: number; end: number; color: string; label: string };
+export type LaneTurn = {
+  start: number;
+  end: number;
+  color: string;
+  label: string;
+};
 type Drag = "seek" | "start" | "end" | null;
 
 /** Scrubbable timeline: waveform (audio), speaker lane, saved-note markers, range band with handles, playhead. */
@@ -31,6 +36,14 @@ export function Timeline({
   onNote: (n: NoteMarker) => void;
 }) {
   const track = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const update = () => {
+      track.current?.setAttribute("aria-valuenow", String(Math.round(time.get())));
+      track.current?.setAttribute("aria-valuetext", clock(time.get()));
+    };
+    update();
+    return time.subscribe(update);
+  }, [time]);
   const [hover, setHover] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag>(null);
   const pct = (t: number) => `${duration > 0 ? (Math.min(Math.max(t, 0), duration) / duration) * 100 : 0}%`;
@@ -46,6 +59,7 @@ export function Timeline({
     if (kind === "seek") onSeek(toTime(e.clientX));
   };
   const move = (e: ReactPointerEvent<HTMLElement>) => {
+    e.stopPropagation();
     if (!duration) return;
     const t = toTime(e.clientX);
     setHover(t);
@@ -61,7 +75,10 @@ export function Timeline({
     e.stopPropagation();
     const step = d * (e.shiftKey ? 0.1 : 1);
     onRangeChange(
-      clampRange(edge === "start" ? { start: range.start + step, end: range.end } : { start: range.start, end: range.end + step }, duration),
+      clampRange(
+        edge === "start" ? { start: range.start + step, end: range.end } : { start: range.start, end: range.end + step },
+        duration,
+      ),
     );
   };
   return (
@@ -83,9 +100,14 @@ export function Timeline({
         onPointerLeave={() => !drag && setHover(null)}
         onKeyDown={(e) => {
           const step = e.shiftKey ? 60 : 5;
-          const next = ({ ArrowLeft: time.get() - step, ArrowRight: time.get() + step, Home: 0, End: duration } as Record<string, number>)[
-            e.key
-          ];
+          const next = (
+            {
+              ArrowLeft: time.get() - step,
+              ArrowRight: time.get() + step,
+              Home: 0,
+              End: duration,
+            } as Record<string, number>
+          )[e.key];
           if (next === undefined) return;
           e.preventDefault();
           e.stopPropagation();
@@ -97,13 +119,23 @@ export function Timeline({
           {turns.map((t, i) => (
             <span
               key={i}
-              style={{ left: pct(t.start), width: `calc(${pct(t.end)} - ${pct(t.start)})`, background: t.color }}
+              style={{
+                left: pct(t.start),
+                width: `calc(${pct(t.end)} - ${pct(t.start)})`,
+                background: t.color,
+              }}
               title={`${t.label} · ${clock(t.start)}–${clock(t.end)}`}
             />
           ))}
         </div>
         {range && (
-          <div className="range-band" style={{ left: pct(range.start), width: `calc(${pct(range.end)} - ${pct(range.start)})` }}>
+          <div
+            className="range-band"
+            style={{
+              left: pct(range.start),
+              width: `calc(${pct(range.end)} - ${pct(range.start)})`,
+            }}
+          >
             <span
               className="range-handle is-start"
               role="slider"
@@ -157,7 +189,15 @@ export function Timeline({
 
 function Playhead({ time, duration }: { time: TimeStore; duration: number }) {
   const t = useTime(time, (v) => Math.round(v * 20) / 20);
-  return <span className="playhead" style={{ left: `${duration > 0 ? (Math.min(t, duration) / duration) * 100 : 0}%` }} aria-hidden />;
+  return (
+    <span
+      className="playhead"
+      style={{
+        left: `${duration > 0 ? (Math.min(t, duration) / duration) * 100 : 0}%`,
+      }}
+      aria-hidden
+    />
+  );
 }
 
 /** Mirrored peak bars, redrawn on resize and theme change. */
@@ -191,7 +231,10 @@ function Waveform({ peaks }: { peaks: number[] }) {
     const observer = new ResizeObserver(draw);
     observer.observe(el);
     const themeObserver = new MutationObserver(draw);
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
     return () => {
       observer.disconnect();
       themeObserver.disconnect();

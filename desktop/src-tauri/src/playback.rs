@@ -49,7 +49,9 @@ fn header(name: &str, value: impl AsRef<str>) -> Header {
     Header::from_bytes(name.as_bytes(), value.as_ref().as_bytes()).unwrap()
 }
 
-/// A bounded response lets long recordings seek without reading them into memory.
+/// Honor the complete requested range. Capping a response at an arbitrary chunk boundary
+/// makes GStreamer treat that boundary as EOF and jump to the recording's end.
+/// File::take streams through tiny_http, so even a full-file range uses bounded memory.
 fn byte_range(value: Option<&str>, length: u64) -> Result<(u64, u64, bool)> {
     let Some(value) = value else {
         return Ok((0, length, false));
@@ -70,7 +72,7 @@ fn byte_range(value: Option<&str>, length: u64) -> Result<(u64, u64, bool)> {
         anyhow::ensure!(start < length && start <= end, "Unsatisfiable range");
         (start, end)
     };
-    Ok((start, (end - start + 1).min(4 * 1024 * 1024), true))
+    Ok((start, end - start + 1, true))
 }
 
 fn serve(request: Request, files: &Mutex<HashMap<String, PathBuf>>) {
@@ -147,7 +149,9 @@ fn serve(request: Request, files: &Mutex<HashMap<String, PathBuf>>) {
         file.take(count),
         Some(count as usize),
         None,
-    );
+    )
+    // Media clients need Content-Length to know the stream is seekable.
+    .with_chunked_threshold(usize::MAX);
     // tiny_http suppresses the body for HEAD while retaining Content-Length.
     let _ = request.respond(response);
 }
@@ -166,7 +170,7 @@ mod tests {
         assert_eq!(byte_range(Some("bytes=90-"), 100).unwrap(), (90, 10, true));
         assert_eq!(
             byte_range(Some("bytes=0-"), 9_000_000).unwrap().1,
-            4 * 1024 * 1024
+            9_000_000
         );
         assert!(byte_range(Some("bytes=100-"), 100).is_err());
         assert!(byte_range(Some("bytes=20-10"), 100).is_err());
@@ -202,4 +206,57 @@ mod tests {
         assert!(fetch("/etc/passwd", "GET", "").starts_with("HTTP/1.1 404"));
         assert!(fetch(&route, "HEAD", "").ends_with("\r\n\r\n"));
     }
+    /// Uses the same GStreamer HTTP reader as WebKitGTK, with no sound or GUI.
+    /// Run explicitly on Linux: cargo test gstreamer_seek_reads_past_four_megabytes -- --ignored
+    #[test]
+    #[ignore = "requires /usr/bin/python with PyGObject and GStreamer"]
+    fn gstreamer_seek_reads_past_four_megabytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("minute.wav");
+        let data_len = 48_000_u32 * 2 * 2 * 60;
+        let mut file = File::create(&path).unwrap();
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36 + data_len).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&16_u32.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&2_u16.to_le_bytes()).unwrap();
+        file.write_all(&48_000_u32.to_le_bytes()).unwrap();
+        file.write_all(&192_000_u32.to_le_bytes()).unwrap();
+        file.write_all(&4_u16.to_le_bytes()).unwrap();
+        file.write_all(&16_u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_len.to_le_bytes()).unwrap();
+        file.write_all(&vec![0; data_len as usize]).unwrap();
+        drop(file);
+        let server = Playback::start().unwrap();
+        let url = server.register(path);
+        let out = std::process::Command::new("/usr/bin/python")
+            .args(["-c", r#"
+import gi,sys
+gi.require_version('Gst','1.0')
+from gi.repository import Gst
+Gst.init(None)
+p=Gst.ElementFactory.make('playbin');p.props.uri=sys.argv[1]
+sink=Gst.ElementFactory.make('fakesink');sink.props.sync=False;sink.props.signal_handoffs=True
+last=[0]
+def handoff(sink,buf,pad): last[0]=max(last[0],(buf.pts+buf.duration)/Gst.SECOND)
+sink.connect('handoff',handoff);p.props.audio_sink=sink
+try:
+ p.set_state(Gst.State.PAUSED)
+ assert p.get_state(10*Gst.SECOND)[0] == Gst.StateChangeReturn.SUCCESS, 'preroll failed'
+ assert p.seek_simple(Gst.Format.TIME,Gst.SeekFlags.FLUSH|Gst.SeekFlags.KEY_UNIT,30*Gst.SECOND)
+ p.set_state(Gst.State.PLAYING)
+ msg=p.get_bus().timed_pop_filtered(10*Gst.SECOND,Gst.MessageType.ERROR|Gst.MessageType.EOS)
+ assert msg is not None, 'playback timed out'
+ assert msg.type == Gst.MessageType.EOS, str(msg.parse_error())
+ assert last[0] > 59, f'stream truncated after seek: final decoded audio was at {last[0]}s'
+ print(f'decoded through {last[0]}s after seeking, beyond the old 4 MiB boundary')
+finally: p.set_state(Gst.State.NULL)
+"#, &url])
+            .output().unwrap();
+        assert!(out.status.success(), "{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        println!("{}", String::from_utf8_lossy(&out.stdout));
+    }
+
 }

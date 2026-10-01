@@ -58,10 +58,16 @@ export function safeFileName(title: string): string {
     .trim()
     .replace(/^\.+/, "")
     .trim();
-  return Array.from(cleaned || "Recording")
-    .slice(0, 120)
-    .join("")
-    .trim();
+  let result = "";
+  let bytes = 0;
+  const encoder = new TextEncoder();
+  for (const ch of cleaned || "Recording") {
+    const size = encoder.encode(ch).length;
+    if (bytes + size > 150) break;
+    result += ch;
+    bytes += size;
+  }
+  return result.trim();
 }
 
 export function exportName(title: string, start: number, end: number, ext: string): string {

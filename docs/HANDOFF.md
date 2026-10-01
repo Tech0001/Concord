@@ -1,7 +1,7 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.2.0**
-(Delivery 1: foundation, polish pass, and player ranges).
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.2.1**
+(Delivery 1 plus verified native playback and range-tool repairs).
 
 The working Electron application has been moved onto the tested Nemotron speech
 stack and preserved on its own branch. The Linux-first Rust/Tauri rebuild is
@@ -10,9 +10,84 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
+## Codex takeover and 0.2.1 repair (September 30, 2026)
+
+Codex owns the entire Rust implementation again. **Electron is the behavioral reference
+for every page; preserve its capabilities in the polished interface.** The user explicitly
+wants Pipeline and transcript range selection improved where the old workflows were
+awkward. Watchers and Compare remain the agreed removals. The earlier parallel-work
+ownership restrictions and per-delivery approval steps no longer apply.
+
+**0.2.1 is built and installed** at `~/.local/opt/concord-next/Concord-Next.AppImage`.
+The sidebar toggle/drawer is included. Repairs:
+
+- Bind playback events to the mounted media element, including when the media URL arrives
+  before the large transcript. Play/pause, overlay, clock, follow, and ranges now receive events.
+- Preserve resume when the user leaves before media loads; honor changed timestamps on
+  the same recording.
+- Remove unstable estimated transcript row heights; manual interaction suspends following;
+  timestamp clicks work even while text is selected. Keep Claude's selection/range design.
+- Group the recording's local voices by **speaker ID**, retaining all fingerprints and
+  combining airtime. Two distinct people with the same name remain distinct.
+- Fix a second native playback defect found during the repair: the loopback server capped
+  each range at 4 MiB, causing GStreamer to signal EOF after ~28 seconds in the regression
+  recording. Send the entire requested range using streamed reads, with Content-Length.
+- Enable clipboard access on the explicitly created Tauri main window. Copy failed in
+  WebKitGTK after the asynchronous transcript request; the real system clipboard now
+  receives the selected passage. App state is initialized before the window is created.
+- Repair the review's note draft loss, search query resets, stale theme toggle, UTF-8 export
+  filenames, orphan temporary exports, source overwrite guard, unnamed export labels,
+  timeline accessibility, focused-control shortcuts, and unnecessary job-poll rerenders.
+
+Regression tools added (no new dependencies):
+
+```bash
+# With the Vite dev server running:
+pnpm --dir desktop test:player
+# Linux PyGObject/GStreamer test against the real Rust media server:
+pnpm --dir desktop test:media
+```
+
+The media regression uses a generated minute of PCM audio. Restoring the old cap makes
+it fail at 51.845 seconds after a seek to 30 seconds; the corrected server decodes through
+60 seconds. Existing Rust tests continue checking ffmpeg exports and database behavior.
+
+For automated **real WebKitGTK** UI checks, a debug-only runner is enabled only when all
+three environment variables are present: `CONCORD_NEXT_TEST_SCRIPT` (absolute path to
+`desktop/scripts/native-player-smoke.js`), `CONCORD_NEXT_TEST_RECORDING` (recording ID),
+and `CONCORD_NEXT_DATA` (**a scratch SQLite backup**, never the live library). Build with a
+separate Tauri identifier (keep `create: false` if overriding the window configuration),
+then launch that debug binary with these variables and the local
+GStreamer plugin path. It writes `native-test-result.json` under the scratch root and exits.
+The runner is absent from release builds. The script uses real media and IPC, exercises
+native selection/play/loop/copy/resume, and reports any remaining OS-dialog checks.
+
+Verified for 0.2.1:
+
+- 34 TypeScript tests, 31 Rust tests (two opt-in tests excluded), seven browser player
+  regression scenarios, the opt-in GStreamer streaming regression, and warning-free Clippy.
+- Actual WebKitGTK window with the real long AV1/AAC recording: timestamp seeks,
+  advancing clock/playhead, play/pause/overlay, playback past the former streaming cutoff,
+  selecting text, range stop/loop, manual transcript scroll, and persisted resume.
+- Native Copy succeeded; the system clipboard SHA-256 matched the exact selected text.
+- The user accepted the native GTK Save dialog and confirmed the clip worked. The M4A
+  export contains AAC audio and ffprobe reports **8.480 seconds**, exactly the selected
+  interval. “Show in folder” completed, and the user confirmed the result was all set.
+- The AppImage and Debian package built successfully. No new dependencies or schema
+  migration were needed; this does not complete the remaining Electron parity deliveries.
+
+Current scratch root: `/tmp/concord-playback-review`; SQLite backup of the native library,
+original media read in place. Local diagnostic logs are under `/tmp/concord-*` and are not
+repository artifacts. Production Electron data and media files are untouched.
+
+Next: complete Speakers management and labeling against `server/db-speakers.ts` and
+`client/src/pages/Speakers.tsx`, then the remaining parity deliveries below. Keep shipping
+working installed increments; do not describe the rewrite as complete while parity is missing.
+
 ## Status at handoff back to Codex (September 30, 2026, evening)
 
-Claude built Delivery 1 and handed development back. Start here.
+Historical status from Claude before the 0.2.1 repairs above. Those repairs supersede
+the playback and verification gaps in this section.
 
 **Shipped and installed:** Concord Next **0.2.0** at `~/.local/opt/concord-next/`. The real
 library migrated to `user_version` 2. Everything committed on `rewrite/rust-tauri`.
@@ -106,7 +181,8 @@ The Electron app is the reference: the user liked it and wants the same
 capabilities rebuilt in Tauri and **more polished**, not reinvented. Each area
 reaches Electron parity, then gets polished. Order:
 
-1. **Foundation, polish pass, and player ranges** — done in 0.2.0. Spec:
+1. **Foundation, polish pass, and player ranges** — shipped in 0.2.0; playback and
+   range-tool repairs verified and installed in 0.2.1. Spec:
    `docs/superpowers/specs/2026-09-30-next-foundation-polish-design.md`; plan:
    `docs/superpowers/plans/2026-09-30-next-foundation-polish.md`.
 2. **Speakers** — rebuild to the Electron page: edit, recolor, merge, noise,

@@ -59,7 +59,9 @@ export function useLineSelection({
       suppressClick.current = false;
       return;
     }
-    if (!document.getSelection()?.isCollapsed) return; // a drag selection, handled by selectionchange
+    const timestamp = e.currentTarget instanceof Element && e.currentTarget.matches(".t-time");
+    if (timestamp) document.getSelection()?.removeAllRanges();
+    else if (!document.getSelection()?.isCollapsed) return; // a drag selection, handled by selectionchange
     if (selecting || e.shiftKey) {
       onRange(spanRange(lines, anchor ?? i, i));
       if (anchor == null) setAnchor(i);

@@ -50,7 +50,14 @@ pub fn peaks(root: &Path, id: &str) -> Result<Vec<f32>> {
     loop {
         let mut filled = 0;
         while filled < chunk.len() {
-            let n = reader.read(&mut chunk[filled..])?;
+            let n = match reader.read(&mut chunk[filled..]) {
+                Ok(n) => n,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error.into());
+                }
+            };
             if n == 0 {
                 break;
             }

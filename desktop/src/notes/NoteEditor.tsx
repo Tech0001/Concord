@@ -16,23 +16,24 @@ export function NoteEditor({ note, onClose }: { note: Note; onClose: () => void 
   const [draft, setDraft] = useState(note);
   const [saving, setSaving] = useState(false);
   useEffect(() => setDraft(note), [note]);
-  const save = async () => {
+  const save = async (openSource = false) => {
     setSaving(true);
     try {
       await api.saveNote({ ...draft, title: draft.title.trim() });
       toast.success("Note saved");
       refresh();
+      if (openSource && draft.media_id)
+        navigate({
+          page: "recording",
+          id: draft.media_id,
+          at: draft.start ?? 0,
+        });
       onClose();
     } catch (e) {
       toast.error(e);
     } finally {
       setSaving(false);
     }
-  };
-  const openSource = () => {
-    if (!draft.media_id) return;
-    navigate({ page: "recording", id: draft.media_id, at: draft.start ?? 0 });
-    onClose();
   };
   return (
     <Dialog
@@ -43,14 +44,20 @@ export function NoteEditor({ note, onClose }: { note: Note; onClose: () => void 
       footer={
         <>
           {draft.media_id && (
-            <Button variant="ghost" icon={Play} onClick={openSource} className="note-source-btn">
-              Open source
+            <Button
+              variant="ghost"
+              icon={Play}
+              disabled={!draft.title.trim() || saving}
+              onClick={() => void save(true)}
+              className="note-source-btn"
+            >
+              Save & open source
             </Button>
           )}
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={!draft.title.trim() || saving} onClick={save}>
+          <Button variant="primary" disabled={!draft.title.trim() || saving} onClick={() => void save()}>
             Save note
           </Button>
         </>

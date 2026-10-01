@@ -14,6 +14,7 @@ const key = (k: string, mods: Partial<{ shiftKey: boolean; ctrlKey: boolean; met
 test("typing targets block shortcuts", () => {
   assert.equal(isTypingTarget({ tagName: "INPUT", type: "text" }), true);
   assert.equal(isTypingTarget({ tagName: "INPUT", type: "search" }), true);
+  assert.equal(isTypingTarget({ tagName: "INPUT", type: "range" }), true);
   assert.equal(isTypingTarget({ tagName: "INPUT", type: "checkbox" }), false);
   assert.equal(isTypingTarget({ tagName: "TEXTAREA" }), true);
   assert.equal(isTypingTarget({ tagName: "DIV", isContentEditable: true }), true);

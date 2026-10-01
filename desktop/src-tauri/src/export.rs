@@ -114,7 +114,11 @@ pub fn validate_range(start: f64, end: f64, duration: f64) -> Result<()> {
 pub fn excerpt(root: &Path, id: &str, start: f64, end: f64) -> Result<Excerpt> {
     let data = db::transcript(root, id)?;
     let media = &data["media"];
-    validate_range(start, end, media["duration"].as_f64().unwrap_or(0.))?;
+    let duration = data["segments"].as_array().into_iter().flatten()
+        .filter_map(|s| s["end"].as_f64())
+        .fold(media["duration"].as_f64().unwrap_or(0.), f64::max);
+    validate_range(start, end, duration)?;
+    let end = if duration > 0. { end.min(duration) } else { end };
     let names: HashMap<String, String> = data["assignments"]
         .as_array()
         .into_iter()
@@ -134,7 +138,10 @@ pub fn excerpt(root: &Path, id: &str, start: f64, end: f64) -> Result<Excerpt> {
             Some(Line {
                 start: a,
                 end: b,
-                speaker: names.get(local).cloned().unwrap_or_else(|| local.to_owned()),
+                speaker: names.get(local).cloned().unwrap_or_else(|| {
+                    local.strip_prefix('S').and_then(|n| n.parse::<u64>().ok())
+                        .map(|n| format!("Speaker {}", n.saturating_add(1))).unwrap_or_else(|| local.to_owned())
+                }),
                 text: s["text"].as_str().unwrap_or("").trim().to_owned(),
             })
         })
@@ -207,15 +214,39 @@ pub fn render(e: &Excerpt, format: TextFormat) -> String {
 }
 
 fn partial_path(dest: &Path) -> Result<PathBuf> {
-    let name = dest.file_name().context("Choose a file name for the export")?;
+    dest.file_name().context("Choose a file name for the export")?;
     let folder = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     ensure!(folder.is_dir(), "The export folder does not exist");
-    Ok(folder.join(format!(".{}.partial", name.to_string_lossy())))
+    Ok(folder.join(format!(".concord-export-{}.partial", uuid::Uuid::new_v4())))
+}
+
+/// Covers write, decode, cancellation, and final rename errors without leaving temp files.
+struct PartialCleanup(PathBuf);
+impl Drop for PartialCleanup {
+    fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+}
+
+fn protect_source(dest: &Path, source: &Path) -> Result<()> {
+    if let (Ok(dest), Ok(source)) = (dest.canonicalize(), source.canonicalize()) {
+        ensure!(dest != source, "Choose a different file; the export cannot replace its source");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let (a, b) = (dest.metadata()?, source.metadata()?);
+            ensure!(a.dev() != b.dev() || a.ino() != b.ino(), "The export cannot replace a link to its source");
+        }
+    }
+    Ok(())
 }
 
 pub fn export_transcript(root: &Path, id: &str, start: f64, end: f64, format: TextFormat, dest: &Path) -> Result<PathBuf> {
+    let media = db::media(root, id)?;
+    for key in ["path", "transcript"] {
+        if let Some(source) = media[key].as_str() { protect_source(dest, Path::new(source))?; }
+    }
     let text = render(&excerpt(root, id, start, end)?, format);
     let partial = partial_path(dest)?;
+    let _cleanup = PartialCleanup(partial.clone());
     std::fs::write(&partial, text)?;
     std::fs::rename(&partial, dest)?;
     Ok(dest.to_path_buf())
@@ -282,10 +313,12 @@ pub fn export_media(
     let source = Path::new(media["path"].as_str().context("This recording has no local media file")?)
         .canonicalize()
         .context("Media unavailable. Reconnect its drive or import a copy.")?;
+    protect_source(dest, &source)?;
     if format.needs_video() {
         ensure!(has_video(&source)?, "This recording has no video. Export audio instead.");
     }
     let partial = partial_path(dest)?;
+    let _cleanup = PartialCleanup(partial.clone());
     let mut child = Command::new("ffmpeg")
         .args(ffmpeg_args(&source, start, end, format, &partial))
         .stdin(Stdio::null())
@@ -302,7 +335,15 @@ pub fn export_media(
     let total = (end - start).max(0.001);
     let stdout = child.stdout.take().context("FFmpeg progress stream unavailable")?;
     for line in BufReader::new(stdout).lines() {
-        let line = line?;
+        let line = match line {
+            Ok(line) => line,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = errors.join();
+                return Err(error.into());
+            }
+        };
         if cancel.load(Ordering::SeqCst) {
             let _ = child.kill();
             break;
@@ -387,6 +428,31 @@ mod tests {
         assert!(validate_range(f64::NAN, 20., 0.).is_err());
         assert!(validate_range(10., 20., 0.).is_ok());
         assert!(validate_range(10., 100.3, 100.).is_ok());
+    }
+
+    #[test]
+    fn export_paths_are_short_unique_and_never_replace_a_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.ogg");
+        std::fs::write(&source, "keep me").unwrap();
+        assert!(protect_source(&source, &source).is_err());
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("alias.ogg");
+            std::fs::hard_link(&source, &link).unwrap();
+            assert!(protect_source(&link, &source).is_err());
+        }
+        let dest = dir.path().join(format!("{}.txt", "語".repeat(80)));
+        let a = partial_path(&dest).unwrap();
+        let b = partial_path(&dest).unwrap();
+        assert_ne!(a, b);
+        assert!(a.file_name().unwrap().len() < 80);
+        {
+            let _cleanup = PartialCleanup(a.clone());
+            std::fs::write(&a, "unfinished").unwrap();
+        }
+        assert!(!a.exists());
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "keep me");
     }
 
     #[test]

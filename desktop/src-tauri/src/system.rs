@@ -18,19 +18,20 @@ pub fn reveal(path: &Path) -> Result<()> {
                 "/org/freedesktop/FileManager1",
                 "org.freedesktop.FileManager1.ShowItems",
             ])
-            .arg(format!("array:string:{uri}"))
+            .arg(format!("array:string:{}", uri.as_str().replace(',', "%2C")))
             .arg("string:")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .is_ok_and(|s| s.success());
         if !selected {
-            Command::new("xdg-open")
+            let mut child = Command::new("xdg-open")
                 .arg(path.parent().unwrap_or(&path))
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
                 .context("No file manager is available")?;
+            std::thread::spawn(move || { let _ = child.wait(); });
         }
         Ok(())
     }

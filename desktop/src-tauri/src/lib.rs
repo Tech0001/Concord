@@ -1,3 +1,5 @@
+#[cfg(debug_assertions)]
+mod smoke;
 pub mod db;
 pub mod export;
 pub mod system;
@@ -282,10 +284,11 @@ async fn export_media(
 ) -> Result<String, String> {
     let (root, control) = (state.root.clone(), state.export.clone());
     work(move || {
-        let _busy = control
-            .busy
-            .try_lock()
-            .map_err(|_| anyhow::anyhow!("Another export is still running"))?;
+        let _busy = match control.busy.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => anyhow::bail!("Another export is still running"),
+        };
         control.cancel.store(false, Ordering::SeqCst);
         let format = export::MediaFormat::parse(&format)?;
         let path = export::export_media(&root, &id, start, end, format, Path::new(&dest), &control.cancel, |f| {
@@ -337,10 +340,26 @@ pub fn run() {
         }
       }))
       .plugin(tauri_plugin_dialog::init())
-      .setup(move|app|{
-        let db=db::open(&root)?;
-        db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'",[])?;
-        app.manage(AppState {root:root.clone(),runtime:speech::Runtime::resolve(app.path().resource_dir().ok()),control:control.clone(),thumbnail_generator:Arc::new(std::sync::Mutex::new(())),playback:Arc::new(playback::Playback::start()?),export:Arc::new(export::ExportControl::default())});Ok(())
+      .on_page_load(|_webview, _payload| {
+        #[cfg(debug_assertions)]
+        smoke::on_load(_webview, _payload);
+      })
+      .setup(move |app| {
+        let db = db::open(&root)?;
+        db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'", [])?;
+        app.manage(AppState {
+            root: root.clone(),
+            runtime: speech::Runtime::resolve(app.path().resource_dir().ok()),
+            control: control.clone(),
+            thumbnail_generator: Arc::new(std::sync::Mutex::new(())),
+            playback: Arc::new(playback::Playback::start()?),
+            export: Arc::new(export::ExportControl::default()),
+        });
+        // Config has create=false: construct the window after state is ready, with
+        // clipboard access so asynchronous transcript copying also works in WebKitGTK.
+        let window_config = app.config().app.windows.first().context("Missing main window configuration")?;
+        tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
+        Ok(())
       })
       .invoke_handler(tauri::generate_handler![overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,research,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")

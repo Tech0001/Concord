@@ -1,4 +1,14 @@
-import { memo, useCallback, useEffect, useRef, type CSSProperties, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  type CSSProperties,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { ArrowDownToLine, AudioLines } from "lucide-react";
 import { clock } from "../lib/format.ts";
 import { indexAt, markParts } from "../lib/range.ts";
@@ -10,8 +20,18 @@ import { Empty } from "../ui/Empty.tsx";
 import type { Voice } from "./voices.ts";
 
 /** Per-line state that changes with selection or find; kept primitive so rows memoize well. */
-export type LineState = { inRange: boolean; edge: "" | "start" | "end" | "both"; query: string; activeMatch: boolean };
-const PLAIN: LineState = { inRange: false, edge: "", query: "", activeMatch: false };
+export type LineState = {
+  inRange: boolean;
+  edge: "" | "start" | "end" | "both";
+  query: string;
+  activeMatch: boolean;
+};
+const PLAIN: LineState = {
+  inRange: false,
+  edge: "",
+  query: "",
+  activeMatch: false,
+};
 
 export type PressHandlers = {
   onPointerDown: (e: PointerEvent) => void;
@@ -140,10 +160,22 @@ export function Transcript({
     if (el) rows.current.set(index, el);
     else rows.current.delete(index);
   }, []);
-  const reveal = useCallback((index: number) => {
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    rows.current.get(index)?.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
-  }, []);
+  const reveal = useCallback(
+    (index: number) => {
+      const row = rows.current.get(index);
+      const root = scroller.current;
+      if (!row || !root) return;
+      // Scroll only this pane, and only when the active line leaves its reading area.
+      // Instant movement can be interrupted by manual scrolling without a queued animation.
+      const r = row.getBoundingClientRect();
+      const b = root.getBoundingClientRect();
+      if (r.top < b.top + 32 || r.bottom > b.bottom - 80) {
+        if (root.scrollHeight > root.clientHeight) root.scrollTop += r.top - b.top - root.clientHeight * 0.3;
+        else row.scrollIntoView({ block: "nearest" });
+      }
+    },
+    [scroller],
+  );
 
   // Highlight the playing line directly on the DOM so rows don't re-render every frame.
   useEffect(() => {
@@ -163,13 +195,10 @@ export function Transcript({
     if (follow && current.current >= 0) reveal(current.current);
   }, [follow, reveal]);
 
-  const stopFollowing = () => followRef.current && setFollow(false);
-  if (!lines.length)
-    return (
-      <div className="transcript is-empty">
-        <Empty icon={AudioLines} title="No transcript yet" text="Choose Transcribe to create one, with speakers and timestamps." />
-      </div>
-    );
+  const stopFollowing = () => {
+    followRef.current = false;
+    if (follow) setFollow(false);
+  };
   return (
     <div className={cx("transcript", stacked && "is-stacked")}>
       {header}
@@ -180,15 +209,22 @@ export function Transcript({
         onWheel={stopFollowing}
         onTouchMove={stopFollowing}
         onKeyDown={(e) => ["PageUp", "PageDown", "Home", "End"].includes(e.key) && stopFollowing()}
-        onPointerDown={(e) => e.target === e.currentTarget && stopFollowing()}
+        onPointerDown={stopFollowing}
       >
+        {!lines.length && (
+          <Empty icon={AudioLines} title="No transcript yet" text="Choose Transcribe to create one, with speakers and timestamps." />
+        )}
         {lines.map((line, i) => (
           <TranscriptLine
             key={i}
             index={i}
             line={line}
             voice={line.speaker ? voices.get(line.speaker) : undefined}
-            showSpeaker={i === 0 || lines[i - 1].speaker !== line.speaker}
+            showSpeaker={
+              i === 0 ||
+              (voices.get(lines[i - 1].speaker ?? "")?.speakerId ?? lines[i - 1].speaker) !==
+                (voices.get(line.speaker ?? "")?.speakerId ?? line.speaker)
+            }
             state={lineState ? lineState(i) : PLAIN}
             onLine={onLine}
             onVoice={onVoice}

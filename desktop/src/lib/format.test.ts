@@ -49,9 +49,9 @@ test("safe file names strip separators, bound length, keep emoji whole", () => {
   assert.equal(safeFileName("..."), "Recording");
   assert.equal(safeFileName("   "), "Recording");
   const emoji = safeFileName("🎙".repeat(200));
-  assert.equal(Array.from(emoji).length, 120);
+  assert.ok(new TextEncoder().encode(emoji).length <= 150);
   assert.ok(!emoji.includes("�"));
-  assert.equal(Array.from(safeFileName("x".repeat(300))).length, 120);
+  assert.equal(Array.from(safeFileName("x".repeat(300))).length, 150);
   assert.equal(exportName("Oct 7 / meeting", 723, 850, "m4a"), "Oct 7 meeting — 12m03s–14m10s.m4a");
 });
 
@@ -67,7 +67,7 @@ test("parseClock accepts s, m:ss, h:mm:ss and fractions", () => {
 });
 
 test("initials and extensions", () => {
-  assert.equal(initials("Ellen McFarlane"), "EM");
+  assert.equal(initials("Ada Marsh"), "AM");
   assert.equal(initials("  cher "), "C");
   assert.equal(extension("/a/b.OGG"), "ogg");
   assert.equal(extension(null), "");
@@ -78,4 +78,12 @@ test("span labels keep seconds for short ranges", () => {
   assert.equal(spanLabel(127), "2m 07s");
   assert.equal(spanLabel(3725), "1h 02m");
   assert.equal(spanLabel(-3), "0s");
+});
+
+test("long multilingual export names fit a filesystem component", () => {
+  for (const title of ["🎙️".repeat(120), "日本語の題名".repeat(40)]) {
+    const file = exportName(title, 723, 850, "m4a");
+    assert.ok(new TextEncoder().encode(file).length < 255);
+    assert.ok(!file.includes("�"));
+  }
 });

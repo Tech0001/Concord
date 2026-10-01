@@ -30,15 +30,18 @@ import { Timeline, type LaneTurn } from "./Timeline.tsx";
 import { Transcript } from "./Transcript.tsx";
 import { Transport } from "./Transport.tsx";
 import { RATES, useMedia } from "./useMedia.ts";
-import { buildVoices, type Voice } from "./voices.ts";
+import { buildVoices, groupVoices, type Voice } from "./voices.ts";
 import "./player.css";
 
 /** Saves the playback position every 10 s of movement, on pause, and when leaving. One failure toast per recording. */
 function usePositionSaver(id: string, time: TimeStore, playing: boolean, ready: boolean, onFail: (e: unknown) => void) {
   const last = useRef<number | null>(null);
   const failed = useRef(false);
+  const canSave = useRef(false);
+  if (ready) canSave.current = true;
   const save = useCallback(
     (force = false) => {
+      if (!canSave.current) return;
       const t = time.get();
       if (!force && last.current !== null && Math.abs(t - last.current) < 1) return;
       last.current = t;
@@ -84,7 +87,12 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   const [query, setQuery] = useState("");
   const [matchIndex, setMatchIndex] = useState(0);
   const findInput = useRef<HTMLInputElement>(null);
-  const mediaRef = useRef<HTMLMediaElement>(null);
+  const mediaRef = useRef<HTMLMediaElement | null>(null);
+  const [mediaElement, setMediaElement] = useState<HTMLMediaElement | null>(null);
+  const attachMedia = useCallback((el: HTMLMediaElement | null) => {
+    mediaRef.current = el;
+    setMediaElement(el);
+  }, []);
   const scroller = useRef<HTMLDivElement>(null);
   // One time store per recording, so listeners never leak across recordings.
   const time = useMemo(() => createTimeStore(at ?? 0), [id]);
@@ -137,19 +145,26 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
     return () => setPageTitle(null);
   }, [data, setPageTitle]);
 
-  const controls = useMedia(mediaRef, time, data?.media.duration ?? 0, source);
+  const controls = useMedia(mediaElement, time, data?.media.duration ?? 0, source);
   const started = useRef("");
+  const requestedAt = useRef(at);
   useEffect(() => {
-    if (!controls.ready || !data || started.current === id) return;
-    started.current = id;
-    const position = at ?? (data.media.position > 5 ? data.media.position : 0);
-    if (position) controls.seek(position);
+    if (!controls.ready || !data) return;
+    if (started.current !== id) {
+      started.current = id;
+      requestedAt.current = at;
+      controls.seek(at ?? (data.media.position > 5 ? data.media.position : 0));
+    } else if (at !== requestedAt.current) {
+      requestedAt.current = at;
+      if (at !== undefined) controls.seek(at);
+    }
   }, [controls, data, id, at]);
   const onSaveFail = useCallback((e: unknown) => toast.error(`Couldn't save your place in this recording: ${errorMessage(e)}`), [toast]);
   usePositionSaver(id, time, controls.playing, controls.ready, onSaveFail);
 
   const lines = useMemo(() => data?.segments ?? [], [data]);
   const voices = useMemo(() => (data ? buildVoices(data.assignments, data.segments) : new Map<string, Voice>()), [data]);
+  const people = useMemo(() => groupVoices(voices), [voices]);
   const turns = useMemo<LaneTurn[]>(
     () =>
       speakerTurns(lines).map((t) => ({
@@ -172,13 +187,19 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   const duration = controls.duration || data?.media.duration || 0;
   const onRange = useCallback(
     (r: Range) => {
+      setFollow(false);
       setRange(clampRange(r, duration));
       setPlayingRange(false);
     },
     [duration],
   );
   const seekAndPlayLine = useCallback((index: number) => seekLine(index, true), [seekLine]);
-  const selection = useLineSelection({ lines, scroller, onRange, onSeekLine: seekAndPlayLine });
+  const selection = useLineSelection({
+    lines,
+    scroller,
+    onRange,
+    onSeekLine: seekAndPlayLine,
+  });
   const onLine: (index: number, e: MouseEvent) => void = selection.handleLine;
 
   // Find: highlight every match, scroll to the first as you type, step with Enter or the arrows.
@@ -193,7 +214,8 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       setFollow(false);
       revealLine(matches[0]);
     }
-  }, [matches, revealLine]);
+    // A background refresh must not reset the user's current match.
+  }, [query, revealLine]);
   const stepFind = (delta: number) => {
     if (!matches.length) return;
     const next = (matchIndex + delta + matches.length) % matches.length;
@@ -216,7 +238,12 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
             : i === bounds![1]
               ? "end"
               : "";
-      return { inRange, edge, query: matchSet.has(i) ? query : "", activeMatch: matches[matchIndex] === i };
+      return {
+        inRange,
+        edge,
+        query: matchSet.has(i) ? query : "",
+        activeMatch: matches[matchIndex] === i,
+      };
     },
     [bounds, matchSet, query, matches, matchIndex],
   );
@@ -254,14 +281,14 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   };
   const onVoice = useCallback((local: string) => setNaming(voices.get(local) ?? null), [voices]);
   const firstLine = (voice: Voice) => {
-    const index = lines.findIndex((l) => l.speaker === voice.local);
+    const index = lines.findIndex((l) => voice.locals.includes(l.speaker ?? ""));
     if (index >= 0) seekLine(index, false);
     if (stacked) setPane("transcript");
   };
   const longestLine = (voice: Voice) => {
     let best = -1;
     lines.forEach((l, i) => {
-      if (l.speaker === voice.local && (best < 0 || l.end - l.start > lines[best].end - lines[best].start)) best = i;
+      if (voice.locals.includes(l.speaker ?? "") && (best < 0 || l.end - l.start > lines[best].end - lines[best].start)) best = i;
     });
     if (best >= 0) seekLine(best, true);
   };
@@ -295,12 +322,23 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       { key: "m", run: () => controls.toggleMute() },
       { key: "f", run: toggleFullscreen },
       { key: "?", run: () => setShortcutsOpen(true) },
-      { key: "i", run: () => setRange((r) => setIn(r, time.get(), lines, duration)) },
-      { key: "o", run: () => setRange((r) => setOut(r, time.get(), lines, duration)) },
+      {
+        key: "i",
+        run: () => setRange((r) => setIn(r, time.get(), lines, duration)),
+      },
+      {
+        key: "o",
+        run: () => setRange((r) => setOut(r, time.get(), lines, duration)),
+      },
       { key: "p", run: playRange },
       { key: "l", run: () => setLoop((v) => !v) },
       { key: "Escape", run: clearRange },
-      { key: "f", mod: true, global: true, run: () => findInput.current?.focus() },
+      {
+        key: "f",
+        mod: true,
+        global: true,
+        run: () => findInput.current?.focus(),
+      },
     ],
     !!data,
   );
@@ -359,7 +397,12 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       onSelect: () => void setReviewState(s),
     })),
     { kind: "separator" },
-    { label: "Show file in folder", icon: FolderOpen, disabled: !media.path, onSelect: () => media.path && api.reveal(media.path).catch(toast.error) },
+    {
+      label: "Show file in folder",
+      icon: FolderOpen,
+      disabled: !media.path,
+      onSelect: () => media.path && api.reveal(media.path).catch(toast.error),
+    },
     {
       label: "Copy file path",
       icon: Copy,
@@ -370,7 +413,12 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
           .then(() => toast.success("File path copied"))
           .catch(toast.error),
     },
-    { label: "Keyboard shortcuts", icon: Keyboard, hint: "?", onSelect: () => setShortcutsOpen(true) },
+    {
+      label: "Keyboard shortcuts",
+      icon: Keyboard,
+      hint: "?",
+      onSelect: () => setShortcutsOpen(true),
+    },
   ];
   const copyRange = async () => {
     if (!range) return;
@@ -383,7 +431,12 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   };
   const saveRangeNote = () => {
     if (!range) return;
-    const quote = bounds ? lines.slice(bounds[0], bounds[1] + 1).map((l) => l.text.trim()).join(" ") : "";
+    const quote = bounds
+      ? lines
+          .slice(bounds[0], bounds[1] + 1)
+          .map((l) => l.text.trim())
+          .join(" ")
+      : "";
     openNote({
       title: `${media.title} · ${clock(range.start)}`,
       body: "",
@@ -424,7 +477,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
         range && (
           <RangeBar
             range={range}
-            playing={playingRange}
+            playing={playingRange && controls.playing}
             loop={loop}
             onPlay={playRange}
             onStop={stopRange}
@@ -444,7 +497,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       <SplitLayout>
         <section className="player-media" aria-label="Playback">
           <div className="player-sticky">
-            <MediaStage media={media} source={source} sourceError={sourceError} controls={controls} mediaRef={mediaRef} />
+            <MediaStage media={media} source={source} sourceError={sourceError} controls={controls} mediaRef={attachMedia} />
             <Transport controls={controls} time={time} onShortcuts={() => setShortcutsOpen(true)} />
             <Timeline
               duration={controls.duration}
@@ -475,7 +528,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
                 onChange={setPane}
                 options={[
                   { value: "transcript", label: "Transcript" },
-                  { value: "speakers", label: `Speakers (${voices.size})` },
+                  { value: "speakers", label: `Speakers (${people.length})` },
                 ]}
               />
             </div>
@@ -484,7 +537,13 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
         </section>
       </SplitLayout>
       {naming && (
-        <NameVoiceDialog mediaId={media.id} voice={naming} onClose={() => setNaming(null)} onSample={() => longestLine(naming)} onSaved={refresh} />
+        <NameVoiceDialog
+          mediaId={media.id}
+          voice={naming}
+          onClose={() => setNaming(null)}
+          onSample={() => longestLine(naming)}
+          onSaved={refresh}
+        />
       )}
       <ShortcutSheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       {range && (

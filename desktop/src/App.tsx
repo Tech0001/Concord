@@ -67,7 +67,7 @@ function Shell() {
       try {
         const data = await api.jobs();
         if (!alive) return;
-        setJobs(data);
+        setJobs((old) => (JSON.stringify(old) === JSON.stringify(data) ? old : data));
         const signature = data.map((j) => j.id + j.status).join();
         if (lastJobs.current && signature !== lastJobs.current) refresh();
         lastJobs.current = signature;
@@ -85,7 +85,8 @@ function Shell() {
 
   useShortcuts([{ key: "k", mod: true, global: true, run: () => setPaletteOpen((v) => !v) }]);
 
-  const pageKey = route.page === "recording" ? `recording:${route.id}` : route.page === "documents" ? `documents:${route.id ?? ""}` : route.page;
+  const pageKey =
+    route.page === "recording" ? `recording:${route.id}` : route.page === "documents" ? `documents:${route.id ?? ""}` : route.page;
   useEffect(() => {
     if (route.page !== "library") window.scrollTo(0, 0);
   }, [pageKey, route.page]);
@@ -95,7 +96,10 @@ function Shell() {
     async (id: string) => {
       try {
         await api.transcribe(id, device);
-        toast.info("Transcription started", { label: "Activity", run: () => setActivityOpen(true) });
+        toast.info("Transcription started", {
+          label: "Activity",
+          run: () => setActivityOpen(true),
+        });
         refresh();
       } catch (e) {
         toast.error(e);
@@ -152,13 +156,32 @@ function Shell() {
       pageTitle,
       setPageTitle,
     }),
-    [route, navigate, back, overview, revision, refresh, jobs, activeJob, device, setDevice, transcribe, addRecordings, importLegacy, pageTitle],
+    [
+      route,
+      navigate,
+      back,
+      overview,
+      revision,
+      refresh,
+      jobs,
+      activeJob,
+      device,
+      setDevice,
+      transcribe,
+      addRecordings,
+      importLegacy,
+      pageTitle,
+    ],
   );
 
   if (!available)
     return (
       <div className="unavailable">
-        <Empty icon={Library} title="Open Concord Next as a desktop app" text="Run it with pnpm --dir desktop desktop, or add ?mock to preview with sample data." />
+        <Empty
+          icon={Library}
+          title="Open Concord Next as a desktop app"
+          text="Run it with pnpm --dir desktop desktop, or add ?mock to preview with sample data."
+        />
       </div>
     );
 
@@ -193,10 +216,7 @@ function Shell() {
     <AppContext.Provider value={context}>
       <div className="shell" data-rail={!phone && (collapsed || narrow)}>
         {!phone && (
-          <Sidebar
-            mode={collapsed || narrow ? "rail" : "full"}
-            onToggle={() => (narrow ? setDrawerOpen(true) : setCollapsed((v) => !v))}
-          />
+          <Sidebar mode={collapsed || narrow ? "rail" : "full"} onToggle={() => (narrow ? setDrawerOpen(true) : setCollapsed((v) => !v))} />
         )}
         <main className="main">
           <Topbar onAdd={() => void addRecordings()} />

@@ -21,7 +21,10 @@ export function Dialog({ open, onOpenChange, title, description, footer, size = 
       <D.Portal>
         <D.Overlay className="overlay" />
         {/* Radix expects aria-describedby={undefined} when there is no description. */}
-        <D.Content className={cx("dialog", `dialog-${variant}`, `dialog-${size}`)} aria-describedby={undefined}>
+        <D.Content
+          className={cx("dialog", `dialog-${variant}`, `dialog-${size}`)}
+          {...(!description ? { "aria-describedby": undefined } : {})}
+        >
           <header className="dialog-head">
             <D.Title className="dialog-title">{title}</D.Title>
             <D.Close asChild>

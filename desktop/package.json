@@ -1,6 +1,6 @@
 {
   "name": "concord-next",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.23.0",
@@ -12,7 +12,9 @@
     "package": "bash ../scripts/package-next-linux.sh",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:ts": "node --test \"src/**/*.test.ts\"",
-    "screens": "node scripts/screens.mjs"
+    "screens": "node scripts/screens.mjs",
+    "test:player": "node scripts/player-regression.mjs",
+    "test:media": "cargo test --manifest-path src-tauri/Cargo.toml gstreamer_seek_reads_past_four_megabytes -- --ignored"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "1.1.15",

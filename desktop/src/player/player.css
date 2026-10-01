@@ -564,8 +564,7 @@
   padding: 6px 12px 6px 8px;
   border-radius: var(--r-2);
   cursor: pointer;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 56px;
+  /* Stable measured row heights prevent jumps while scrolling long transcripts. */
   transition: background-color 120ms var(--ease);
 }
 .t-line:hover {

@@ -1,6 +1,12 @@
 import { useEffect, useRef } from "react";
 
-export type KeyInput = { key: string; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean };
+export type KeyInput = {
+  key: string;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+};
 export type Shortcut = {
   key: string;
   shift?: boolean;
@@ -24,7 +30,7 @@ export function isTypingTarget(target: unknown): boolean {
   const tag = (el.tagName ?? "").toUpperCase();
   if (tag === "TEXTAREA" || tag === "SELECT") return true;
   if (tag !== "INPUT") return false;
-  return !["checkbox", "radio", "button", "range", "submit", "reset"].includes((el.type ?? "text").toLowerCase());
+  return !["checkbox", "radio", "button", "submit", "reset"].includes((el.type ?? "text").toLowerCase());
 }
 
 export function isInteractiveTarget(target: unknown): boolean {
@@ -51,7 +57,9 @@ export function useShortcuts(shortcuts: Shortcut[], enabled = true): void {
       if (e.defaultPrevented) return;
       const typing = isTypingTarget(e.target);
       const dialogOpen = !!document.querySelector('[role="dialog"][data-state="open"]');
-      const ownsKey = (e.key === " " || e.key === "Enter") && isInteractiveTarget(e.target);
+      const ownsKey =
+        (e.key === " " || e.key === "Enter" || e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End") &&
+        isInteractiveTarget(e.target);
       for (const s of current.current) {
         if (!s.global && (typing || dialogOpen || ownsKey)) continue;
         if (matches(e, s)) {

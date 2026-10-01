@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TimeStore } from "../lib/timeStore.ts";
 import { useStoredState } from "../lib/storage.ts";
 
@@ -23,7 +23,7 @@ export type MediaControls = {
 };
 
 /** Drives an audio or video element; playback time flows into the time store, not React state. */
-export function useMedia(ref: RefObject<HTMLMediaElement | null>, time: TimeStore, fallbackDuration: number, src: string): MediaControls {
+export function useMedia(el: HTMLMediaElement | null, time: TimeStore, fallbackDuration: number, src: string): MediaControls {
   const [playing, setPlaying] = useState(false);
   const [duration, setDuration] = useState(fallbackDuration);
   const [ready, setReady] = useState(false);
@@ -37,13 +37,17 @@ export function useMedia(ref: RefObject<HTMLMediaElement | null>, time: TimeStor
   useEffect(() => setDuration((d) => d || fallbackDuration), [fallbackDuration]);
 
   useEffect(() => {
-    const el = ref.current;
     if (!el || !src) return;
+    setPlaying(false);
     setReady(false);
     setError("");
     let frame = 0;
-    const tick = () => {
-      time.set(el.currentTime);
+    let lastTick = 0;
+    const tick = (now: number) => {
+      if (now - lastTick >= 50) {
+        lastTick = now;
+        time.set(el.currentTime);
+      }
       frame = requestAnimationFrame(tick);
     };
     const onPlay = () => {
@@ -57,6 +61,7 @@ export function useMedia(ref: RefObject<HTMLMediaElement | null>, time: TimeStor
       time.set(el.currentTime);
     };
     const onSeeked = () => time.set(el.currentTime);
+    const onVolume = () => setMuted(el.muted);
     const onMeta = () => {
       if (Number.isFinite(el.duration) && el.duration > 0) setDuration(el.duration);
       el.playbackRate = prefs.current.rate;
@@ -69,34 +74,36 @@ export function useMedia(ref: RefObject<HTMLMediaElement | null>, time: TimeStor
       ["pause", onPause],
       ["ended", onPause],
       ["seeked", onSeeked],
+      ["timeupdate", onSeeked],
+      ["volumechange", onVolume],
       ["loadedmetadata", onMeta],
       ["error", onError],
     ];
     events.forEach(([name, fn]) => el.addEventListener(name, fn));
     if (el.readyState >= 1) onMeta();
+    if (!el.paused) onPlay();
     return () => {
       cancelAnimationFrame(frame);
       events.forEach(([name, fn]) => el.removeEventListener(name, fn));
     };
-  }, [ref, time, src]);
+  }, [el, time, src]);
 
   const play = useCallback(() => {
-    ref.current?.play().catch((e: unknown) => {
+    el?.play().catch((e: unknown) => {
       // A newer seek or pause interrupting play() is expected, not an error.
       if ((e as DOMException)?.name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
     });
-  }, [ref]);
-  const pause = useCallback(() => ref.current?.pause(), [ref]);
+  }, [el]);
+  const pause = useCallback(() => el?.pause(), [el]);
   const seek = useCallback(
     (t: number, andPlay = false) => {
-      const el = ref.current;
       if (!el) return;
       const max = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : duration || t;
       el.currentTime = Math.min(Math.max(0, t), max);
       time.set(el.currentTime);
       if (andPlay) play();
     },
-    [ref, time, duration, play],
+    [el, time, duration, play],
   );
   return useMemo(
     () => ({
@@ -110,29 +117,28 @@ export function useMedia(ref: RefObject<HTMLMediaElement | null>, time: TimeStor
       play,
       pause,
       seek,
-      toggle: () => (ref.current?.paused ? play() : pause()),
+      toggle: () => (el?.paused ? play() : pause()),
       skip: (delta: number) => seek(time.get() + delta),
       setRate: (r: number) => {
         setRateStored(r);
-        if (ref.current) ref.current.playbackRate = r;
+        if (el) el.playbackRate = r;
       },
       setVolume: (v: number) => {
         setVolumeStored(v);
-        if (ref.current) {
-          ref.current.volume = v;
-          if (v > 0 && ref.current.muted) {
-            ref.current.muted = false;
+        if (el) {
+          el.volume = v;
+          if (v > 0 && el.muted) {
+            el.muted = false;
             setMuted(false);
           }
         }
       },
       toggleMute: () => {
-        const el = ref.current;
         if (!el) return;
         el.muted = !el.muted;
         setMuted(el.muted);
       },
     }),
-    [playing, duration, rate, volume, muted, ready, error, play, pause, seek, ref, time, setRateStored, setVolumeStored],
+    [playing, duration, rate, volume, muted, ready, error, play, pause, seek, el, time, setRateStored, setVolumeStored],
   );
 }

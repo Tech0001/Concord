@@ -32,6 +32,11 @@ export function SearchPage({ q }: { q: string }) {
   const { navigate, revision } = useApp();
   const toast = useToast();
   const [text, setText] = useState(q);
+  const [routeQuery, setRouteQuery] = useState(q);
+  if (q !== routeQuery) {
+    setRouteQuery(q);
+    setText(q);
+  }
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -86,7 +91,11 @@ export function SearchPage({ q }: { q: string }) {
       <div className="search-groups">
         {groups.map((g) => (
           <section key={g.id} className="search-group">
-            <button type="button" className="search-group-head" onClick={() => navigate({ page: "recording", id: g.id, at: g.hits[0].start })}>
+            <button
+              type="button"
+              className="search-group-head"
+              onClick={() => navigate({ page: "recording", id: g.id, at: g.hits[0].start })}
+            >
               <span className="search-group-title">{g.title}</span>
               <span className="search-group-meta">
                 {g.channel} · <span className="num">{prettyDate(g.date)}</span>
@@ -104,7 +113,9 @@ export function SearchPage({ q }: { q: string }) {
                         {clock(h.start)}
                       </span>
                       <span className="search-hit-body">
-                        {name && <SpeakerChip size="sm" name={name} color={speakerColor(h.speaker_color, h.speaker_name ?? h.speaker ?? "")} />}
+                        {name && (
+                          <SpeakerChip size="sm" name={name} color={speakerColor(h.speaker_color, h.speaker_name ?? h.speaker ?? "")} />
+                        )}
                         <span className="search-hit-text">
                           <Marked text={h.marked || h.text} />
                         </span>
@@ -118,7 +129,9 @@ export function SearchPage({ q }: { q: string }) {
         ))}
       </div>
       {!q.trim() && <Empty icon={Search} title="Search every transcript" text="Find a name, a phrase, or a word you remember." />}
-      {q.trim() && !loading && !hits.length && <Empty icon={Search} title="No matching passages" text="Try fewer words or a different spelling." />}
+      {q.trim() && !loading && !hits.length && (
+        <Empty icon={Search} title="No matching passages" text="Try fewer words or a different spelling." />
+      )}
     </div>
   );
 }
