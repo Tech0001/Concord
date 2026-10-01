@@ -23,7 +23,8 @@ transcript folder and can run alongside it. Full Electron parity is still in pro
 - Markdown document folders, live sync, local images/links, categories, and research anchors.
 - YouTube subscriptions and local source folders, download setup, persistent processing
   queues, delayed retries, and batch re-transcription that preserves existing transcripts.
-- Tools for standalone M4A/MP3 extraction and recoverable Linux voice recording.
+- Tools for standalone M4A/MP3 extraction, recoverable Linux voice recording, and
+  manual YouTube discovery with phrase filters and direct queueing.
 - Status, archive audits and repairs, backups/restore, activity history, and runtime logs.
 
 ## Install and prepare speech
@@ -48,7 +49,9 @@ A cancelled or failed repair keeps the previous working environment.
 Semantic search uses a separate app-managed local Qwen3 embedding model, prepared from the
 AI page or Settings. Chat remains disabled until a provider is configured. Local/OpenRouter/
 custom embedding and chat services are supported independently. If you choose a remote
-provider, relevant text is sent to that provider. Speech processing stays local.
+provider, relevant text is sent to that provider. Speech processing stays local. Discover
+uses a separate YouTube Data API key in Settings and sends search queries to Google. It
+never starts recurring searches or adds subscriptions automatically.
 
 See [speech setup details](desktop/speech/README.md) for pinned models and dependencies.
 
@@ -113,7 +116,7 @@ Native code: `desktop/src-tauri/`. Interface: `desktop/src/`. Electron reference
 
 ## Remaining work
 
-Remaining parity includes Discover, live transcription preview for voice recording, player
+Remaining parity includes live transcription preview for voice recording, player
 refinements, account-login chat, AI job improvements, richer Markdown and broad installation
 validation. macOS follows Linux, then Windows. Watchers and the standalone Compare screen
 are intentionally omitted. Eleven-speaker recordings have been exercised; a recording with

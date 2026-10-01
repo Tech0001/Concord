@@ -1,3 +1,4 @@
+import { YouTubeSettings } from "../tools/YouTubeSettings.tsx";
 import { useEffect, useState } from "react";
 import { AudioLines, Check, CircleAlert, Cpu, FolderOpen, HardDrive, Info, Palette, RefreshCw } from "lucide-react";
 import { api } from "../lib/ipc.ts";
@@ -118,6 +119,7 @@ export function SettingsPage() {
       </Section>
 
       <ProviderSettings />
+      <YouTubeSettings />
       <Section icon={AudioLines} title="Speech">
         <Row label="Status">
           <Chip tone={runtime ? (runtime.ready ? "success" : "warn") : "neutral"}>{runtime ? (runtime.ready ? "Ready" : "Setup needed") : "Checking…"}</Chip>
@@ -175,7 +177,7 @@ export function SettingsPage() {
 
       <Section icon={Info} title="About">
         <p className="settings-note">
-          Concord Next{version && ` ${version}`}. Your library is stored on this computer. When you use a remote embedding or chat provider, the text needed for that request is sent to the provider you choose.
+          Concord Next{version && ` ${version}`}. Your library is stored on this computer. When you use a remote embedding or chat provider, the text needed for that request is sent to the provider you choose. Discover sends your online search query to Google.
         </p>
       </Section>
     </div>

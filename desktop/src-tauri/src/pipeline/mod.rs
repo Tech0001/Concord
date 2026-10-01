@@ -1,5 +1,6 @@
 //! Durable, single-recording processing. Queue state survives application restarts.
 pub mod download;
+pub mod links;
 mod queue;
 pub mod sources;
 pub(crate) mod subprocess;

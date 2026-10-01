@@ -1,12 +1,12 @@
 use crate::{ai::config::private_write, db, runtime_log};
 use anyhow::{ensure, Context, Result};
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-const CONFIG_FILES: [&str; 2] = ["ai-providers.json", "chatgpt-auth.json"];
+const CONFIG_FILES: [&str; 3] = ["ai-providers.json", "chatgpt-auth.json", "youtube-api.json"];
 fn readonly(path: &Path) -> Result<Connection> {
     Ok(Connection::open_with_flags(
         path,
@@ -100,7 +100,7 @@ pub fn validate(path: &Path) -> Result<Value> {
                 "SELECT content FROM concord_backup_files WHERE name=?1",
                 [name],
                 |r| r.get(0),
-            )?;
+            ).optional()?.flatten();
             if let Some(bytes) = data {
                 ensure!(
                     bytes.len() < 1024 * 1024,
@@ -182,7 +182,7 @@ pub fn apply_pending(root: &Path) -> Result<Option<PathBuf>> {
                 "SELECT content FROM concord_backup_files WHERE name=?1",
                 [name],
                 |r| r.get(0),
-            )?;
+            ).optional()?.flatten();
             if let Some(bytes) = data {
                 private_write(root, name, &bytes)?;
             } else if root.join(name).exists() {

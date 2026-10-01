@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.15.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.16.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,45 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Manual YouTube discovery (0.16.0 installed)
+
+Tools now includes Discover, alongside Extract and Recorder. It restores explicit YouTube
+search, the five useful sort orders, Load more with the original query/cursor, title/description
+phrase hints and optional local filtering, external viewing and download queueing. Each user
+search/page request fetches one API page; there is no hidden multi-page polling. Repeated video
+IDs are deduplicated. Known archive entries open directly. Queueing preserves the existing
+Pipeline paused/running state and original category/metadata of existing recordings, and does
+not create channels, subscriptions or Watchers. New results use the selected Personal/Work
+category. Download/transcription still use the existing yt-dlp/Nemotron pipeline.
+
+The independent YouTube Data API v3 key is in Settings. It lives in atomically written 0600
+`youtube-api.json`, never in the database or returned by status IPC. API requests use the fixed
+Google HTTPS endpoint, no redirects, bounded response size and a timeout. Network/body/quota
+errors do not expose key-bearing URLs or raw error bodies. The UI labels this as online search.
+Only public `i.ytimg.com` thumbnails were added to image CSP; no remote script capability added.
+Saved credentials are included in private database backups. Restore accepts older backups that
+lack this new configuration entry and removes the missing key rather than retaining an unknown
+post-backup credential. Existing AI-provider setup remains independent. No real user key was
+read from the legacy app or configured, and no real archive download was initiated.
+
+Validation: 97 Rust tests (96 full-suite plus the added interrupted-body redaction test), 43 TS
+tests, Clippy and frontend build. Tests cover private key storage/status, actual HTTP request
+encoding/pagination, safe text decoding, quota/interrupted-body redaction, queue deduplication,
+paused-state preservation and new/old backup restore. Native WebKitGTK passed Settings key
+save/remove, search and phrase filtering, pagination retaining the submitted query, real durable
+queue entries, and redacted failures against a synthetic loopback API:
+`/tmp/concord-health-native-q3s3flu8/native-test-result.json`. Reproduce with
+`desktop/scripts/native-discover-test.py` after the native-review debug build. Its endpoint
+override exists only in debug builds when the native test script is explicitly enabled.
+Desktop/phone layouts checked under `/tmp/concord-discover-screens`.
+
+Remaining full-port work includes player pop-out/gap skipping, live recorder transcription
+preview, ChatGPT sign-in, AI job progress/cancellation, richer Markdown and final installation/
+parity checks. Watchers and Compare remain intentionally absent.
+
+0.16.0 is installed beside Electron; schema 10 remains unchanged. Backup:
+`~/.local/share/concord-next/backups/before-0.16.0-20261001-003944.db`.
 
 ## Media tools and recoverable voice capture (0.15.0 installed)
 
