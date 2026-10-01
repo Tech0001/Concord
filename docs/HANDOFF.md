@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.2.1**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.2.2**
 (Delivery 1 plus verified native playback and range-tool repairs).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,16 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Packaged speech repair (0.2.2)
+
+The installed AppImage exported `PYTHONHOME` and `PYTHONPATH` for its media helpers.
+Those leaked into the independent speech venv, causing Python to fail during startup
+with `No module named encodings`. Speech commands now remove both inherited variables.
+The media framework's own environment stays intact. The poisoned-environment regression
+passes, and a 25-second real recording passed ASR, diarization, and TitaNet matching using
+packaged resources and the installed application's environment with those two variables
+removed. The existing transcripts remain intact when a job fails.
 
 ## Codex takeover and 0.2.1 repair (September 30, 2026)
 

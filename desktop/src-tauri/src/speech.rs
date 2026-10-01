@@ -15,6 +15,12 @@ use std::{
     time::Duration,
 };
 
+// AppImage's media framework exports Python paths for its own helpers. Our speech
+// coordinator runs in a separate venv; inheriting them hides that venv's stdlib.
+fn isolate_python(command: &mut Command) {
+    command.env_remove("PYTHONHOME").env_remove("PYTHONPATH");
+}
+
 pub const MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
 const ASR: &str = "nemotron-3.5-asr-streaming-0.6b.q8_0.gguf";
 const DIAR: &str = "Nemotron-3-Diarization.q8_0.gguf";
@@ -324,6 +330,7 @@ fn process(
         let raw = work.join("transcript.json");
         let diar = work.join("diar.json");
         let mut cmd = Command::new(&runtime.python);
+        isolate_python(&mut cmd);
         cmd.arg(&runtime.script)
             .arg(&audio)
             .arg("--output-json")
@@ -452,6 +459,18 @@ fn persist(root: &Path, id: &str, md: &Path, raw: &Value, diar: &Value) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(unix)]
+    fn speech_python_ignores_appimage_python_paths() {
+        let mut command = Command::new("python3");
+        command.env("PYTHONHOME", "/missing/concord-appimage/usr")
+            .env("PYTHONPATH", "/missing/concord-appimage/usr/share/pyshared")
+            .args(["-c", "import encodings, os; assert 'PYTHONHOME' not in os.environ; assert 'PYTHONPATH' not in os.environ; print('stdlib available')"]);
+        isolate_python(&mut command);
+        let result = command.output().expect("python3 is required for speech runtime tests");
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "stdlib available");
+    }
     #[test]
     #[ignore = "requires installed speech models and CONCORD_TEST_AUDIO"]
     fn real_speech_job_publishes_only_to_new_library() {
