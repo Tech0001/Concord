@@ -1,3 +1,4 @@
+import { LiveTranscript, PreviewText } from "./LiveTranscript.tsx";
 import { useEffect, useState } from "react";
 import { Mic, Square, Play, Trash2, Save, RefreshCw } from "lucide-react";
 import { api } from "../lib/ipc.ts";
@@ -16,7 +17,8 @@ const categories = [
 ];
 export function RecorderPanel() {
   const { state, reload } = useTools();
-  const { category } = useApp();
+  const { category, device } = useApp();
+  const [liveWanted, setLiveWanted] = useState(false);
   const toast = useToast();
   const [inputs, setInputs] = useState([
     { id: "default", name: "System default microphone" },
@@ -48,7 +50,8 @@ export function RecorderPanel() {
     setBusy(true);
     setPreview(undefined);
     try {
-      await api.recorderStart(input, title, scope);
+      const id = await api.recorderStart(input, title, scope);
+      if (liveWanted) { try { await api.recorderLiveStart(id, device); } catch(e) { toast.error(e); } }
       await reload();
       setLastSaved(undefined);
     } catch (e) {
@@ -147,6 +150,7 @@ export function RecorderPanel() {
               </label>
             </div>
             {warning && <p className="muted">{warning}</p>}
+            <label className="checkbox-field"><input type="checkbox" checked={liveWanted} onChange={e => setLiveWanted(e.target.checked)}/> Live transcript preview with local speech models</label>
             <div className="tool-actions">
               <Button
                 icon={Mic}
@@ -156,7 +160,7 @@ export function RecorderPanel() {
               >
                 Start recording
               </Button>
-              <small>16 kHz mono WAV · transcription after saving</small>
+              <small>16 kHz mono WAV · full transcription after saving</small>
             </div>
           </>
         )}
@@ -172,6 +176,7 @@ export function RecorderPanel() {
           </div>
         )}
       </section>
+      <LiveTranscript/>
       {state!.recorder.sessions.length > 0 && (
         <section className="voice-drafts" aria-label="Unsaved voice recordings">
           <h2>Ready to save</h2>
@@ -219,7 +224,8 @@ function VoiceDraft({
   const [category, setCategory] = useState<string>(session.category);
   const [busy, setBusy] = useState(false);
   const [discard, setDiscard] = useState(false);
-  const { reload } = useTools();
+  const { reload, state } = useTools();
+  const previewRunning = !!state?.liveTranscript?.running && state.liveTranscript.id === session.id;
   const { refresh, device } = useApp();
   const toast = useToast();
   const save = async (transcribe: boolean) => {
@@ -273,6 +279,7 @@ function VoiceDraft({
         </div>
       </div>
       {session.error && <p className="field-error">{session.error}</p>}
+      {!!session.preview?.length && <details><summary>Transcript preview · latest sections</summary><PreviewText passages={session.preview}/></details>}
       <div className="tool-two-fields">
         <label className="field">
           Title
@@ -328,7 +335,7 @@ function VoiceDraft({
         <Button
           variant="ghost"
           icon={Trash2}
-          disabled={busy}
+          disabled={busy || previewRunning}
           onClick={() => setDiscard(true)}
         >
           Discard…

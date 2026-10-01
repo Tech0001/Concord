@@ -235,3 +235,7 @@
     gap: 12px;
   }
 }
+
+.voice-preview-text { max-height: 280px; overflow: auto; margin-top: 12px; user-select: text; }
+.voice-preview-text p { margin: 0 0 12px; line-height: 1.6; white-space: pre-wrap; }
+.voice-preview-text time { margin-right: 8px; font-size: var(--text-xs); }

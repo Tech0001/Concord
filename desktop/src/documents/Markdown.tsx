@@ -1,3 +1,4 @@
+import { parseBlocks, type Block } from "./markdown-blocks.ts";
 import {
   createContext,
   createElement,
@@ -59,94 +60,6 @@ function stripExcalidrawScene(source: string): string {
 function stripFrontmatter(source: string): string {
   const match = /^\uFEFF?\s*---\r?\n[\s\S]*?\r?\n---\s*(\r?\n|$)/.exec(source);
   return match ? source.slice(match[0].length) : source;
-}
-
-type Block =
-  | { kind: "heading"; level: number; text: string }
-  | { kind: "paragraph"; text: string }
-  | { kind: "ul"; items: string[] }
-  | { kind: "ol"; items: string[] }
-  | { kind: "blockquote"; text: string }
-  | { kind: "code"; lang: string; text: string }
-  | { kind: "hr" };
-
-function parseBlocks(src: string): Block[] {
-  const lines = src.replace(/\r\n?/g, "\n").split("\n");
-  const blocks: Block[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (!line.trim()) {
-      i++;
-      continue;
-    }
-    const fence = line.match(/^```(\w*)\s*$/);
-    if (fence) {
-      const body: string[] = [];
-      i++;
-      while (i < lines.length && !/^```\s*$/.test(lines[i]))
-        body.push(lines[i++]);
-      i++;
-      blocks.push({
-        kind: "code",
-        lang: fence[1] || "",
-        text: body.join("\n"),
-      });
-      continue;
-    }
-    if (/^\s*(---|\*\*\*|___)\s*$/.test(line)) {
-      blocks.push({ kind: "hr" });
-      i++;
-      continue;
-    }
-    const heading = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
-    if (heading) {
-      blocks.push({
-        kind: "heading",
-        level: heading[1].length,
-        text: heading[2],
-      });
-      i++;
-      continue;
-    }
-    if (/^\s*>/.test(line)) {
-      const buf: string[] = [];
-      while (i < lines.length && /^\s*>/.test(lines[i]))
-        buf.push(lines[i++].replace(/^\s*>\s?/, ""));
-      blocks.push({ kind: "blockquote", text: buf.join(" ") });
-      continue;
-    }
-    if (/^\s*[-*]\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i]))
-        items.push(lines[i++].replace(/^\s*[-*]\s+/, ""));
-      blocks.push({ kind: "ul", items });
-      continue;
-    }
-    if (/^\s*\d+\.\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i]))
-        items.push(lines[i++].replace(/^\s*\d+\.\s+/, ""));
-      blocks.push({ kind: "ol", items });
-      continue;
-    }
-    const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i]))
-      para.push(lines[i++]);
-    blocks.push({ kind: "paragraph", text: para.join(" ") });
-  }
-  return blocks;
-}
-
-function isBlockStart(line: string): boolean {
-  return (
-    /^```/.test(line) ||
-    /^#{1,6}\s+/.test(line) ||
-    /^\s*>/.test(line) ||
-    /^\s*[-*]\s+/.test(line) ||
-    /^\s*\d+\.\s+/.test(line) ||
-    /^\s*(---|\*\*\*|___)\s*$/.test(line)
-  );
 }
 
 function renderBlock(block: Block, key: number): ReactNode {

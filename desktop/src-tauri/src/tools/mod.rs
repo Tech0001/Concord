@@ -3,6 +3,7 @@ pub mod extract;
 pub mod discover;
 mod process;
 pub mod recorder;
+pub mod live_transcript;
 
 pub fn private_dir(path: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(path)?;

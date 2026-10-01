@@ -14,6 +14,7 @@ pub struct Control {
     pub speech: Arc<speech::Control>,
     pub closing: AtomicBool,
     pub checking: AtomicBool,
+    pub previewing: AtomicBool,
     pub scanner: Arc<speech::Control>,
 }
 impl Control {
@@ -23,6 +24,7 @@ impl Control {
             speech,
             closing: AtomicBool::new(false),
             checking: AtomicBool::new(false),
+            previewing: AtomicBool::new(false),
             scanner: Arc::new(speech::Control::default()),
         }
     }
@@ -40,6 +42,7 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
             let result = (|| -> anyhow::Result<()> {
                 let mut active = control.gate.lock().unwrap();
                 if control.closing.load(Ordering::SeqCst)
+                    || control.previewing.load(Ordering::SeqCst)
                     || control.speech.busy.load(Ordering::SeqCst)
                 {
                     return Ok(());

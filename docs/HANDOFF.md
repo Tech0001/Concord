@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.18.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.19.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,41 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Local voice transcript preview and Markdown fence fix (0.19.0 installed)
+
+Tools → Voice recorder has optional live ASR preview. Audio capture remains independent:
+preview failure/cancellation never stops capture, and the captured WAV remains recoverable.
+CPU or the selected GPU runs NeMo-Speech.cpp directly in bounded 10–30 second sections, without
+Python or diarization during capture. Preview text is saved atomically beside the voice draft;
+Stop preview releases speech processing, restarting resumes from the saved sample offset, and
+stopping capture finishes the remaining tail. Drafts show the latest 30 sections and keep the
+complete preview on disk. Save & transcribe still creates the final transcript and speaker labels;
+partial preview is never published as the archive transcript.
+
+New archive jobs wait while preview is active; any already-running job finishes first. Pipeline
+and the global activity control explain this. Speech setup cannot replace models during preview.
+Native test capture reads an explicitly provided local audio fixture only in debug builds; it
+never opens the microphone. Existing microphone capture remains explicitly user-started.
+
+Fixed a Markdown renderer hang: code fences such as `c++` were recognized as block starts but
+not consumed as code blocks, creating an infinite paragraph loop. The shared parser now handles
+language/info strings, tilde fences, nested shorter fences and incomplete fences, always advancing.
+
+Validation: 108 Rust tests (107 full-suite plus setup/preview exclusion), 47 TS tests, Clippy and
+frontend build. Native WebKitGTK CPU recognition used 21 seconds from a user-supplied test file
+in a scratch library, checking actual text, continued capture after Stop preview, resumed offsets,
+final-tail completion and restart persistence. Native Markdown rendering passed C++/tilde fences.
+`/tmp/concord-health-native-pvkccxgq/native-test-result.json` records recovery; the combined report
+is `/tmp/concord-live-preview-native-test.log`. Reproduce using
+`desktop/scripts/native-live-preview-test.py /path/to/speech.ogg --offset 600` after a native-review
+build. Desktop/phone layouts: `/tmp/concord-019-screens`.
+
+Remaining: ChatGPT sign-in, optional post-transcription AI actions, final parity/installation
+checks and platform expansion. Schema 11 remains unchanged.
+
+0.19.0 is installed beside Electron. Backup:
+`~/.local/share/concord-next/backups/before-0.19.0-20261001-014829.db`.
 
 ## Native pop-out video and transcript-gap skipping (0.18.0 installed)
 

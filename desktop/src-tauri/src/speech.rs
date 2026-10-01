@@ -22,7 +22,7 @@ fn isolate_python(command: &mut Command) {
 }
 
 pub const MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
-const ASR: &str = "nemotron-3.5-asr-streaming-0.6b.q8_0.gguf";
+pub(crate) const ASR: &str = "nemotron-3.5-asr-streaming-0.6b.q8_0.gguf";
 const DIAR: &str = "Nemotron-3-Diarization.q8_0.gguf";
 const HASHES: [(&str, &str); 2] = [
     (
@@ -128,7 +128,7 @@ impl Runtime {
           "device":device,"gpu":gpu.and_then(|g|g["description"].as_str()),"modelsReady":models,"voiceMatchingReady":voice,
           "binary":self.binary,"python":self.python,"models":self.models,"model":MODEL})
     }
-    fn verify(&self) -> Result<()> {
+    pub(crate) fn verify(&self) -> Result<()> {
         for (name, expected) in HASHES {
             let mut f = fs::File::open(self.models.join(name)).with_context(|| {
                 format!("Speech model {name} is missing. Prepare speech in Settings.")

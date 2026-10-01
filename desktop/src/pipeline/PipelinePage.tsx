@@ -64,6 +64,7 @@ export function PipelinePage() {
     <div className="pipeline-tabs" role="tablist" aria-label="Pipeline views">
       {([ ["queue", "Queue", ListOrdered], ["batch", "Transcribe recordings", RefreshCw], ["sources", "Sources", Rss], ["setup", "Setup", Settings2] ] as const).map(([key, label, Icon]) => <button role="tab" aria-selected={tab === key} key={key} onClick={() => setTab(key)}><Icon size={15}/>{label}</button>)}
     </div>
+    {state?.previewing && <div className="pipeline-summary"><span>Live voice transcription is using speech processing. New archive jobs wait until the preview finishes or is stopped in Tools.</span></div>}
     {state?.overview.atDailyLimit && <div className="pipeline-summary"><span>Daily download limit reached ({state.overview.dailyDownloads} / {state.overview.dailyLimit}). Downloads resume after local midnight; local transcription can continue.</span></div>}
     {!state ? <p className="muted">Loading pipeline…</p> : tab === "queue" ? <>
       <div className="pipeline-summary"><span>{count(pending.length, "recording")} in the queue</span><small>{active && !state.running ? "Paused after the current recording. Stop cancels the current recording too." : "This queue includes Personal and Work. Existing transcripts stay available until replacements are ready."}</small>{pending.some(j => j.status !== "running") && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act("cancel-pending")}>Clear pending</Button>}</div>

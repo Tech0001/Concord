@@ -34,6 +34,7 @@ use tauri::{Emitter, Manager, State};
 pub struct AppState {
     extraction: Arc<tools::extract::Control>,
     recorder: Arc<tools::recorder::Control>,
+    live_transcript: Arc<tools::live_transcript::Control>,
     speech_setup: Arc<speech_setup::Control>,
     pipeline: Arc<pipeline::Control>,
     ai: Arc<ai::Control>,
@@ -63,11 +64,15 @@ async fn youtube_search(state:State<'_,AppState>,query:tools::discover::Query)->
 #[tauri::command]
 async fn youtube_queue(state:State<'_,AppState>,hit:tools::discover::Hit,category:String)->Result<Value,String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||pipeline::links::enqueue(&root,&control,&hit,&category)).await}
 #[tauri::command]
-async fn tools_state(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();let extract=state.extraction.clone();let recorder=state.recorder.clone();work(move||Ok(serde_json::json!({"extract":extract.snapshot(),"recorder":tools::recorder::snapshot(&root,&recorder)?}))).await}
+async fn tools_state(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();let extract=state.extraction.clone();let recorder=state.recorder.clone();let live=state.live_transcript.clone();work(move||Ok(serde_json::json!({"extract":extract.snapshot(),"recorder":tools::recorder::snapshot(&root,&recorder)?,"liveTranscript":tools::live_transcript::snapshot(&live)}))).await}
 #[tauri::command]
 async fn tools_extract(state:State<'_,AppState>,source:String,destination:String,format:String)->Result<(),String>{let root=state.root.clone();let control=state.extraction.clone();let exports=state.export.clone();work(move||tools::extract::start(root,control,exports,source,destination,format)).await}
 #[tauri::command]
 fn tools_cancel_extract(state:State<'_,AppState>){state.extraction.cancel.store(true,Ordering::SeqCst);}
+#[tauri::command]
+async fn recorder_live_start(state:State<'_,AppState>,id:String,device:String)->Result<(),String>{let root=state.root.clone();let control=state.live_transcript.clone();let recorder=state.recorder.clone();let pipeline=state.pipeline.clone();let runtime=state.runtime.clone();work(move||tools::live_transcript::start(root,control,recorder,pipeline,runtime,id,device)).await}
+#[tauri::command]
+fn recorder_live_stop(state:State<'_,AppState>){tools::live_transcript::stop(&state.live_transcript);}
 #[tauri::command]
 async fn recorder_inputs(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||tools::recorder::inputs(&root)).await}
 #[tauri::command]
@@ -77,7 +82,7 @@ fn recorder_stop(state:State<'_,AppState>){tools::recorder::stop(&state.recorder
 #[tauri::command]
 async fn recorder_save(state:State<'_,AppState>,id:String,title:String,category:String,transcribe:bool,device:String)->Result<Value,String>{let root=state.root.clone();let control=state.recorder.clone();let pipeline=state.pipeline.clone();work(move||{let id=tools::recorder::save(&root,&control,&id,&title,&category)?;let mut warning=String::new();if transcribe {if let Err(e)=pipeline::enqueue_one(&root,&pipeline,id.clone(),device){warning=format!("Saved to the library, but could not queue transcription: {e:#}");}}Ok(serde_json::json!({"id":id,"warning":warning}))}).await}
 #[tauri::command]
-async fn recorder_discard(state:State<'_,AppState>,id:String)->Result<(),String>{let root=state.root.clone();let control=state.recorder.clone();work(move||tools::recorder::discard(&root,&control,&id)).await}
+async fn recorder_discard(state:State<'_,AppState>,id:String)->Result<(),String>{let root=state.root.clone();let control=state.recorder.clone();let live=state.live_transcript.clone();work(move||{anyhow::ensure!(!tools::live_transcript::busy(&live,&id),"Stop the live preview before discarding this recording");tools::recorder::discard(&root,&control,&id)}).await}
 #[tauri::command]
 async fn recorder_preview(state:State<'_,AppState>,id:String)->Result<String,String>{let root=state.root.clone();let control=state.recorder.clone();let playback=state.playback.clone();work(move||Ok(playback.register_for("recorder",tools::recorder::preview(&root,&control,&id)?))).await}
 #[tauri::command]
@@ -91,7 +96,7 @@ fn pipeline_stop_check(state:State<'_,AppState>){state.pipeline.scanner.cancel()
 #[tauri::command]
 async fn pipeline_tools()->Result<Value,String>{work(move||Ok(pipeline::download::status())).await}
 #[tauri::command]
-async fn pipeline_state(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||{let mut s=pipeline::snapshot(&root)?;s["checking"]=serde_json::json!(control.checking.load(Ordering::SeqCst));Ok(s)}).await}
+async fn pipeline_state(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||{let mut s=pipeline::snapshot(&root)?;s["checking"]=serde_json::json!(control.checking.load(Ordering::SeqCst));s["previewing"]=serde_json::json!(control.previewing.load(Ordering::SeqCst));Ok(s)}).await}
 #[tauri::command]
 async fn pipeline_candidates(state:State<'_,AppState>,batch:pipeline::Batch)->Result<Value,String>{let root=state.root.clone();work(move||pipeline::candidates(&root,&batch)).await}
 #[tauri::command]
@@ -580,6 +585,7 @@ pub fn run() {
             popout: Arc::new(popout::Control::default()),
             extraction: Arc::new(tools::extract::Control::default()),
             recorder: Arc::new(tools::recorder::Control::default()),
+            live_transcript: Arc::new(tools::live_transcript::Control::default()),
             speech_setup: Arc::new(speech_setup::Control::default()),
             pipeline,
             documents: docs_control,
@@ -597,7 +603,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![popout::popout_state,popout::popout_open,popout::popout_update,popout::popout_command,popout::popout_close,popout::popout_focus,youtube_status,youtube_save_key,youtube_search,youtube_queue,tools_state,tools_extract,tools_cancel_extract,recorder_inputs,recorder_start,recorder_stop,recorder_save,recorder_discard,recorder_preview,recording_file_info,recording_file_action,set_recording_title,speech_setup_status,speech_setup_start,speech_setup_cancel,pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary_state,ai_summary_start,ai_summary_cancel,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_category,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![popout::popout_state,popout::popout_open,popout::popout_update,popout::popout_command,popout::popout_close,popout::popout_focus,youtube_status,youtube_save_key,youtube_search,youtube_queue,tools_state,tools_extract,tools_cancel_extract,recorder_live_start,recorder_live_stop,recorder_inputs,recorder_start,recorder_stop,recorder_save,recorder_discard,recorder_preview,recording_file_info,recording_file_action,set_recording_title,speech_setup_status,speech_setup_start,speech_setup_cancel,pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary_state,ai_summary_start,ai_summary_cancel,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_category,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
-      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.recorder.closing.store(true,Ordering::SeqCst);tools::recorder::stop(&state.recorder);state.extraction.cancel.store(true,Ordering::SeqCst);state.export.cancel.store(true,Ordering::SeqCst);state.pipeline.shutdown();state.speech_setup.process.cancel();state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for task in state.ai.summaries.lock().unwrap().values(){task.cancel.store(true,Ordering::SeqCst);}for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
+      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {tools::live_transcript::stop(&state.live_transcript);state.recorder.closing.store(true,Ordering::SeqCst);tools::recorder::stop(&state.recorder);state.extraction.cancel.store(true,Ordering::SeqCst);state.export.cancel.store(true,Ordering::SeqCst);state.pipeline.shutdown();state.speech_setup.process.cancel();state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for task in state.ai.summaries.lock().unwrap().values(){task.cancel.store(true,Ordering::SeqCst);}for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
 }

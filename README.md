@@ -24,7 +24,7 @@ transcript folder and can run alongside it. Full Electron parity is still in pro
 - Markdown document folders, live sync, local images/links, categories, and research anchors.
 - YouTube subscriptions and local source folders, download setup, persistent processing
   queues, delayed retries, and batch re-transcription that preserves existing transcripts.
-- Tools for standalone M4A/MP3 extraction, recoverable Linux voice recording, and
+- Tools for standalone M4A/MP3 extraction, recoverable Linux voice recording with optional local transcript preview, and
   manual YouTube discovery with phrase filters and direct queueing.
 - Status, archive audits and repairs, backups/restore, activity history, and runtime logs.
 
@@ -108,7 +108,9 @@ Voice capture uses the selected Linux microphone through FFmpeg/PulseAudio (incl
 PipeWire’s PulseAudio compatibility service). It starts only when you press Record and keeps
 running if you change pages. Captured audio and unsaved drafts live under `voice-recordings/`;
 interrupted captures are recovered on restart. Saving adds them to the Voice notes collection,
-with optional local transcription. `pactl` enables the microphone picker; the system default
+with optional full transcription and speaker labels. Live preview uses the same local ASR in short
+sections; stopping preview leaves capture running. Preview text survives restart beside the draft,
+and archive processing waits while preview is active. `pactl` enables the microphone picker; the system default
 input can be used when the input list is unavailable.
 
 Native code: `desktop/src-tauri/`. Interface: `desktop/src/`. Electron reference:
@@ -117,9 +119,8 @@ Native code: `desktop/src-tauri/`. Interface: `desktop/src/`. Electron reference
 
 ## Remaining work
 
-Remaining parity includes live transcription preview for voice recording, player
-refinements, account-login chat, AI job improvements, richer Markdown and broad installation
-validation. macOS follows Linux, then Windows. Watchers and the standalone Compare screen
+Remaining work includes ChatGPT sign-in, optional post-transcription AI actions, final
+Electron parity checks and broad installation validation. macOS follows Linux, then Windows. Watchers and the standalone Compare screen
 are intentionally omitted. Eleven-speaker recordings have been exercised; a recording with
 sixteen distinct speakers still needs validation.
 

@@ -412,6 +412,10 @@ pub fn start(
         "Wait for the active recording to finish before preparing speech"
     );
     ensure!(
+        !pipeline.previewing.load(Ordering::SeqCst),
+        "Stop the live transcript preview before preparing speech"
+    );
+    ensure!(
         !control.process.busy.load(Ordering::SeqCst),
         "Speech setup is already running"
     );
@@ -439,6 +443,16 @@ pub fn start(
 mod tests {
     use super::*;
     use crate::db;
+    #[test]
+    fn setup_cannot_replace_models_under_a_live_preview() {
+        let root = tempfile::tempdir().unwrap();
+        let pipeline = Arc::new(pipeline::Control::new(Arc::new(speech::Control::default())));
+        pipeline.previewing.store(true, Ordering::SeqCst);
+        let result = start(root.path().into(), speech::Runtime::resolve(None), Arc::new(Control::default()), pipeline.clone());
+        assert!(result.unwrap_err().to_string().contains("Stop the live transcript preview"));
+        assert!(!pipeline.speech.busy.load(Ordering::SeqCst));
+        assert!(!root.path().join("speech").exists());
+    }
     #[test]
     fn only_a_verified_private_environment_can_become_active() {
         let root = tempfile::tempdir().unwrap();

@@ -25,13 +25,35 @@ impl Drop for ChildGuard {
 
 /// Bounded, nonblocking output pumping, including while the encoder is silent or stopping.
 pub fn run(
+    cmd: Command,
+    log: &Path,
+    stop: &AtomicBool,
+    timeout: Duration,
+    output: impl FnMut(&[u8]) -> Result<()>,
+) -> Result<bool> {
+    run_inner(cmd, log, stop, timeout, None, output)
+}
+pub fn run_speech(
+    cmd: Command,
+    log: &Path,
+    stop: &AtomicBool,
+    timeout: Duration,
+    libraries: &Path,
+) -> Result<bool> {
+    run_inner(cmd, log, stop, timeout, Some(libraries), |_| Ok(()))
+}
+fn run_inner(
     mut cmd: Command,
     log: &Path,
     stop: &AtomicBool,
     timeout: Duration,
+    libraries: Option<&Path>,
     mut output: impl FnMut(&[u8]) -> Result<()>,
 ) -> Result<bool> {
     crate::pipeline::subprocess::host(&mut cmd);
+    if let Some(path) = libraries {
+        cmd.env("LD_LIBRARY_PATH", path);
+    }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(fs::File::create(log)?));
@@ -47,17 +69,18 @@ pub fn run(
                     return Err(std::io::Error::last_os_error());
                 }
                 if libc::getppid() != parent {
-                    return Err(std::io::Error::other("Application closed"));
+                    return Err(std::io::Error::from_raw_os_error(libc::ECHILD));
                 }
                 Ok(())
             });
         }
     }
     anyhow::ensure!(!stop.load(Ordering::SeqCst), "Cancelled");
-    let mut child = ChildGuard(
-        cmd.spawn()
-            .context("Cannot start FFmpeg. Install FFmpeg and try again.")?,
-    );
+    let mut child = ChildGuard(cmd.spawn().context(if libraries.is_some() {
+        "Cannot start the local speech runtime"
+    } else {
+        "Cannot start FFmpeg. Install FFmpeg and try again."
+    })?);
     let mut pipe = child.0.stdout.take().context("No FFmpeg output")?;
     #[cfg(unix)]
     {
@@ -122,7 +145,15 @@ pub fn run(
                 f.seek(SeekFrom::Start(len.saturating_sub(4000)))?;
                 let mut text = String::new();
                 let _ = f.read_to_string(&mut text);
-                anyhow::bail!("FFmpeg failed: {}", text.trim());
+                anyhow::bail!(
+                    "{} failed: {}",
+                    if libraries.is_some() {
+                        "Speech runtime"
+                    } else {
+                        "FFmpeg"
+                    },
+                    text.trim()
+                );
             }
             let _ = fs::remove_file(log);
             return Ok(false);

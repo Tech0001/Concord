@@ -1,3 +1,5 @@
+export type PreviewPassage = { start: number; end: number; text: string };
+export type LiveTranscriptState = { id: string; running: boolean; message: string; error: string; device: string; processedSeconds: number; lagSeconds: number; passages: PreviewPassage[] };
 export type Extraction = {
   running: boolean;
   source: string;
@@ -17,9 +19,11 @@ export type VoiceSession = {
   status: string;
   error: string;
   seconds: number;
+  preview?: PreviewPassage[];
 };
 export type ToolsState = {
   extract: Extraction;
+  liveTranscript?: LiveTranscriptState;
   recorder: {
     active: {
       id: string;

@@ -38,7 +38,7 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
         if (!alive) return;
         setState(next);
         setError("");
-        delay = next.recorder.active || next.extract.running ? 300 : 2000;
+        delay = next.recorder.active || next.extract.running || next.liveTranscript?.running ? 300 : 2000;
       } catch (e) {
         if (alive) setError(String(e));
       }
@@ -71,6 +71,8 @@ export function ToolIndicator() {
         Recording {clock(voice.seconds)}
       </Button>
     );
+  if (state?.liveTranscript?.running)
+    return <Button size="sm" icon={AudioLines} onClick={() => navigate({page:"tools",tab:"record"})}>Voice transcript preview</Button>;
   if (state?.extract.running)
     return (
       <Button

@@ -66,7 +66,14 @@ const handlers: Record<string, (a: any) => unknown> = {
   youtube_save_key: ({key}) => ({hasKey:!!key}),
   youtube_search: () => ({hits:[{videoId:"aqz-KE-bpKQ",title:"Big Buck Bunny · open movie",channelId:"fixture",channelName:"Blender Foundation",description:"A public demonstration recording, ready to queue.",publishedAt:"2026-09-30",live:false}],nextPageToken:null}),
   youtube_queue: () => ({id:"rec-01",action:"queued"}),
-  tools_state: () => ({extract:{running:false,source:"",destination:"",progress:0,message:"",error:"",complete:false,bytes:0,duration:0},recorder:{active:null,sessions:[]}}),
+  tools_state: () => {
+    const preview = new URLSearchParams(location.search).has("voice-preview");
+    return {
+      extract:{running:false,source:"",destination:"",progress:0,message:"",error:"",complete:false,bytes:0,duration:0},
+      recorder:{active:preview ? {id:"preview-fixture",seconds:24,level:.3,stopping:false} : null,sessions:[]},
+      liveTranscript:preview ? {id:"preview-fixture",running:true,message:"Listening for the next transcript section",error:"",device:"cpu",processedSeconds:20,lagSeconds:4,passages:[{start:0,end:10,text:"We should keep a clear record of the decisions from this meeting."},{start:10,end:20,text:"The next step is to review the notes and share them with the team."}]} : undefined,
+    };
+  },
   recorder_inputs: () => ({inputs:[{id:"default",name:"System default microphone"}],warning:""}),
   tools_extract: () => undefined,
   tools_cancel_extract: () => undefined,

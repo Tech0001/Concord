@@ -45,7 +45,7 @@ pub struct Control {
     pub stop: AtomicBool,
     pub closing: AtomicBool,
 }
-fn folder(root: &Path, id: &str) -> Result<PathBuf> {
+pub(super) fn folder(root: &Path, id: &str) -> Result<PathBuf> {
     uuid::Uuid::parse_str(id).context("Invalid recording session")?;
     let dir = root.join("voice-recordings").join(id);
     ensure!(
@@ -100,6 +100,7 @@ fn audio_bytes(path: &Path) -> u64 {
 fn seconds(path: &Path) -> f64 {
     audio_bytes(path) as f64 / BYTES_PER_SECOND as f64
 }
+pub fn active_id(c: &Control) -> Option<String> { c.active.lock().unwrap().as_ref().map(|a| a.id.clone()) }
 pub fn snapshot(root: &Path, c: &Control) -> Result<Value> {
     let active = c.active.lock().unwrap().clone();
     let mut items = Vec::new();
@@ -110,11 +111,12 @@ pub fn snapshot(root: &Path, c: &Control) -> Result<Value> {
         let wav = folder(root, &s.id)?.join("recording.wav");
         let mut v = serde_json::to_value(&s)?;
         v["seconds"] = json!(seconds(&wav));
+        v["preview"] = json!(super::live_transcript::recent(&folder(root, &s.id)?));
         items.push(v);
     }
     Ok(json!({"active":active,"sessions":items}))
 }
-fn header(file: &mut File, bytes: u64) -> Result<()> {
+pub(super) fn header(file: &mut File, bytes: u64) -> Result<()> {
     ensure!(
         bytes <= u32::MAX as u64 - 36,
         "The voice recording is too long for WAV"
@@ -239,10 +241,17 @@ pub fn start(
     if std::env::var_os("CONCORD_NEXT_TEST_SCRIPT").is_some() && input == "concord-test-tone" {
         cmd = synthetic_command();
     }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("CONCORD_NEXT_TEST_SCRIPT").is_some() && input == "concord-test-audio" {
+        let audio = std::env::var("CONCORD_NEXT_TEST_CAPTURE_AUDIO").context("Missing synthetic speech fixture")?;
+        ensure!(Path::new(&audio).is_file(), "Synthetic speech fixture is missing");
+        cmd = Command::new("ffmpeg");
+        cmd.args(["-v","error","-nostdin","-re","-stream_loop","-1","-i",&audio,"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le","-f","s16le","pipe:1"]);
+    }
     begin(root, c, title, category, cmd)
 }
 #[cfg(any(test, debug_assertions))]
-fn synthetic_command() -> Command {
+pub(super) fn synthetic_command() -> Command {
     let mut cmd = Command::new("ffmpeg");
     cmd.args([
         "-v",
@@ -263,7 +272,7 @@ fn synthetic_command() -> Command {
     ]);
     cmd
 }
-fn begin(
+pub(super) fn begin(
     root: PathBuf,
     c: Arc<Control>,
     title: String,
