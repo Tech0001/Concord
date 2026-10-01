@@ -4,6 +4,8 @@ import type { LibraryFilter, Note, ReviewState } from "../lib/types.ts";
 import * as fx from "./fixtures.ts";
 
 const delay = <T>(value: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(value), ms));
+const emptyLibrary = new URLSearchParams(location.search).has("empty-library");
+let libraryStarted = !emptyLibrary;
 const listeners = new Map<string, Set<(p: unknown) => void>>();
 const emit = (event: string, payload: unknown) => listeners.get(event)?.forEach((h) => h(payload));
 
@@ -22,7 +24,7 @@ const DEFAULT_FILTER: LibraryFilter = {
 
 function library(f: LibraryFilter) {
   const q = f.query.trim().toLowerCase();
-  let items = fx.mediaList.filter(
+  let items = (emptyLibrary ? [] : fx.mediaList).filter(
     (m) =>
       (!q || m.title.toLowerCase().includes(q) || m.channel.toLowerCase().includes(q)) &&
       (!f.category || (m.category ?? "personal") === f.category) &&
@@ -107,11 +109,13 @@ const handlers: Record<string, (a: any) => unknown> = {
   ai_summary_cancel: () => undefined,
   search_filters: () => ({ channels: [], speakers: [], tags: [] }),
   research_search: ({ query }) => fx.searchHits(query).slice(0, 100).map((h: any) => ({ ...h, kind: "recording", score: 1 })),
+  start_library: () => { libraryStarted = true; },
   overview: () => ({
-    media: fx.mediaList.length,
-    speakers: fx.speakerList.length,
-    notes: fx.notesList.length,
-    docs: fx.docsList.length,
+    libraryStarted,
+    media: emptyLibrary ? 0 : fx.mediaList.length,
+    speakers: emptyLibrary ? 0 : fx.speakerList.length,
+    notes: emptyLibrary ? 0 : fx.notesList.length,
+    docs: emptyLibrary ? 0 : fx.docsList.length,
     dataRoot: "/home/you/.local/share/concord-next",
     legacyDatabase: "/home/you/.local/share/concord/pipeline.db",
   }),

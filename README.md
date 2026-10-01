@@ -37,11 +37,13 @@ The `.deb` declares its system dependencies. The AppImage bundles playback codec
 helper runtimes, but **FFmpeg must be installed using your Linux package manager**.
 
 1. Install the package, or make the AppImage executable and launch it.
-2. In **Settings → Speech**, choose **Prepare speech**. Concord installs private Python,
+2. Choose **Start a new library** for an empty archive. **Import existing library…** is
+   available below it if you want to bring over an Electron Concord archive.
+3. In **Settings → Speech**, choose **Prepare speech**. Concord installs private Python,
    voice-matching dependencies, and checksum-verified models inside its data folder.
    Allow several GB of free space. Setup has progress, logs, cancellation, and retry.
-3. Leave processing on **Automatic** to use an available GPU, or select **CPU**.
-4. Add local recordings, import an existing Concord library, or add sources in **Pipeline**.
+4. Leave processing on **Automatic** to use an available GPU, or select **CPU**.
+5. Add local recordings or add sources in **Pipeline**.
 
 Speech setup does not require Electron, an NVIDIA GPU, or changes to system Python.
 ASR and diarization use NeMo-Speech.cpp; the portable TitaNet voice matcher runs on CPU.

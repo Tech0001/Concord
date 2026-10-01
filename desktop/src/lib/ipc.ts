@@ -174,6 +174,7 @@ export const api = {
   available: () => transport.available(),
   version: () => transport.version(),
   overview: () => call<Overview>("overview"),
+  startLibrary: () => call<void>("start_library"),
   importLegacy: (path: string) => call<Overview>("import_legacy", { path }),
   library: (filter: LibraryFilter) => call<LibraryPage>("library", { filter }),
   recording: (id: string) => call<Recording>("recording", { id }),

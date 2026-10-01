@@ -63,6 +63,7 @@ export type LibraryPage = {
   channels: { channel: string }[];
 };
 export type Overview = {
+  libraryStarted: boolean;
   media: number;
   speakers: number;
   notes: number;

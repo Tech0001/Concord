@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.21.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.21.1**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,31 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Fresh-library onboarding (0.21.1 installed)
+
+The user tested a blank database and found that the welcome screen led with Electron import.
+It now leads with **Start a new library**, followed by a separate, secondary **Import existing
+library…** section. Start records `library.started` in this library's SQLite settings and opens
+the ordinary empty Library view, with an Add recordings action. It does not reset data, import
+anything, open a file picker, or require a first recording. The choice persists while the library
+is empty, including after restart, and does not carry over to another fresh data root. Existing
+archives and imported libraries continue directly to Library. Import also remains in Settings.
+
+No schema change (still 12). Validation includes a focused Rust test for persistence, root
+isolation, no import and preservation of existing notes; Clippy/frontend build; desktop/phone
+screens; and native WebKitGTK fresh → start → restart → second-fresh-library checks. Reproduce
+with `desktop/scripts/native-welcome-test.py`. Native roots:
+`/tmp/concord-welcome-native-7iajcwy_` (start/restart) and `/tmp/concord-welcome-other-1wzddvdw`
+(second fresh library). Combined report: `/tmp/concord-0211-native-welcome.log`.
+Screens: `/tmp/concord-0211-screens`.
+
+Installed and launched 0.21.1. The user is currently testing an empty default library
+(`~/.local/share/concord-next/`, zero recordings); do not automatically repopulate it.
+Its first-run choice is left for the user. Backup before installation:
+`~/.local/share/concord-next/backups/before-0.21.1-20261001-083349.db`.
+
+The full-port gaps listed under 0.21.0 remain the next work; this patch only addresses onboarding.
 
 ## Optional AI after transcription and date-filter layout (0.21.0 installed)
 

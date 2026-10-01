@@ -26,7 +26,7 @@ import "./library.css";
 let savedScroll = 0;
 
 export function LibraryPage() {
-  const { overview, revision, navigate, transcribe, activeJob, jobs, category, setCategory, refresh } = useApp();
+  const { overview, revision, navigate, transcribe, activeJob, jobs, category, setCategory, refresh, addRecordings } = useApp();
   const toast = useToast();
   const phone = useMediaQuery(PHONE);
   const narrow = useMediaQuery(TABLET);
@@ -115,10 +115,10 @@ export function LibraryPage() {
       transcribeDisabled: jobs.some(j => j.media_id === m.id && ["running", "queued", "retry"].includes(j.status)),
     }), ...fileMenu(m, action => setFileAction({media:m,action})), {label:"Extract audio",icon:AudioLines,disabled:!m.path||m.status==="archived",onSelect:()=>{if(m.path)navigate({page:"tools",tab:"extract",source:m.path});}}];
 
-  if (overview?.media === 0) return <Welcome />;
+  if (overview?.media === 0 && !overview.libraryStarted) return <Welcome />;
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const filtered = activeFilterCount(filter) > 0 || !!filter.query.trim() || !!filter.channel || !!category;
+  const filtered = overview?.media !== 0 && (activeFilterCount(filter) > 0 || !!filter.query.trim() || !!filter.channel || !!category);
   const effectiveView = phone ? "list" : view;
   const Item = effectiveView === "grid" ? RecordingCard : RecordingRow;
   const sortBy = (sort: LibrarySort) => update({ sort });
@@ -187,6 +187,7 @@ export function LibraryPage() {
           icon={Library}
           title={filtered ? "No recordings match" : "No recordings yet"}
           text={filtered ? "Try a different filter or clear the search." : "Add recordings to start your archive."}
+          action={!filtered ? <Button variant="primary" onClick={() => void addRecordings()}>Add recordings</Button> : undefined}
         />
       )}
       {total > 0 && (

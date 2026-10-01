@@ -164,8 +164,15 @@ pub fn stats(root: &Path) -> Result<Value> {
       "speakers":db.query_row("SELECT count(*) FROM speakers",[],|r|r.get::<_,i64>(0))?,
       "notes":db.query_row("SELECT count(*) FROM notes",[],|r|r.get::<_,i64>(0))?,
       "docs":db.query_row("SELECT count(*) FROM docs",[],|r|r.get::<_,i64>(0))?,
+      "libraryStarted":db.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key IN ('library.started','imported_from')) OR EXISTS(SELECT 1 FROM media) OR EXISTS(SELECT 1 FROM docs) OR EXISTS(SELECT 1 FROM notes)",[],|r|r.get::<_,bool>(0))?,
       "dataRoot":root,"legacyDatabase":legacy_root().join("pipeline.db")}),
     )
+}
+
+/// Finish first-run setup for this library, without importing or changing archive content.
+pub fn start_library(root: &Path) -> Result<()> {
+    open(root)?.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('library.started','true')",[])?;
+    Ok(())
 }
 
 /// Copy only archive content, never jobs, watchers, credentials, or a writable source connection.
@@ -643,6 +650,24 @@ mod tests {
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
     }
+    #[test]
+    fn starting_a_library_persists_per_database_without_importing_or_resetting_content() {
+        let first = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        assert_eq!(stats(first.path()).unwrap()["libraryStarted"], false);
+        start_library(first.path()).unwrap();
+        let state = stats(first.path()).unwrap();
+        assert_eq!(state["libraryStarted"], true);
+        for key in ["media","speakers","notes","docs"] { assert_eq!(state[key],0); }
+        assert_eq!(stats(other.path()).unwrap()["libraryStarted"], false);
+        let db = open(first.path()).unwrap();
+        db.execute("INSERT INTO notes(id,title,body) VALUES('keep','My note','Keep my work')",[]).unwrap();
+        start_library(first.path()).unwrap();
+        assert_eq!(stats(first.path()).unwrap()["notes"],1);
+        assert!(!db.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key='imported_from')",[],|r|r.get::<_,bool>(0)).unwrap());
+        assert_eq!(db.query_row("SELECT body FROM notes WHERE id='keep'",[],|r|r.get::<_,String>(0)).unwrap(),"Keep my work");
+    }
+
     #[test]
     fn palette_groups_matches() {
         let tmp = tempfile::tempdir().unwrap();
