@@ -74,7 +74,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   ai_status: () => ({ modelReady: true, indexed: 0, total: fx.mediaList.length, chunks: 0, dimensions: null, job: null }),
   ai_summary: () => null,
   search_filters: () => ({ channels: [], speakers: [], tags: [] }),
-  research_search: ({ query }) => fx.searchHits(query).map((h: any) => ({ ...h, kind: "recording", score: 1 })),
+  research_search: ({ query }) => fx.searchHits(query).slice(0, 100).map((h: any) => ({ ...h, kind: "recording", score: 1 })),
   overview: () => ({
     media: fx.mediaList.length,
     speakers: fx.speakerList.length,

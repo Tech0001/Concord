@@ -126,3 +126,9 @@
     gap: 4px;
   }
 }
+
+.search-match-mode { margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.search-match-mode [role=combobox] { min-width: 160px; }
+
+.search-hit-text mark, .research-hit mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
+.research-search > p[role=status] { margin: 12px 0; }

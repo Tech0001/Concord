@@ -37,3 +37,9 @@ test("highlight markers become parts; stray markers are tolerated", () => {
   assert.deepEqual(highlightParts("\u0002x"), [{ text: "x", mark: true }]);
   assert.deepEqual(highlightParts("plain"), [{ text: "plain", mark: false }]);
 });
+
+test("source kinds with the same id remain separate groups", () => {
+  const groups = groupHits([{ ...hit("a", 1), kind: "recording" }, { ...hit("a", 2), kind: "note" }]);
+  assert.equal(groups.length, 2);
+  assert.notEqual(groups[0].key, groups[1].key);
+});

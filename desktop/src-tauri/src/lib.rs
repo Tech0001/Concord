@@ -15,6 +15,7 @@ pub mod waveform;
 pub mod playback;
 pub mod speech;
 pub mod speech_setup;
+pub mod search_index;
 mod speech_labels;
 pub mod thumbnail;
 pub mod transcript;

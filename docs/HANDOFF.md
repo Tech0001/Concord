@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.11.0**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.12.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,40 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Search grouping and archive lookup performance (0.12.0 installed)
+
+Ordinary Search again groups passages by recording, shows matching words and saved/unknown
+speaker labels, and opens the selected timestamp. Added All words / Exact phrase matching;
+semantic search remains on AI. Date filters normalize both legacy YYYYMMDD and ISO dates.
+Keyword speaker filters match the assigned identity rather than accepting an overlapping
+other voice. Duplicate query submission on navigation was removed. Highlight colors use the
+theme. Documents/notes continue to appear as separate source results.
+
+Schema 10 replaces the metadata-bearing FTS virtual table with indexed timed passage rows
+plus an external-content FTS5 text index. Insert/update/delete triggers keep them synchronized;
+row IDs and passage contents survive migration. Per-recording passage access now uses a
+B-tree rather than scanning all transcript rows. This fixes repeated full-archive scans during
+embedding preparation, transcript fallback reads and speaker-range lookups. It does not change
+embedding models or claim equivalent gains in neural inference speed.
+
+A copy of the real archive migrated in 9.1 seconds. All 958,117 passages and the checked media,
+speaker assignments/profiles, notes/anchors, documents and links were preserved. Looking up
+30 recordings took 4.81 seconds before and 0.0098 seconds afterward in the local benchmark.
+Copy/results: /tmp/concord-search-archive-6ms6nz8q (benchmark-before/after.json).
+
+79 Rust tests and 39 TS tests pass, plus Clippy and frontend build. Native WebKitGTK passes
+groups/highlights/speakers, documents, compact-date filtering, exact phrases and timestamp
+navigation: /tmp/concord-health-native-v358bjwa/native-test-result.json. Reproduce with
+prepare-search-review.py and native-search-smoke.js. The archive-copy migration has its own
+ignored integration test, requiring CONCORD_TEST_ARCHIVE_ROOT under the system temp folder.
+Health fixture creation now supports both old and new segment schemas. Desktop/phone layouts
+checked. Remaining port work includes library views/file actions, tools, player refinements,
+account-login chat, and broader installation validation.
+
+0.12.0 is installed; the live archive migrated to schema 10 with all 958,117 passages,
+595 documents, five notes and 49 speaker profiles retained. Backup:
+`~/.local/share/concord-next/backups/before-0.12.0-20260930-232645.db`.
 
 ## Independent speech installation (0.11.0 installed)
 

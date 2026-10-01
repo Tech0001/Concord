@@ -1,15 +1,17 @@
 import type { SearchHit } from "./types.ts";
 import type { Part } from "./range.ts";
 
-export type HitGroup = { id: string; title: string; channel: string; date: string; hits: SearchHit[] };
+type Groupable = { id: string; kind?: string; title: string; channel: string; date: string };
+export type HitGroup<T = SearchHit> = { key: string; id: string; title: string; channel: string; date: string; hits: T[] };
 
-export function groupHits(hits: SearchHit[]): HitGroup[] {
-  const groups = new Map<string, HitGroup>();
+export function groupHits<T extends Groupable>(hits: T[]): HitGroup<T>[] {
+  const groups = new Map<string, HitGroup<T>>();
   for (const hit of hits) {
-    let g = groups.get(hit.id);
+    const key = `${hit.kind ?? "recording"}\0${hit.id}`;
+    let g = groups.get(key);
     if (!g) {
-      g = { id: hit.id, title: hit.title, channel: hit.channel, date: hit.date, hits: [] };
-      groups.set(hit.id, g);
+      g = { key, id: hit.id, title: hit.title, channel: hit.channel, date: hit.date, hits: [] };
+      groups.set(key, g);
     }
     g.hits.push(hit);
   }

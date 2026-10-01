@@ -215,6 +215,7 @@ fn indexing_resumes_separates_models_and_invalidates_changed_sources() {
 fn search_filters_apply_before_limit_and_support_note_evidence() {
     let root = tempfile::tempdir().unwrap();
     fixture(root.path());
+    db::open(root.path()).unwrap().execute("UPDATE media SET date='20251007' WHERE id='prayer'",[]).unwrap();
     let fake = Fake::new();
     fake.config(root.path(), "embedding", "tiny-embedding", "");
     build(root.path(), Arc::new(Control::default()));
@@ -242,6 +243,19 @@ fn search_filters_apply_before_limit_and_support_note_evidence() {
         .unwrap();
         assert!(none.is_empty());
     }
+}
+#[test]
+fn keyword_search_preserves_exact_phrases_highlights_and_speaker_identity() {
+    let root=tempfile::tempdir().unwrap();fixture(root.path());
+    db::open(root.path()).unwrap().execute_batch("INSERT INTO segments(media_id,start,end,speaker,text) VALUES ('prayer',0,10,'unknown','Faith and prayer from another overlapping voice');").unwrap();
+    let filter=Filter{kind:"recording".into(),speaker:"sarah".into(),exact:true,..Default::default()};
+    let hits=index::search(root.path(),"faith and prayer",false,&filter,100).unwrap();
+    assert_eq!(hits.len(),1);
+    assert_eq!(hits[0].speaker_name.as_deref(),Some("Sarah"));
+    assert!(hits[0].marked.as_ref().unwrap().contains("\u{2}Faith and prayer\u{3}"));
+    assert!(index::search(root.path(),"prayer faith",false,&filter,100).unwrap().is_empty());
+    let words=Filter{exact:false,..filter};
+    assert_eq!(index::search(root.path(),"prayer faith",false,&words,100).unwrap().len(),1);
 }
 #[test]
 fn wrong_dimensions_are_rejected_before_search() {

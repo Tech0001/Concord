@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { FileText, NotebookPen, Play, Search } from "lucide-react";
 import { api } from "../lib/ipc.ts";
+import { GroupedResults } from "../search/GroupedResults.tsx";
+import { highlightParts } from "../lib/search.ts";
 import { clock } from "../lib/format.ts";
 import { useApp } from "../shell/AppContext.tsx";
 import { Button } from "../ui/Button.tsx";
@@ -31,7 +33,7 @@ export function SearchFilters({
   return (
     <details className="research-filters">
       <summary>
-        Filters{Object.values(filter).some(Boolean) ? " · active" : ""}
+        Filters{Object.entries(filter).some(([k,v]) => k !== "exact" && !!v) ? " · active" : ""}
       </summary>
       <div className="ai-filter-grid">
         <Select
@@ -156,7 +158,7 @@ export function SourceHit({
       <small className="muted">
         {[hit.kind, hit.channel, hit.date].filter(Boolean).join(" · ")}
       </small>
-      <p>{hit.text}</p>
+      <p>{highlightParts(hit.marked ?? hit.text).map((p, i) => p.mark ? <mark key={i}>{p.text}</mark> : p.text)}</p>
     </button>
   );
 }
@@ -207,8 +209,8 @@ export function SearchPanel({
   }, [q, semantic, filter]);
   const submit = () => {
     if (!text.trim()) return;
-    if (!semantic) navigate({ page: "search", q: text }, { replace: true });
-    void run(text);
+    if (!semantic && text !== q) navigate({ page: "search", q: text }, { replace: true });
+    else void run(text);
   };
   return (
     <div className="research-search">
@@ -243,6 +245,7 @@ export function SearchPanel({
           {loading ? "Searching…" : "Search"}
         </Button>
       </form>
+      {!semantic && <div className="search-match-mode"><Select label="Word matching" value={filter.exact ? "phrase" : "words"} onChange={v => setFilter({ ...filter, exact: v === "phrase" })} options={[{ value: "words", label: "All words" }, { value: "phrase", label: "Exact phrase" }]}/><small className="muted">{filter.exact ? "Find these words together, in this order." : "Find passages containing every word."}</small></div>}
       <SearchFilters filter={filter} onChange={setFilter} />
       {error && (
         <p role="alert" className="is-error">
@@ -256,14 +259,14 @@ export function SearchPanel({
             : `${hits.length} matching passages${hits.length === 100 ? " · first 100" : ""}`}
         </p>
       )}
-      <div className="research-results">
+      {!semantic ? <GroupedResults hits={hits} renderOther={hit => <SourceHit hit={hit}/>} /> : <div className="research-results">
         {hits.map((hit, i) => (
           <SourceHit
             key={`${hit.kind}:${hit.id}:${hit.start}:${i}`}
             hit={hit}
           />
         ))}
-      </div>
+      </div>}
       {!searched && (
         <Empty
           icon={Search}

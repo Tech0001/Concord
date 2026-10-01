@@ -8,7 +8,7 @@ source=pathlib.Path.home()/'.local/share/concord-next/library.db'
 src=sqlite3.connect(f'file:{source}?mode=ro',uri=True);db=sqlite3.connect(root/'library.db')
 for typ in ['table','index','trigger']:
  for name,sql in src.execute("select name,sql from sqlite_master where type=? and sql is not null",(typ,)):
-  if name.startswith('sqlite_') or name.startswith('segments_'):continue
+  if name.startswith('sqlite_') or (name.startswith('segments_') and name not in ('segments_fts','segments_insert','segments_delete','segments_update','segments_recording_time')):continue
   db.execute(sql)
 src.close();db.execute('pragma user_version=5')
 with wave.open(str(root/'sample.wav'),'wb') as wav:

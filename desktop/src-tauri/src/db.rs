@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 9 {
+    if version >= 10 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -114,8 +114,9 @@ fn migrate(db: &mut Connection) -> Result<()> {
     if version < 6 { crate::health::migrate(&tx)?; }
     if version < 7 { crate::documents::migrate(&tx)?; }
     if version < 8 { crate::pipeline::migrate(&tx)?; }
-    crate::pipeline::migrate_sources(&tx)?;
-    tx.execute_batch("PRAGMA user_version=9")?;
+    if version < 9 {crate::pipeline::migrate_sources(&tx)?;}
+    crate::search_index::migrate(&tx)?;
+    tx.execute_batch("PRAGMA user_version=10")?;
     tx.commit()?;
     Ok(())
 }
@@ -399,23 +400,19 @@ pub fn search(root: &Path, query: &str) -> Result<Vec<Value>> {
         return Ok(vec![]);
     }
     // Treat user input as words, never raw FTS operators or SQL.
-    let fts = query
-        .split_whitespace()
-        .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" AND ");
+    let fts = crate::search_index::query(query,false);
     rows(
         &open(root)?,
         "SELECT m.id, m.title, m.channel, m.date, segments.text AS text,
-                highlight(segments, 4, char(2), char(3)) AS marked,
+                highlight(segments_fts, 0, char(2), char(3)) AS marked,
                 CAST(segments.start AS REAL) AS start, segments.speaker AS speaker,
                 sp.name AS speaker_name, sp.color AS speaker_color
-         FROM segments
+         FROM segments_fts JOIN segments ON segments.id=segments_fts.rowid
          JOIN media m ON m.id = segments.media_id
          LEFT JOIN assignments a ON a.media_id = segments.media_id AND a.local_id = segments.speaker
          LEFT JOIN speakers sp ON sp.id = a.speaker_id
-         WHERE segments MATCH ?1
-         ORDER BY rank LIMIT 200",
+         WHERE segments_fts MATCH ?1
+         ORDER BY segments_fts.rank LIMIT 200",
         [fts],
     )
 }
@@ -614,7 +611,7 @@ mod tests {
         assert_eq!(row["review_state"], "unreviewed");
         assert_eq!(row["position"], 0.0);
         assert!(row["opened_at"].is_null());
-        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
+        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 10);
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
     }

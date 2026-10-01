@@ -8,6 +8,7 @@ export type Provider = {
 };
 export type AiConfig = { embedding: Provider; chat: Provider };
 export type SearchFilter = {
+  exact: boolean;
   kind: string;
   channel: string;
   speaker: string;
@@ -17,6 +18,7 @@ export type SearchFilter = {
   mediaId: string;
 };
 export const EMPTY_FILTER: SearchFilter = {
+  exact: false,
   kind: "",
   channel: "",
   speaker: "",
@@ -26,6 +28,10 @@ export const EMPTY_FILTER: SearchFilter = {
   mediaId: "",
 };
 export type ResearchHit = {
+  marked?: string | null;
+  speaker?: string | null;
+  speaker_name?: string | null;
+  speaker_color?: string | null;
   kind: "recording" | "document" | "note";
   id: string;
   title: string;

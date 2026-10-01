@@ -18,6 +18,7 @@ use std::{
 #[derive(Default, Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Filter {
+    pub exact: bool,
     pub kind: String,
     pub channel: String,
     pub speaker: String,
@@ -34,6 +35,10 @@ pub struct Hit {
     pub channel: String,
     pub date: String,
     pub text: String,
+    pub marked: Option<String>,
+    pub speaker: Option<String>,
+    pub speaker_name: Option<String>,
+    pub speaker_color: Option<String>,
     pub start: Option<f64>,
     pub end: Option<f64>,
     pub score: f64,
@@ -295,7 +300,7 @@ fn metadata(db: &Connection, f: &Filter) -> Result<HashMap<(String, String), Hit
         let get = |s: &str| r[s].as_str().unwrap_or("").to_owned();
         let kind = get("kind");
         let id = get("id");
-        let date = get("date");
+        let date = crate::search_index::date(&get("date"));
         let channel = get("channel");
         if !f.kind.is_empty() && f.kind != kind
             || !f.channel.is_empty() && f.channel != channel
@@ -316,6 +321,10 @@ fn metadata(db: &Connection, f: &Filter) -> Result<HashMap<(String, String), Hit
                 channel,
                 date,
                 text: String::new(),
+                marked: None,
+                speaker: None,
+                speaker_name: None,
+                speaker_color: None,
                 start: None,
                 end: None,
                 score: 0.,
@@ -381,7 +390,7 @@ pub fn search(
     ensure!(query.len() <= 16000, "Search query is too long");
     let db = db::open(root)?;
     let meta = metadata(&db, f)?;
-    let ranges = speaker_ranges(&db, &f.speaker)?;
+    let ranges = if semantic {speaker_ranges(&db, &f.speaker)?} else {HashMap::new()};
     let mut hits = Vec::new();
     let limit = limit.clamp(1, 200);
     if semantic {
@@ -447,23 +456,25 @@ pub fn search(
             }
         }
     } else {
-        let fts = query
-            .split_whitespace()
-            .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" AND ");
-        let mut stmt=db.prepare("SELECT media_id,text,CAST(start AS REAL),CAST(end AS REAL),rank FROM segments WHERE segments MATCH ?1 ORDER BY rank")?;
-        let mut rows = stmt.query([fts])?;
+        let fts = crate::search_index::query(query,f.exact);
+        let mut stmt=db.prepare("SELECT s.media_id,s.text,s.start,s.end,segments_fts.rank,
+          highlight(segments_fts,0,char(2),char(3)),s.speaker,sp.name,sp.color
+          FROM segments_fts JOIN segments s ON s.id=segments_fts.rowid
+          LEFT JOIN assignments a ON a.media_id=s.media_id AND a.local_id=s.speaker
+          LEFT JOIN speakers sp ON sp.id=a.speaker_id
+          WHERE segments_fts MATCH ?1 AND (?2='' OR a.speaker_id=?2) ORDER BY segments_fts.rank")?;
+        let mut rows = stmt.query(params![fts,f.speaker])?;
         while let Some(r) = rows.next()? {
             let id: String = r.get(0)?;
             if let Some(base) = meta.get(&("recording".into(), id.clone())) {
                 let start = r.get(2)?;
                 let end = r.get(3)?;
-                if !allowed_time(f, &ranges, &id, start, end) {
-                    continue;
-                }
                 let mut h = base.clone();
                 h.text = r.get(1)?;
+                h.marked=r.get(5)?;
+                h.speaker=r.get(6)?;
+                h.speaker_name=r.get(7)?;
+                h.speaker_color=r.get(8)?;
                 h.start = start;
                 h.end = end;
                 h.score = -r.get::<_, f64>(4)?;
@@ -474,11 +485,11 @@ pub fn search(
             }
         }
         // Text documents and notes are small enough to scan; recording search uses FTS.
-        let terms = query
+        let terms = if f.exact {vec![query.to_lowercase()]} else {query
             .to_lowercase()
             .split_whitespace()
             .map(str::to_owned)
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()};
         for ((kind, id), base) in &meta {
             if kind == "recording" {
                 continue;
