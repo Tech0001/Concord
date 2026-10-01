@@ -26,8 +26,14 @@ library migrated to `user_version` 2. Everything committed on `rewrite/rust-taur
 - `docs/superpowers/specs/2026-09-30-speakers-design.md`: a **draft** Delivery 2 spec.
   The user has not approved it.
 
-**Open bug, reported by the user and not investigated:** "the playback is wonky" in
-the installed 0.2.0 WebKitGTK window. Playback of the new player was never verified in the
+**Open bug, root cause found by the final review:** "the playback is wonky" in the
+installed 0.2.0. Fix Critical 1 and Important 2 in
+`docs/superpowers/reviews/2026-09-30-delivery-1-review.md` first. `useMedia` never attaches its
+listeners when the media URL resolves before the transcript, which is the normal order
+with large transcripts. Leaving a recording then saves position 0. The hypotheses below
+were written before the review and are probably secondary.
+
+Original report: "the playback is wonky" in the installed 0.2.0 WebKitGTK window. Playback of the new player was never verified in the
 real window, only in headless Chromium.
 
 Unconfirmed hypotheses, to check with evidence before fixing:
@@ -49,8 +55,9 @@ Ask the user what "wonky" means (stutter, jumps, lag on seek, desync) and watch 
 in folder" (D-Bus FileManager1 with an xdg-open fallback, `system.rs`), and Copy
 (`lib/clipboard.ts`, with an `execCommand` fallback).
 
-**The final whole-branch code review** of 0.2.0 was started but its findings were not
-processed. The commit range is `f147a9b..b77bf90`.
+**The final whole-branch code review** of 0.2.0 (`f147a9b..b77bf90`) is saved at
+`docs/superpowers/reviews/2026-09-30-delivery-1-review.md`. None of its findings are fixed
+yet.
 
 **Useful tooling:**
 - Mock host: `pnpm --dir desktop dev`, then open `http://127.0.0.1:1420/?mock`. Add
