@@ -43,6 +43,14 @@ pub struct Runtime {
     pub models: PathBuf,
 }
 impl Runtime {
+    pub fn for_root(&self, root: &Path) -> Self {
+        let mut value=self.clone();
+        if let Some(environment)=crate::speech_setup::active(root) {
+            if std::env::var_os("CONCORD_SPEAKER_PYTHON").is_none() {value.python=crate::speech_setup::python(&environment);}
+            if std::env::var_os("CONCORD_NEMO_MODELS").is_none() {value.models=crate::speech_setup::models(root);}
+        }
+        value
+    }
     pub fn resolve(resources: Option<PathBuf>) -> Self {
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let resource = resources.unwrap_or_default();
@@ -97,7 +105,11 @@ impl Runtime {
             },
             Err(e) => (Value::Null, Some(format!("Cannot start the speech runtime: {e}"))),
         };
-        self.status_from_doctor(&doctor, error)
+        let mut status=self.status_from_doctor(&doctor, error);
+        let media=Command::new("ffmpeg").env_remove("LD_LIBRARY_PATH").arg("-version").output().is_ok_and(|o|o.status.success());
+        status["mediaToolsReady"]=json!(media);
+        if !media {status["ready"]=json!(false);if status["runtimeError"].is_null() {status["runtimeError"]=json!("FFmpeg is unavailable. Install FFmpeg using your Linux package manager, then check again.");}}
+        status
     }
     fn status_from_doctor(&self, doctor: &Value, error: Option<String>) -> Value {
         let devices = doctor["devices"].as_array();
@@ -110,14 +122,16 @@ impl Runtime {
         let runtime_ready = doctor["features"]["asr"]==true && doctor["features"]["diarization"]==true && (cpu || gpu.is_some());
         let error = error.or_else(|| (!runtime_ready).then(|| "Speech runtime could not load its transcription, diarization, or compute backends.".to_owned()));
         let models = self.models.join(ASR).is_file() && self.models.join(DIAR).is_file();
-        json!({"ready":runtime_ready&&models&&self.python.is_file(),"runtimeReady":runtime_ready,"runtimeError":error,
-          "device":device,"gpu":gpu.and_then(|g|g["description"].as_str()),"modelsReady":models,"voiceMatchingReady":self.python.is_file(),
+        let managed = self.python.parent().and_then(Path::parent).is_some_and(|p|p.join("verified").is_file());
+        let voice = self.python.is_file() && (!managed || self.models.join("titanet-l.nemo").is_file());
+        json!({"ready":runtime_ready&&models&&voice,"runtimeReady":runtime_ready,"runtimeError":error,"managed":managed,
+          "device":device,"gpu":gpu.and_then(|g|g["description"].as_str()),"modelsReady":models,"voiceMatchingReady":voice,
           "binary":self.binary,"python":self.python,"models":self.models,"model":MODEL})
     }
     fn verify(&self) -> Result<()> {
         for (name, expected) in HASHES {
             let mut f = fs::File::open(self.models.join(name)).with_context(|| {
-                format!("Install the Nemotron model {name} in the stable Concord app first")
+                format!("Speech model {name} is missing. Prepare speech in Settings.")
             })?;
             let mut sha = Sha256::new();
             let mut buf = [0u8; 1024 * 128];
@@ -129,7 +143,7 @@ impl Runtime {
                 sha.update(&buf[..n]);
             }
             if format!("{:x}", sha.finalize()) != expected {
-                bail!("Model checksum failed for {name}. Repair the model in the stable app.");
+                bail!("Model checksum failed for {name}. Repair speech setup in Settings.");
             }
         }
         Ok(())
@@ -310,6 +324,7 @@ pub(crate) fn process(
 }
 pub(crate) struct Options<'a> {pub device:&'a str,pub language:&'a str,pub diarize:bool}
 pub(crate) fn process_options(root:&Path,runtime:&Runtime,control:&Control,job:&str,id:&str,media:&Path,options:&Options<'_>)->Result<()> {
+    let runtime=runtime.for_root(root);
     anyhow::ensure!(media.is_file(),"The media file is unavailable. Reconnect its drive before retrying.");
     let device=options.device;
     message(root, job, "running", "Verifying speech models")?;
@@ -350,15 +365,17 @@ pub(crate) fn process_options(root:&Path,runtime:&Runtime,control:&Control,job:&
             "running",
             "Transcribing and identifying speakers",
         )?;
-        let embedding_gpu = device != "cpu"
-            && Command::new("nvidia-smi")
-                .arg("-L")
-                .output()
-                .is_ok_and(|o| o.status.success());
+        let embedding_gpu = if options.diarize && device != "cpu" && status["managed"] != true {
+            let mut probe=Command::new(&runtime.python);runtime.isolate(&mut probe);
+            probe.args(["-c","import torch; print('cuda' if torch.cuda.is_available() else 'cpu')"]).output().is_ok_and(|o|o.status.success()&&String::from_utf8_lossy(&o.stdout).trim()=="cuda")
+        } else {false};
         let raw = work.join("transcript.json");
         let diar = work.join("diar.json");
         let mut cmd = Command::new(&runtime.python);
         runtime.isolate(&mut cmd);
+        cmd.env("OMP_NUM_THREADS","8").env("MKL_NUM_THREADS","8");
+        let titanet=runtime.models.join("titanet-l.nemo");
+        if titanet.is_file() {cmd.env("CONCORD_TITANET_MODEL",titanet);}
         cmd.arg(&runtime.script)
             .arg(&audio)
             .arg("--output-json")
@@ -577,7 +594,7 @@ mod tests {
             Runtime::resolve(None),
             control.clone(),
             id.clone(),
-            "auto".into(),
+            std::env::var("CONCORD_TEST_DEVICE").unwrap_or_else(|_|"auto".into()),
         )
         .unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(600);

@@ -12,6 +12,7 @@ import { PageHeader } from "../ui/PageHeader.tsx";
 import { useToast } from "../ui/Toasts.tsx";
 import { useApp } from "../shell/AppContext.tsx";
 import "./settings.css";
+import { SpeechSetup } from "./SpeechSetup.tsx";
 import { ProviderSettings } from "../ai/ProviderSettings.tsx";
 
 function themeLabel(name: string): string {
@@ -144,9 +145,10 @@ export function SettingsPage() {
         </div>
         {runtime && !runtime.ready && (
           <p className="settings-note">
-            {runtime.runtimeError || (!runtime.modelsReady ? "Speech models are missing. This preview uses the models installed by the Nemotron Concord build." : !runtime.voiceMatchingReady ? "The speaker matching environment is missing. Complete voice setup in the Nemotron Concord build." : "Speech setup needs attention. Check the runtime diagnostics in Status & Health.")}
+            {runtime.runtimeError || (!runtime.modelsReady ? "Speech models are missing. Prepare speech below to install them." : !runtime.voiceMatchingReady ? "Voice matching needs setup. Prepare speech below to install its environment." : "Speech setup needs attention. Check the runtime diagnostics in Status & Health.")}
           </p>
         )}
+        <SpeechSetup managed={!!runtime?.managed} onComplete={() => void check()} />
         <div>
           <Button icon={RefreshCw} disabled={checking} onClick={() => void check()}>
             Check again

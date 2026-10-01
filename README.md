@@ -4,97 +4,110 @@ A local research archive for spoken-word media. Listen, transcribe, find passage
 recognize familiar voices, and connect what you learn.
 
 This branch is the **Linux-first Rust/Tauri preview**. The working Electron/Nemotron
-build is preserved on `feature/nemo-native`. The new app runs beside it as
-**Concord Next**, with a separate database and transcript folder.
+build is preserved on `feature/nemo-native`. Concord Next has its own database and
+transcript folder and can run alongside it. Full Electron parity is still in progress.
 
-## What works in the first native build
+## Available in the preview
 
-- Import an existing Concord library and saved voice fingerprints into a separate database.
-- Browse collections, play local recordings, and seek from transcript timestamps.
-- Import local audio/video and transcribe with Nemotron 3.5 multilingual ASR and
-  Nemotron diarization; review activity and cancel processing.
-- Search transcript words locally with SQLite FTS5.
-- Name voices, read documents, save research notes, and connect notes on a map.
-- Use the supplied Concord branding in the desktop window and launcher.
+- Library/player with transcript seeking, speaker colors, resizable panes, range notes,
+  looping, copy, and media/transcript export.
+- Nemotron 3.5 multilingual transcription and Nemotron diarization, on GPU or CPU.
+  Voice fingerprints link speakers across overlapping windows and recordings.
+- Speaker profiles, multiple fingerprints per person, naming/merging/noise review,
+  matching, and an unidentified-voices queue.
+- Word search, plus a separate AI page for local semantic search and optional chat.
+  Embedding and chat providers have independent models and credentials.
+- Research notes with multiple passages, tags, typed connections, and four map layouts.
+- Markdown document folders, live sync, local images/links, categories, and research anchors.
+- YouTube subscriptions and local source folders, download setup, persistent processing
+  queues, delayed retries, and batch re-transcription that preserves existing transcripts.
+- Status, archive audits and repairs, backups/restore, activity history, and runtime logs.
 
-Rust owns database access, jobs, process management, transcript/speaker merging,
-and search. The React interface talks to Rust through Tauri commands. There is no
-Electron runtime or Node server. A small Rust media stream binds to loopback on a
-random port with per-session unguessable URLs, because Linux WebKitGTK cannot play
-Tauri's custom asset URLs. Only the open recording is exposed; app commands use IPC.
-NeMo-Speech.cpp runs ASR and diarization; Python/TitaNet still provides the tested
-voice fingerprints and cross-window clustering.
+## Install and prepare speech
 
-## Run on Linux
+Linux packages are built locally during this preview; there is no public release yet.
+The `.deb` declares its system dependencies. The AppImage bundles playback codecs and
+helper runtimes, but **FFmpeg must be installed using your Linux package manager**.
 
-Install Rust, Node.js 24+, pnpm 10, FFmpeg, GStreamer base/good/bad/libav plugins, patchelf, and the
+1. Install the package, or make the AppImage executable and launch it.
+2. In **Settings → Speech**, choose **Prepare speech**. Concord installs private Python,
+   voice-matching dependencies, and checksum-verified models inside its data folder.
+   Allow several GB of free space. Setup has progress, logs, cancellation, and retry.
+3. Leave processing on **Automatic** to use an available GPU, or select **CPU**.
+4. Add local recordings, import an existing Concord library, or add sources in **Pipeline**.
+
+Speech setup does not require Electron, an NVIDIA GPU, or changes to system Python.
+ASR and diarization use NeMo-Speech.cpp; the portable TitaNet voice matcher runs on CPU.
+Existing Electron speech installations remain usable until a private environment is prepared.
+New environments are activated only after extracting and checking a real voice fingerprint.
+A cancelled or failed repair keeps the previous working environment.
+
+Semantic search uses a separate app-managed local Qwen3 embedding model, prepared from the
+AI page or Settings. Chat remains disabled until a provider is configured. Local/OpenRouter/
+custom embedding and chat services are supported independently. If you choose a remote
+provider, relevant text is sent to that provider. Speech processing stays local.
+
+See [speech setup details](desktop/speech/README.md) for pinned models and dependencies.
+
+## Develop and package on Linux
+
+Install Rust, Node.js 24+, pnpm 10, FFmpeg, CMake/Ninja, Vulkan development tools,
+GStreamer base/good/bad/libav plugins, patchelf, and the
 [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/#linux).
-For this first preview, finish speech setup in the existing Nemotron Concord app;
-Next reuses its model files and voice-matching environment.
 
 ```sh
 pnpm install --frozen-lockfile
 bash scripts/stage-nemo-runtime.sh
+bash scripts/stage-next-setup.sh
+bash scripts/stage-next-downloads.sh
+bash scripts/build-embedding-runtime.sh
 pnpm --dir desktop desktop
 ```
 
-The first launch can import the existing Concord database or start with local
-recordings. No media files are copied or deleted. The import does not carry over
-watchers, queued jobs, or AI credentials. Keep external media drives connected.
-
 ```sh
-# Type-check and build the interface
 pnpm --dir desktop build
-# Rust storage, search, and transcript tests
+pnpm --dir desktop test:ts
 pnpm --dir desktop test
-# Linux desktop bundles
+cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
 pnpm --dir desktop package
-# Install alongside Concord, with its own application launcher
 bash scripts/install-next-local.sh
 ```
 
-The packaged app needs FFmpeg and the speech dependencies described above. The
-AppImage includes GStreamer playback codecs, native runtime libraries, and helper
-scripts. Packaging checks for AAC, H.264, AV1, Opus, and Vorbis support before building.
-Maintainers can set `CONCORD_GST_PLUGINS` to a folder of additional plugins from the
-same distro/GStreamer release as the build host. First-run model downloading and
-voice-environment installation within Next are still to be ported.
+Packaging includes NeMo-Speech.cpp, the local embedding runtime, private yt-dlp/Node/uv
+helpers, and GStreamer playback codecs. There is no Electron runtime or Node application
+server. Node is used only by the bundled YouTube downloader. Downloaded build tools are
+pinned and SHA-256 verified. Model weights are downloaded during setup and are not in Git.
+Packaging checks AAC, H.264, AV1, Opus and Vorbis playback support. Additional distro-matched
+plugins can be supplied through `CONCORD_GST_PLUGINS`.
 
-On NVIDIA/Wayland, this build applies Tauri's documented
+On NVIDIA/Wayland, the app applies the
 [WebKitGTK rendering workaround](https://v2.tauri.app/develop/debug/linux-graphics/)
-inside the app after reproducing the `Gdk Error 71` failure. It does not change
-desktop settings or speech GPU acceleration. An explicitly set
-`WEBKIT_DISABLE_DMABUF_RENDERER` takes precedence.
+for the reproduced `Gdk Error 71` failure. It does not change desktop settings or speech GPU
+acceleration. An explicit `WEBKIT_DISABLE_DMABUF_RENDERER` takes precedence.
 
-## Data and development
+## Data and architecture
 
-Linux preview data lives in `~/.local/share/concord-next/` (or the corresponding
-`XDG_DATA_HOME`). Set `CONCORD_NEXT_DATA` to isolate a test profile. New transcripts
-are versioned under that folder; re-transcription never overwrites a transcript
-owned by the stable app. Original media is read in place.
+Linux data lives in `~/.local/share/concord-next/` (respecting `XDG_DATA_HOME`).
+`CONCORD_NEXT_DATA` selects an isolated test library. Imported media stays in its original
+location; new transcripts are versioned under the app folder. External drives must remain
+connected. Import does not copy watchers, old queued jobs, or AI credentials.
 
-The native implementation is in `desktop/src-tauri/`; its interface is in
-`desktop/src/`. The legacy application remains in `client/`, `server/`, and
-`electron/` for migration reference. See [legacy build instructions](docs/legacy-build.md)
-and [the Nemotron integration notes](docs/nemo-native.md).
+Rust owns SQLite, jobs, child processes, transcript/speaker merging and search. React uses
+Tauri IPC. A private loopback media server exposes only the opened recording through an
+unguessable session URL, supporting WebKitGTK seeking without a public listening port.
+Local semantic search uses a private app-managed llama.cpp service.
 
-For the current project state, decisions, local setup, validation, and next work,
-start with the [development handoff](docs/HANDOFF.md).
+Native code: `desktop/src-tauri/`. Interface: `desktop/src/`. Electron reference:
+`client/`, `server/`, `electron/`. See [legacy build instructions](docs/legacy-build.md),
+[Nemotron notes](docs/nemo-native.md), and the [development handoff](docs/HANDOFF.md).
 
-## Next milestones
+## Remaining work
 
-This is a working first native slice, not full feature parity. Upcoming work:
+Remaining parity includes saved library views and file actions, recorder/Extract/Discover
+tools, player refinements, search refinements, account-login chat, and broad installation
+validation. macOS follows Linux, then Windows. Watchers and the standalone Compare screen
+are intentionally omitted. Eleven-speaker recordings have been exercised; a recording with
+sixteen distinct speakers still needs validation.
 
-- Simplified channel subscriptions and downloads, with a durable job queue.
-- A self-contained speech installer and broader Linux packaging validation.
-- Unified word/semantic search; separate embedding and chat providers/models.
-- Local/OpenRouter chat and research citations; evaluate supported account-login integrations separately.
-- Full note anchors/tags and richer document editing and map navigation.
-- macOS, then Windows packaging and validation.
-
-Watchers and the standalone Compare screen are intentionally excluded from the
-new navigation. Sixteen-speaker capacity continues to use overlapping diarization
-windows and global voice matching; there is no eight-person recording limit.
-
-Private recordings, databases, model weights, and local credentials do not belong
-in Git. Concord is licensed under MIT; bundled components retain their licenses.
+Private recordings, databases, model weights and credentials do not belong in Git.
+Concord is MIT licensed; bundled components and downloaded models retain their own licenses.

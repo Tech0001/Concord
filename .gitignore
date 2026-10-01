@@ -66,3 +66,6 @@ __pycache__/
 
 /build/llama-source/
 /build/binaries/embedding/
+/build/download-cache/
+/build/speech-setup-lab/
+/build/binaries/setup/

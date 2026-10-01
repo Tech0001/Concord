@@ -137,6 +137,9 @@ const handlers: Record<string, (a: any) => unknown> = {
       message: "Transcript saved",
     },
   ],
+  speech_setup_status: () => ({status:"",message:"",details:""}),
+  speech_setup_start: () => undefined,
+  speech_setup_cancel: () => undefined,
   speech_status: () => ({
     ready: true,
     device: "vulkan:0",

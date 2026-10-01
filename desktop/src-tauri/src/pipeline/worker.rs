@@ -10,7 +10,7 @@ use std::{
 };
 
 pub struct Control {
-    pub(super) gate: Mutex<Option<String>>,
+    pub(crate) gate: Mutex<Option<String>>,
     pub speech: Arc<speech::Control>,
     pub closing: AtomicBool,
     pub checking: AtomicBool,

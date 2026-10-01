@@ -1,0 +1,16 @@
+const invoke=(cmd,args)=>window.__TAURI_INTERNALS__.invoke(cmd,args);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const assert=(ok,why)=>{if(!ok)throw Error(why);};
+const until=async(fn,why)=>{for(let i=0;i<300;i++){if(await fn())return;await sleep(100);}throw Error(`Timed out: ${why}`);};
+const click=text=>{const b=[...document.querySelectorAll('.speech-setup button')].find(b=>b.textContent.trim()===text);assert(b&&!b.disabled,`enabled ${text}`);b.click();};
+location.hash='#/settings';
+await until(()=>document.querySelector('.speech-setup')?.textContent.includes('own folder'),'managed setup visible');
+const before=await invoke('speech_status');assert(before.ready&&before.managed,'independent speech runtime ready');assert(before.python.startsWith(config.root)&&before.models.startsWith(config.root),'private paths');
+const recording=await invoke('recording',{id:config.id});assert(recording.segments.length>0,'existing transcript');
+click('Repair speech setup');await until(() => document.querySelector('.speech-setup')?.textContent.includes('Cancel setup'),'cancellable progress');
+click('Cancel setup');await until(async()=>(await invoke('speech_setup_status')).status==='cancelled','setup cancelled');
+await until(()=>[...document.querySelectorAll('.speech-setup button')].some(b=>b.textContent==='Repair speech setup'&&!b.disabled),'retry available');
+const after=await invoke('speech_status');assert(after.ready&&after.python===before.python,'cancel preserves active environment');
+assert((await invoke('recording',{id:config.id})).segments.length===recording.segments.length,'cancel preserves transcript');
+assert(document.querySelector('.speech-setup').textContent.includes('cancelled'),'visible cancellation status');
+return {passed:['native Settings reports private speech installation and selected processing','setup progress and cancellation work without disturbing existing models or transcripts']};

@@ -423,7 +423,9 @@ def diarize(audio_path: str, output_path: str, model_name: str, device: str,
     if sortformer is None:
         sortformer = SortformerEncLabelModel.from_pretrained(model_name=model_name)
         sortformer.train(False)  # `.eval()` rewritten — JS-eval scanners trip on the literal
-    titanet = EncDecSpeakerLabelModel.from_pretrained(model_name="titanet_large")
+    local_titanet = os.environ.get("CONCORD_TITANET_MODEL")
+    titanet = (EncDecSpeakerLabelModel.restore_from(local_titanet, map_location="cpu")
+               if local_titanet else EncDecSpeakerLabelModel.from_pretrained(model_name="titanet_large"))
     titanet.train(False)
     if device == "cuda":
         if turn_detector is None:

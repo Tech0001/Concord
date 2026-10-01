@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.10.0**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.11.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,35 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Independent speech installation (0.11.0 installed)
+
+Settings now prepares speech without an Electron installation: private uv 0.12.5, managed
+Python 3.12.14, hash-locked NeMo 2.7.3/PyTorch 2.13 CPU dependencies, and three pinned,
+verified models (Nemotron ASR/diarization and TitaNet). uv is bundled with licenses and source
+references. Model files download to the native data folder; verified old GGUFs can be copied.
+Voice matching runs on CPU in new environments; native ASR/diarization still use the selected
+CPU/GPU. Existing CUDA voice environments remain supported. CUDA capability is checked in
+Python instead of inferred merely from nvidia-smi. Eight CPU threads prevent oversubscription.
+
+Setup shows progress, cancellation, errors and logs. A new environment activates atomically
+only after extracting a finite 192-dimensional fingerprint. Failed/cancelled installs retain
+working models/environments and transcripts. Interrupted setup offers retry; verified models
+are reused. Queue work is held while setup is active and resumes afterward. FFmpeg is checked
+before setup; AppImage users still install it with their distro package manager. The .deb
+already declares it. No live-library speech environment was replaced during these tests.
+
+77 Rust tests, 38 TS tests, three Python adapter tests, Clippy and the frontend build pass.
+A fresh isolated private install and GPU-ASR/CPU-voice recording passed in 70 seconds total:
+`/tmp/concord-speech-setup-4KnnBd`. A separate entirely CPU-based 25-second recording passed in
+23 seconds. Native WebKitGTK checks private paths/readiness and cancelling a repair while
+retaining the active environment and transcript; native-test-result.json in the same folder
+passes. Desktop and phone screenshots checked. ARM dependency locks resolve but have not
+been exercised on ARM hardware. Public installation validation and full Electron parity
+remain in progress. README now documents current functionality and setup instead of the
+obsolete first-preview requirements. 0.11.0 is installed; bundled uv and GPU discovery
+work from its actual AppImage resources. Backup:
+`~/.local/share/concord-next/backups/before-0.11.0-20260930-231002.db`.
 
 ## Subscriptions and download setup (0.10.0 installed)
 

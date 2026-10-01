@@ -120,7 +120,9 @@ export type Job = {
   message: string;
   created_at?: string;
 };
+export type SpeechSetupStatus = { status: string; message: string; details: string };
 export type Runtime = {
+  managed?: boolean;
   ready: boolean;
   runtimeReady?: boolean;
   runtimeError?: string | null;
