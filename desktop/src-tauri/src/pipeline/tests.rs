@@ -409,3 +409,25 @@ fn only_successful_transcription_queues_optional_ai_and_invalid_policy_cannot_fa
     let id=one["id"].as_str().unwrap();queue::finish(root,id,Ok(()),&c,5).unwrap();
     assert_eq!(state(root,id)["status"],"complete");
 }
+#[test]
+fn queued_work_waits_for_speech_instead_of_failing() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let id = enqueue_one(root, &c, "one".into(), "auto".into()).unwrap();
+    queue::wait_for_speech(root).unwrap();
+    let job = state(root, &id);
+    assert_eq!(job["status"], "queued");
+    assert_eq!(job["message"], queue::WAITING_FOR_SPEECH);
+    assert_eq!(job["attempts"], 0);
+}
+#[test]
+fn speech_device_lives_in_the_pipeline_config() {
+    let (dir, _) = fixture();
+    let root = dir.path();
+    assert_eq!(device(root).unwrap(), "auto");
+    set_device(root, "cpu").unwrap();
+    assert_eq!(device(root).unwrap(), "cpu");
+    assert_eq!(config(root).unwrap().device, "cpu");
+    assert!(set_device(root, "gpu-please").is_err());
+    assert_eq!(device(root).unwrap(), "cpu");
+}

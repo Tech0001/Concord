@@ -47,6 +47,9 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                 {
                     return Ok(());
                 }
+                if !runtime.for_root(&root).installed() {
+                    return queue::wait_for_speech(&root);
+                }
                 let Some(row) = queue::claim(&root, queue::tick_time())? else {
                     return Ok(());
                 };

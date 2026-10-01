@@ -319,6 +319,15 @@ pub fn enqueue_one(root: &Path, control: &Control, id: String, device: String) -
         .map(str::to_owned)
         .context("This recording is already queued or its media file is unavailable")
 }
+pub const WAITING_FOR_SPEECH: &str = "Waiting for the speech engine to finish installing";
+/// Leave queued work in place while speech is missing, so it starts once setup finishes.
+pub(super) fn wait_for_speech(root: &Path) -> Result<()> {
+    db::open(root)?.execute(
+        "UPDATE jobs SET message=?1 WHERE status='queued' AND message<>?1 AND id IN (SELECT id FROM pipeline_work)",
+        [WAITING_FOR_SPEECH],
+    )?;
+    Ok(())
+}
 pub(super) fn tick_time() -> i64 {
     now()
 }

@@ -121,12 +121,26 @@ impl Runtime {
         let cpu = devices.is_some_and(|ds| ds.iter().any(|d| d["type"] == "cpu"));
         let runtime_ready = doctor["features"]["asr"]==true && doctor["features"]["diarization"]==true && (cpu || gpu.is_some());
         let error = error.or_else(|| (!runtime_ready).then(|| "Speech runtime could not load its transcription, diarization, or compute backends.".to_owned()));
-        let models = self.models.join(ASR).is_file() && self.models.join(DIAR).is_file();
-        let managed = self.python.parent().and_then(Path::parent).is_some_and(|p|p.join("verified").is_file());
-        let voice = self.python.is_file() && (!managed || self.models.join("titanet-l.nemo").is_file());
+        let models = self.models_installed();
+        let managed = self.managed();
+        let voice = self.voice_installed();
         json!({"ready":runtime_ready&&models&&voice,"runtimeReady":runtime_ready,"runtimeError":error,"managed":managed,
           "device":device,"gpu":gpu.and_then(|g|g["description"].as_str()),"modelsReady":models,"voiceMatchingReady":voice,
           "binary":self.binary,"python":self.python,"models":self.models,"model":MODEL})
+    }
+    fn models_installed(&self) -> bool {
+        self.models.join(ASR).is_file() && self.models.join(DIAR).is_file()
+    }
+    fn managed(&self) -> bool {
+        self.python.parent().and_then(Path::parent).is_some_and(|p| p.join("verified").is_file())
+    }
+    fn voice_installed(&self) -> bool {
+        self.python.is_file() && (!self.managed() || self.models.join("titanet-l.nemo").is_file())
+    }
+    /// Whether models and voice matching are on disk. Unlike `status`, this does not start the
+    /// runtime, so the queue can check it every second.
+    pub fn installed(&self) -> bool {
+        self.models_installed() && self.voice_installed()
     }
     pub(crate) fn verify(&self) -> Result<()> {
         for (name, expected) in HASHES {
@@ -508,6 +522,24 @@ fn persist(root: &Path, id: &str, md: &Path, raw: &Value, diar: &Value) -> Resul
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_needs_both_models_and_voice_matching() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime {
+            binary: dir.path().join("nemo-speech"),
+            script: dir.path().join("transcribe.py"),
+            python: dir.path().join("venv/bin/python"),
+            models: dir.path().join("models"),
+        };
+        assert!(!runtime.installed());
+        fs::create_dir_all(&runtime.models).unwrap();
+        fs::write(runtime.models.join(ASR), b"asr").unwrap();
+        fs::write(runtime.models.join(DIAR), b"diar").unwrap();
+        assert!(!runtime.installed());
+        fs::create_dir_all(runtime.python.parent().unwrap()).unwrap();
+        fs::write(&runtime.python, b"python").unwrap();
+        assert!(runtime.installed());
+    }
     use super::*;
     #[test]
     fn replacement_keeps_manual_labels_on_new_voice_numbers_and_rolls_back_on_error() {

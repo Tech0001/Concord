@@ -1,12 +1,9 @@
 //! One-click, private speech installation. Publish a tested environment atomically.
-use crate::{pipeline, runtime_log, speech};
+use crate::{model_download, pipeline, runtime_log, speech};
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     fs,
-    future::Future,
-    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{atomic::Ordering, Arc, Mutex},
@@ -20,6 +17,13 @@ pub struct Status {
     pub message: String,
     #[serde(default)]
     pub details: String,
+    /// "models" while downloading or copying models, "runtime" while installing voice matching.
+    #[serde(default)]
+    pub phase: String,
+    #[serde(default)]
+    pub done: u64,
+    #[serde(default)]
+    pub total: u64,
 }
 #[derive(Default)]
 pub struct Control {
@@ -37,6 +41,12 @@ pub const ARTIFACTS: [Artifact; 3] = [
     Artifact { name: "Nemotron-3-Diarization.q8_0.gguf", url: "https://huggingface.co/nvidia/Nemotron-3-Diarization/resolve/f667ed73aee57d40cc39428eb768b4fd87a0a29e/Nemotron-3-Diarization.q8_0.gguf", bytes: 107012128, hash: "08456d9e22cd9a323c0364d98375f3746d6e68507ebb705cd46438c534c7a3a1" },
     Artifact { name: "titanet-l.nemo", url: "https://api.ngc.nvidia.com/v2/models/nvidia/nemo/titanet_large/versions/v1/files/titanet-l.nemo", bytes: 101621760, hash: "e838520693f269e7984f55bc8eb3c2d60ccf246bf4b896d4be9bcabe3e4b0fe3" },
 ];
+pub const MODEL_BYTES: u64 = ARTIFACTS[0].bytes + ARTIFACTS[1].bytes + ARTIFACTS[2].bytes;
+impl Artifact {
+    fn pinned(&self) -> model_download::Pinned<'static> {
+        model_download::Pinned { url: self.url, bytes: self.bytes, hash: self.hash }
+    }
+}
 pub fn models(root: &Path) -> PathBuf {
     root.join("models/nemo")
 }
@@ -89,7 +99,7 @@ pub fn status(root: &Path, control: &Control) -> Status {
         if state.status == "running" {
             state.status = "interrupted".into();
             state.message =
-                "Setup was interrupted. Prepare speech to resume; verified models are kept.".into();
+                "Setup stopped before it finished. Start it again to resume where it left off.".into();
         }
     }
     state.details = fs::read_to_string(log_path(root))
@@ -103,12 +113,27 @@ pub fn status(root: &Path, control: &Control) -> Status {
         .collect();
     state
 }
+/// Update the status line, keeping the current phase and byte counts.
 fn report(root: &Path, control: &Control, status: &str, message: &str) -> Result<()> {
-    let value = Status {
+    let current = control.state.lock().unwrap().clone();
+    save(root, control, Status {
         status: status.into(),
         message: message.into(),
         details: String::new(),
-    };
+        ..current
+    })
+}
+fn progress(root: &Path, control: &Control, phase: &str, message: &str, done: u64, total: u64) -> Result<()> {
+    save(root, control, Status {
+        status: "running".into(),
+        message: message.into(),
+        details: String::new(),
+        phase: phase.into(),
+        done,
+        total,
+    })
+}
+fn save(root: &Path, control: &Control, value: Status) -> Result<()> {
     fs::create_dir_all(root.join("speech"))?;
     let temp = root.join("speech/setup.tmp");
     fs::write(&temp, serde_json::to_vec(&value)?)?;
@@ -120,119 +145,55 @@ fn check(control: &Control) -> Result<()> {
     ensure!(!control.process.is_cancelled(), "Setup cancelled");
     Ok(())
 }
-fn verify(path: &Path, artifact: &Artifact) -> Result<()> {
-    ensure!(
-        fs::metadata(path)?.len() == artifact.bytes,
-        "Model size does not match {}",
-        artifact.name
-    );
-    let mut f = fs::File::open(path)?;
-    let mut sha = Sha256::new();
-    let mut buf = [0u8; 1024 * 128];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        sha.update(&buf[..n]);
-    }
-    ensure!(
-        format!("{:x}", sha.finalize()) == artifact.hash,
-        "Model checksum does not match {}",
-        artifact.name
-    );
-    Ok(())
+fn partial(root: &Path, artifact: &Artifact) -> PathBuf {
+    models(root).join(format!("{}.part", artifact.name))
 }
-async fn cancellable<T>(
-    control: &Control,
-    future: impl Future<Output = reqwest::Result<T>>,
-) -> Result<T> {
-    tokio::pin!(future);
-    loop {
-        tokio::select! {
-            result = &mut future => return Ok(result?),
-            _ = tokio::time::sleep(Duration::from_millis(200)) => check(control)?,
-        }
-    }
-}
+/// Install one model, resuming an interrupted download. `before` counts models already done.
 fn download(
     root: &Path,
     control: &Control,
     artifact: &Artifact,
     reuse: Option<&Path>,
+    before: u64,
 ) -> Result<()> {
     check(control)?;
     let destination = models(root).join(artifact.name);
-    report(
-        root,
-        control,
-        "running",
-        &format!("Verifying {}", artifact.name),
-    )?;
-    if verify(&destination, artifact).is_ok() {
+    let pin = artifact.pinned();
+    progress(root, control, "models", &format!("Verifying {}", artifact.name), before, MODEL_BYTES)?;
+    if model_download::verify(&destination, &pin).is_ok() {
         return Ok(());
     }
     fs::create_dir_all(models(root))?;
-    let partial = destination.with_extension(format!("{}.partial", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<()> {
-        if let Some(source) = reuse.filter(|p| verify(p, artifact).is_ok()) {
-            check(control)?;
-            report(
+    let partial = partial(root, artifact);
+    if let Some(source) = reuse.filter(|p| model_download::verify(p, &pin).is_ok()) {
+        check(control)?;
+        progress(root, control, "models", &format!("Copying verified model {}", artifact.name), before, MODEL_BYTES)?;
+        fs::copy(source, &partial)?;
+    } else {
+        model_download::fetch(&pin, &partial, &|| check(control), &mut |bytes| {
+            progress(
                 root,
                 control,
-                "running",
-                &format!("Copying verified model {}", artifact.name),
-            )?;
-            fs::copy(source, &partial)?;
-        } else {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?
-                .block_on(async {
-                    let client = reqwest::Client::builder()
-                        .connect_timeout(Duration::from_secs(20))
-                        .timeout(Duration::from_secs(3600))
-                        .build()?;
-                    let mut response = cancellable(control, client.get(artifact.url).send())
-                        .await?
-                        .error_for_status()?;
-                    let mut file = fs::File::create(&partial)?;
-                    let mut bytes = 0u64;
-                    let mut last = Instant::now() - Duration::from_secs(1);
-                    while let Some(chunk) = cancellable(control, response.chunk()).await? {
-                        check(control)?;
-                        bytes += chunk.len() as u64;
-                        ensure!(
-                            bytes <= artifact.bytes,
-                            "Model download exceeds its expected size"
-                        );
-                        file.write_all(&chunk)?;
-                        if last.elapsed() > Duration::from_millis(500) {
-                            report(
-                                root,
-                                control,
-                                "running",
-                                &format!(
-                                    "Downloading {} · {} / {} MB",
-                                    artifact.name,
-                                    bytes / 1_000_000,
-                                    artifact.bytes / 1_000_000
-                                ),
-                            )?;
-                            last = Instant::now();
-                        }
-                    }
-                    file.sync_all()?;
-                    Ok::<(), anyhow::Error>(())
-                })?;
-        }
-        check(control)?;
-        verify(&partial, artifact)?;
-        fs::rename(&partial, &destination)?;
-        Ok(())
-    })();
-    let _ = fs::remove_file(&partial);
-    result
+                "models",
+                &format!(
+                    "Downloading {} · {} / {} MB",
+                    artifact.name,
+                    bytes / 1_000_000,
+                    artifact.bytes / 1_000_000
+                ),
+                before + bytes,
+                MODEL_BYTES,
+            )
+        })?;
+    }
+    check(control)?;
+    // A complete file that fails verification cannot be resumed, so start that model again.
+    if let Err(e) = model_download::verify(&partial, &pin) {
+        let _ = fs::remove_file(&partial);
+        return Err(e.context(format!("{} failed verification", artifact.name)));
+    }
+    fs::rename(&partial, &destination)?;
+    Ok(())
 }
 fn host(command: &mut Command) {
     command
@@ -324,10 +285,12 @@ fn install(root: &Path, runtime: &speech::Runtime, control: &Control) -> Result<
         "Install FFmpeg using your Linux package manager before preparing speech."
     );
     let reuse = runtime.models.clone();
+    let mut before = 0;
     for a in &ARTIFACTS {
-        download(root, control, a, Some(&reuse.join(a.name)))?;
+        download(root, control, a, Some(&reuse.join(a.name)), before)?;
+        before += a.bytes;
     }
-    report(root, control, "running", "Preparing private Python 3.12")?;
+    progress(root, control, "runtime", "Preparing private Python 3.12", 0, 0)?;
     let mut cmd = uv(runtime, root)?;
     cmd.args(["python", "install", "3.12.14", "--no-bin", "--install-dir"])
         .arg(root.join("speech/python"));
@@ -421,7 +384,7 @@ pub fn start(
     );
     fs::create_dir_all(root.join("logs"))?;
     fs::write(log_path(&root), "")?;
-    report(&root, &control, "running", "Preparing speech setup")?;
+    progress(&root, &control, "models", "Preparing speech setup", 0, MODEL_BYTES)?;
     control.process.begin();
     pipeline.speech.busy.store(true, Ordering::SeqCst);
     drop(gate);
@@ -443,6 +406,7 @@ pub fn start(
 mod tests {
     use super::*;
     use crate::db;
+    use sha2::{Digest, Sha256};
     #[test]
     fn setup_cannot_replace_models_under_a_live_preview() {
         let root = tempfile::tempdir().unwrap();
@@ -494,7 +458,7 @@ mod tests {
             bytes: 3,
             hash: Box::leak(format!("{:x}", Sha256::digest(b"new")).into_boxed_str()),
         };
-        assert!(download(root.path(), &control, &artifact, None).is_err());
+        assert!(download(root.path(), &control, &artifact, None, 0).is_err());
         thread.join().unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"previous");
         assert_eq!(fs::read_dir(models(root.path())).unwrap().count(), 1);
@@ -503,11 +467,61 @@ mod tests {
             url: Box::leak(url.into_boxed_str()),
             ..artifact
         };
-        download(root.path(), &control, &artifact, None).unwrap();
+        download(root.path(), &control, &artifact, None, 0).unwrap();
         thread.join().unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"new");
         control.process.cancel();
-        assert!(download(root.path(), &control, &artifact, None).is_err());
+        assert!(download(root.path(), &control, &artifact, None, 0).is_err());
+    }
+    fn failing_server(code: u16) -> (String, std::thread::JoinHandle<()>) {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model", server.server_addr());
+        let task = std::thread::spawn(move || {
+            if let Some(req) = server.recv_timeout(Duration::from_secs(10)).unwrap() {
+                let _ = req.respond(tiny_http::Response::empty(code));
+            }
+        });
+        (url, task)
+    }
+    fn fixture(url: String, body: &[u8]) -> Artifact {
+        Artifact {
+            name: "fixture",
+            url: Box::leak(url.into_boxed_str()),
+            bytes: body.len() as u64,
+            hash: Box::leak(format!("{:x}", Sha256::digest(body)).into_boxed_str()),
+        }
+    }
+    #[test]
+    fn an_interrupted_download_is_kept_and_a_corrupt_one_is_discarded() {
+        let root = tempfile::tempdir().unwrap();
+        let control = Control::default();
+        fs::create_dir_all(models(root.path())).unwrap();
+        let partial = models(root.path()).join("fixture.part");
+        fs::write(&partial, b"abc").unwrap();
+        let (url, thread) = failing_server(503);
+        assert!(download(root.path(), &control, &fixture(url, b"abcdef"), None, 0).is_err());
+        thread.join().unwrap();
+        assert_eq!(fs::read(&partial).unwrap(), b"abc");
+        let (url, thread) = server("abXdef");
+        let corrupt = download(root.path(), &control, &fixture(url, b"abcdef"), None, 0);
+        thread.join().unwrap();
+        assert!(corrupt.unwrap_err().to_string().contains("fixture"));
+        assert!(!partial.exists());
+        assert!(!models(root.path()).join("fixture").exists());
+    }
+    #[test]
+    fn download_progress_includes_models_already_finished() {
+        let root = tempfile::tempdir().unwrap();
+        let control = Control::default();
+        let (url, thread) = server("new");
+        download(root.path(), &control, &fixture(url, b"new"), None, 10).unwrap();
+        thread.join().unwrap();
+        let state = status(root.path(), &control);
+        assert_eq!(state.phase, "models");
+        assert_eq!(state.done, 13);
+        assert_eq!(state.total, MODEL_BYTES);
+        report(root.path(), &control, "running", "Preparing private Python 3.12").unwrap();
+        assert_eq!(status(root.path(), &control).done, 13);
     }
     #[test]
     fn interrupted_setup_is_actionable_after_restart() {

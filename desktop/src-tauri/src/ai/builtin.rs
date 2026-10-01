@@ -1,14 +1,17 @@
 //! App-managed, CPU-only embedding service. No Python, API key or external AI app required.
 use super::config::Provider;
+use crate::model_download::{self, Pinned};
 use anyhow::{ensure, Context, Result};
-use sha2::{Digest, Sha256};
+use serde::Serialize;
 use std::{
     fs,
-    io::{Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, OnceLock,
+    },
     time::{Duration, Instant},
 };
 pub const MODEL: &str = "Qwen3-Embedding-0.6B-Q8_0";
@@ -16,6 +19,7 @@ const FILE: &str = "Qwen3-Embedding-0.6B-Q8_0.gguf";
 const HASH: &str = "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439";
 const SIZE: u64 = 639150592;
 const URL:&str="https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf";
+const PINNED: Pinned<'static> = Pinned { url: URL, bytes: SIZE, hash: HASH };
 static RESOURCES: OnceLock<PathBuf> = OnceLock::new();
 static SERVER: Mutex<Option<Server>> = Mutex::new(None);
 struct Server {
@@ -53,26 +57,110 @@ pub fn default_provider() -> Provider {
         api_key: String::new(),
     }
 }
-fn verify(path: &Path) -> Result<()> {
-    ensure!(
-        fs::metadata(path)?.len() == SIZE,
-        "Embedding model is incomplete; remove it and download again"
-    );
-    let mut file = fs::File::open(path)?;
-    let mut hash = Sha256::new();
-    let mut buffer = vec![0; 1024 * 1024];
-    loop {
-        let n = file.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        hash.update(&buffer[..n]);
+/// Download the model if it is missing, resuming a partial file from an earlier attempt.
+pub fn download(
+    root: &Path,
+    check: &dyn Fn() -> Result<()>,
+    progress: &mut dyn FnMut(u64) -> Result<()>,
+) -> Result<()> {
+    let model = model_path(root);
+    if model.exists() {
+        return Ok(());
     }
-    ensure!(
-        format!("{:x}", hash.finalize()) == HASH,
-        "Embedding model checksum does not match the pinned release"
-    );
+    fs::create_dir_all(model.parent().unwrap())?;
+    let partial = model.with_extension("download");
+    model_download::fetch(&PINNED, &partial, check, progress)
+        .context("Cannot download semantic-search model; check your connection and retry")?;
+    if let Err(e) = model_download::verify(&partial, &PINNED) {
+        let _ = fs::remove_file(&partial);
+        return Err(e.context("The semantic-search model failed verification"));
+    }
+    fs::rename(&partial, &model)?;
     Ok(())
+}
+
+/// A download started ahead of time, so search is ready before the first index.
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Prepare {
+    pub status: String,
+    pub message: String,
+    pub done: u64,
+    pub total: u64,
+}
+static PREPARE: Mutex<Prepare> = Mutex::new(Prepare {
+    status: String::new(),
+    message: String::new(),
+    done: 0,
+    total: SIZE,
+});
+static PREPARE_BUSY: AtomicBool = AtomicBool::new(false);
+static PREPARE_CANCEL: AtomicBool = AtomicBool::new(false);
+fn set_prepare(status: &str, message: &str, done: u64) {
+    *PREPARE.lock().unwrap() = Prepare {
+        status: status.into(),
+        message: message.into(),
+        done,
+        total: SIZE,
+    };
+}
+pub fn prepare_status(root: &Path) -> Prepare {
+    let mut state = PREPARE.lock().unwrap().clone();
+    if !PREPARE_BUSY.load(Ordering::SeqCst) && ready(root) {
+        state = Prepare {
+            status: "complete".into(),
+            message: "Search model downloaded".into(),
+            done: SIZE,
+            total: SIZE,
+        };
+    }
+    state
+}
+/// Download in the background. `wait` holds the download back while it returns true,
+/// so a speech install already running keeps the connection to itself.
+pub fn prepare(root: PathBuf, wait: impl Fn() -> bool + Send + 'static) -> Result<()> {
+    ensure!(
+        !PREPARE_BUSY.swap(true, Ordering::SeqCst),
+        "The search model is already downloading"
+    );
+    PREPARE_CANCEL.store(false, Ordering::SeqCst);
+    set_prepare("waiting", "Waiting to download the search model", 0);
+    std::thread::spawn(move || {
+        let check = || {
+            ensure!(!PREPARE_CANCEL.load(Ordering::SeqCst), "Download cancelled");
+            Ok(())
+        };
+        let result = (|| -> Result<()> {
+            while wait() {
+                check()?;
+                set_prepare("waiting", "Waiting for the speech engine to finish", 0);
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            download(&root, &check, &mut |bytes| {
+                set_prepare(
+                    "running",
+                    &format!("Downloading search model · {} of 639 MB", bytes / 1_000_000),
+                    bytes,
+                );
+                Ok(())
+            })
+        })();
+        match result {
+            Ok(()) => set_prepare("complete", "Search model downloaded", SIZE),
+            Err(e) if PREPARE_CANCEL.load(Ordering::SeqCst) => {
+                set_prepare("cancelled", &format!("{e:#}"), 0)
+            }
+            Err(e) => {
+                crate::runtime_log::push("error", &format!("Search model download: {e:#}"));
+                set_prepare("failed", &format!("{e:#}"), 0)
+            }
+        }
+        PREPARE_BUSY.store(false, Ordering::SeqCst);
+    });
+    Ok(())
+}
+pub fn cancel_prepare() {
+    PREPARE_CANCEL.store(true, Ordering::SeqCst);
 }
 pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Result<Provider> {
     let mut server = SERVER.lock().unwrap();
@@ -85,53 +173,12 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
     let model = model_path(root);
     if !model.exists() {
         progress("Downloading local semantic-search model (639 MB)")?;
-        fs::create_dir_all(model.parent().unwrap())?;
-        let partial = model.with_extension("download");
-        let result = (|| -> Result<()> {
-            let client = reqwest::blocking::Client::builder()
-                .connect_timeout(Duration::from_secs(15))
-                .timeout(Duration::from_secs(1800))
-                .build()?;
-            let mut response = client
-                .get(URL)
-                .send()
-                .context("Cannot download semantic-search model; check your connection and retry")?
-                .error_for_status()?;
-            let mut file = fs::File::create(&partial)?;
-            let mut bytes = 0u64;
-            let mut buffer = vec![0; 1024 * 1024];
-            let mut last = Instant::now();
-            loop {
-                let n = response.read(&mut buffer)?;
-                if n == 0 {
-                    break;
-                }
-                bytes += n as u64;
-                ensure!(
-                    bytes <= SIZE,
-                    "Embedding download exceeds its expected size"
-                );
-                file.write_all(&buffer[..n])?;
-                if last.elapsed() > Duration::from_millis(500) {
-                    progress(&format!(
-                        "Downloading local model · {} of 639 MB",
-                        bytes / 1_000_000
-                    ))?;
-                    last = Instant::now();
-                }
-            }
-            file.sync_all()?;
-            verify(&partial)?;
-            fs::rename(&partial, &model)?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&partial);
-        }
-        result?;
+        download(root, &|| Ok(()), &mut |bytes| {
+            progress(&format!("Downloading local model · {} of 639 MB", bytes / 1_000_000))
+        })?;
     }
     progress("Starting local semantic search on CPU")?;
-    verify(&model)?;
+    model_download::verify(&model, &PINNED)?;
     let bin_name = if cfg!(windows) {
         "llama-server.exe"
     } else {
@@ -235,4 +282,32 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
     }
     *server = Some(running);
     Ok(provider)
+}
+
+#[cfg(test)]
+mod prepare_tests {
+    use super::*;
+
+    #[test]
+    fn a_downloaded_model_reports_complete_without_a_request() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(prepare_status(root.path()).status, "");
+        fs::create_dir_all(model_path(root.path()).parent().unwrap()).unwrap();
+        fs::File::create(model_path(root.path()))
+            .unwrap()
+            .set_len(SIZE)
+            .unwrap();
+        let state = prepare_status(root.path());
+        assert_eq!(state.status, "complete");
+        assert_eq!((state.done, state.total), (SIZE, SIZE));
+        // Starting again with the model present finishes without touching the network.
+        prepare(root.path().to_owned(), || false).unwrap();
+        for _ in 0..50 {
+            if !PREPARE_BUSY.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(prepare_status(root.path()).status, "complete");
+    }
 }

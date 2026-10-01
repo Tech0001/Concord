@@ -8,7 +8,7 @@ pub(crate) mod subprocess;
 mod tests;
 mod worker;
 use anyhow::Result;
-pub use queue::{action, candidates, enqueue, enqueue_one, recover, snapshot, Batch};
+pub use queue::{action, candidates, enqueue, enqueue_one, recover, snapshot, Batch, WAITING_FOR_SPEECH};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -122,6 +122,14 @@ pub fn save_config(root: &Path, value: &Config) -> Result<()> {
     );
     crate::db::open(root)?.execute("INSERT INTO settings VALUES ('pipeline.config',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [serde_json::to_string(value)?])?;
     Ok(())
+}
+/// The one stored speech device preference, used by the queue and by manual transcription.
+pub fn device(root: &Path) -> Result<String> {
+    Ok(config(root)?.device)
+}
+pub fn set_device(root: &Path, device: &str) -> Result<()> {
+    validate_device(device)?;
+    save_config(root, &Config { device: device.into(), ..config(root)? })
 }
 pub fn validate_device(device: &str) -> Result<()> {
     anyhow::ensure!(
