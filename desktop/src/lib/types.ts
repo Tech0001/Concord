@@ -151,4 +151,4 @@ export type PaletteResults = {
 };
 export type MediaFormat = "m4a" | "mp3" | "mp4-fast" | "mp4-accurate";
 export type TextFormat = "txt" | "md" | "srt";
-export type DocumentBody = { id: string; title: string; body: string };
+export type DocumentBody = { id: string; title: string; body: string; path?: string | null; root_id?: string | null; starred?: number; category?: string; missing?: number; error?: string | null; author?: string | null; speaker_id?: string | null; speaker_name?: string | null; speaker_color?: string | null; notes?: {id:string;title:string}[] };

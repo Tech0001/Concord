@@ -5,7 +5,7 @@ export type Route =
   | { page: "recording"; id: string; at?: number }
   | { page: "search"; q: string }
   | { page: "documents"; id?: string }
-  | { page: "speakers" }
+  | { page: "speakers"; id?: string }
   | { page: "notes" }
   | { page: "map" }
   | { page: "ai" }
@@ -32,6 +32,7 @@ export function parseRoute(hash: string): Route {
     case "documents":
       return tail ? { page: "documents", id: decodeURIComponent(tail) } : { page: "documents" };
     case "speakers":
+      return tail ? { page: "speakers", id: decodeURIComponent(tail) } : { page: "speakers" };
     case "notes":
     case "map":
     case "ai":
@@ -48,6 +49,8 @@ export function formatRoute(route: Route): string {
       return `#/recording/${encodeURIComponent(route.id)}${route.at != null ? `?t=${Math.round(route.at * 10) / 10}` : ""}`;
     case "search":
       return route.q ? `#/search?${new URLSearchParams({ q: route.q })}` : "#/search";
+    case "speakers":
+      return route.id ? `#/speakers/${encodeURIComponent(route.id)}` : "#/speakers";
     case "documents":
       return route.id ? `#/documents/${encodeURIComponent(route.id)}` : "#/documents";
     default:

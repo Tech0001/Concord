@@ -132,7 +132,7 @@ pub fn seed(root: &Path) -> Result<()> {
             let root_path: Option<String> = tx
                 .query_row(
                     "SELECT path FROM document_roots WHERE id=?1",
-                    [d["root_id"].as_str()],
+                    [d["root_id"].as_str().unwrap_or("")],
                     |r| r.get(0),
                 )
                 .optional()?;
@@ -142,7 +142,7 @@ pub fn seed(root: &Path) -> Result<()> {
                     .to_string_lossy()
                     .into_owned()
             });
-            tx.execute("UPDATE docs SET path=coalesce(path,?2),root_id=coalesce(root_id,?3),starred=?4,category=?5 WHERE id=?1",params![d["id"].as_str(),path,d["root_id"].as_str(),d["starred"].as_i64().unwrap_or(0),d["category"].as_str().unwrap_or("personal")])?;
+            tx.execute("UPDATE docs SET path=coalesce(path,?2),root_id=coalesce(root_id,?3),starred=?4,category=?5 WHERE id=?1",params![d["id"].as_str(),path,d["root_id"].as_str().unwrap_or(""),d["starred"].as_i64().unwrap_or(0),d["category"].as_str().unwrap_or("personal")])?;
         }
     }
     tx.execute(

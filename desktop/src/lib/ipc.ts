@@ -1,3 +1,4 @@
+import type { DocumentsState, DocumentSync } from "../documents/types.ts";
 import type { ArchiveStatus, Audit, BackupValidation, LogEntry, MaintenanceJob } from "../health/types.ts";
 import type { AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, Summary } from "../ai/types.ts";
 import { invoke, isTauri, convertFileSrc } from "@tauri-apps/api/core";
@@ -39,7 +40,7 @@ export type Transport = {
   pickFiles(options: FilePick): Promise<string[]>;
   pickSavePath(options: SavePick): Promise<string | null>;
   version(): Promise<string>;
-  pickFolder?(): Promise<string | null>;
+  pickFolder?(title?: string): Promise<string | null>;
 };
 
 const tauriTransport: Transport = {
@@ -54,7 +55,7 @@ const tauriTransport: Transport = {
   pickSavePath: ({ title, name, extensions, defaultPath }) =>
     save({ title, defaultPath, filters: [{ name, extensions }] }),
   version: () => getVersion(),
-  pickFolder: async () => { const path = await open({ title: "Choose backup folder", directory: true, multiple: false }); return typeof path === "string" ? path : null; },
+  pickFolder: async (title = "Choose folder") => { const path = await open({ title, directory: true, multiple: false }); return typeof path === "string" ? path : null; },
 };
 
 let transport: Transport = tauriTransport;
@@ -73,6 +74,14 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const MEDIA_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "ogg", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 
 export const api = {
+  openExternal: (url:string) => call<void>("open_external",{url}),
+  documentsState: () => call<DocumentsState>("documents_state"),
+  documentsSync: () => call<DocumentSync>("documents_sync"),
+  addDocumentRoot: (path:string,label:string) => call<void>("add_document_root",{path,label}),
+  editDocumentRoot: (id:string, options:{label?:string;enabled?:boolean;remove?:boolean}) => call<void>("edit_document_root",{id,label:options.label??null,enabled:options.enabled??null,remove:options.remove??false}),
+  editDocument: (id:string,options:{starred?:boolean;category?:string})=>call<void>("edit_document",{id,starred:options.starred??null,category:options.category??null}),
+  documentAsset: async (id:string,relative:string) => transport.fileUrl(await call<string>("document_asset",{id,relative})),
+  documentLink: (id:string,relative:string) => call<string>("document_link",{id,relative}),
   archiveStatus: () => call<ArchiveStatus>("archive_status"),
   archiveAudit: () => call<Audit>("archive_audit"),
   archiveLastAudit: () => call<Audit | null>("archive_last_audit"),
@@ -86,7 +95,7 @@ export const api = {
   archiveCancelRestore: () => call<void>("archive_cancel_restore"),
   runtimeLogs: (after:number) => call<LogEntry[]>("runtime_logs",{after}),
   pickFiles: (options: FilePick) => transport.pickFiles(options),
-  pickFolder: () => transport.pickFolder ? transport.pickFolder() : Promise.resolve(null),
+  pickFolder: (title?: string) => transport.pickFolder ? transport.pickFolder(title) : Promise.resolve(null),
   aiSuggestTags: (text: string) => call<string[]>("ai_suggest_tags", { text }),
   aiConfig: () => call<AiConfig>("ai_config"),
   aiSaveProvider: (task: "embedding" | "chat", provider: Provider, key: string | null) => call<AiConfig>("ai_save_provider", { task, provider, key }),

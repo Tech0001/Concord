@@ -99,7 +99,7 @@ function SpeakerAction({ action, speakers, onClose }: { action: Action; speakers
   </Dialog>;
 }
 
-export function SpeakersPage() {
+export function SpeakersPage({ id }: { id?: string }) {
   const { revision, refresh, navigate } = useApp(); const toast = useToast();
   const [speakers,setSpeakers] = useState<Speaker[]>(); const [unknown,setUnknown] = useState<Appearance[]>([]);
   const [tab,setTab] = useState<"saved" | "unknown">("saved"); const [query,setQuery] = useState("");
@@ -111,6 +111,8 @@ export function SpeakersPage() {
     Promise.all([api.speakers(),api.unidentifiedSpeakers()]).then(([s,u]) => { if(alive) { setSpeakers(s); setUnknown(u); } }).catch(toast.error);
     return () => { alive=false; };
   },[revision,toast]);
+  useEffect(() => { if(id) { setOpen(id); setTab("saved"); setQuery(""); } }, [id]);
+  useEffect(() => { if(id && speakers) requestAnimationFrame(() => document.querySelector(".speaker-item.is-open")?.scrollIntoView({block:"nearest"})); }, [id,speakers]);
   const scan = async (id?: string) => {
     setBusy(true);
     try { const r = await api.rescanSpeakers(id); refresh(); toast.success(`Matched ${r.matched} voices in ${r.recordings} recordings`); }

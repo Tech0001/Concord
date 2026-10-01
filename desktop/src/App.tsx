@@ -196,7 +196,7 @@ function Shell() {
       page = <SearchPage q={route.q} />;
       break;
     case "speakers":
-      page = <SpeakersPage />;
+      page = <SpeakersPage id={route.id} />;
       break;
     case "documents":
       page = <DocumentsPage id={route.id} />;

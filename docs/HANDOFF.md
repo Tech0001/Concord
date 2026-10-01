@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.7.0**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.8.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,33 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Docs folders and live sync (0.8.0 being packaged)
+
+Restored the document folder tree beside the independently scrolling reader, multi-root
+add/rename/pause/remove controls, filtering across folders, stars and Personal/Work categories,
+local images, relative Markdown links, author-to-speaker navigation, and linked research notes.
+File changes are scanned locally every 10 seconds; the open reader refreshes automatically.
+No AI requests occur during folder sync. The explicit semantic-index button uses the separately
+configured embedding provider. Unchanged text keeps its vectors; changed text invalidates them.
+Document IDs, stars, categories and note anchors survive edits and disconnected files/folders.
+Removing a folder stops syncing and retains cached documents/evidence; source files are untouched.
+
+Schema 7 adds sync metadata and folder labels. Older Electron documents with NULL root_id
+belong to its first folder (empty ID). The earlier importer missed these 295 paths; a guarded
+read-only recovery restores them without changing edited metadata or detached folders.
+A real-archive scratch sync kept exactly 595 documents across two roots, no duplicates or
+errors, with categories, stars, IDs and all research anchors intact. Local asset/link resolution
+rejects paths outside the document's folder and does not follow directory symlinks during scans.
+
+Native WebKitGTK tests pass root setup, nested tree, local image, author matching/navigation,
+relative document links, star/category updates, selection-to-note, live file change reflected in
+the reader, filters and folder removal retaining evidence. Fixture scripts:
+`prepare-documents-review.py`, `prepare-documents-review.py --watch <scratch>` (synthetic edit),
+and `native-documents-smoke.js`. 61 Rust tests and 38 TS tests, Clippy and frontend build pass.
+Desktop and phone reader screenshots checked. 0.7.0 remains installed until packaging completes.
+Next: Pipeline setup, subscriptions/downloads, durable queues and batch re-transcription,
+then remaining Electron parity (including tools and library/player improvements).
 
 ## Status, Health, and Terminal correction (0.6.0 installed)
 
@@ -69,7 +96,8 @@ non-first row, dragging passage handles to create a connection, atomic edge edit
 node dragging, all four layouts, and search/tag filters. Reproduce with
 `prepare-health-review.py` and `native-map-smoke.js`. 55 Rust tests, 37 TypeScript tests,
 Clippy and frontend compilation pass. Desktop and phone screenshots checked.
-Packaging/install of 0.7.0 is in progress; 0.6.0 remains installed until updated below.
+0.7.0 is installed and running; live library recovery confirmed (five notes, six anchors, five links).
+Backup: `~/.local/share/concord-next/backups/before-0.7.0-20260930-213212.db`.
 Next: Docs folder tree/live sync, Pipeline, and remaining parity. Full port is not complete.
 
 Follow-up fixes included before installing 0.7.0: Status & Health keeps the title/tabs outside

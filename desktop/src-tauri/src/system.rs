@@ -40,3 +40,16 @@ pub fn reveal(path: &Path) -> Result<()> {
         anyhow::bail!("Show in folder is not available on this platform yet: {}", path.display())
     }
 }
+
+pub fn open_external(input:&str)->Result<()> {
+    let url=url::Url::parse(input).context("Invalid link")?;
+    anyhow::ensure!(["http","https"].contains(&url.scheme()),"Only web links can be opened in the browser");
+    #[cfg(target_os="linux")]
+    let mut command=std::process::Command::new("xdg-open");
+    #[cfg(target_os="macos")]
+    let mut command=std::process::Command::new("open");
+    #[cfg(target_os="windows")]
+    let mut command={let mut c=std::process::Command::new("rundll32.exe");c.arg("url.dll,FileProtocolHandler");c};
+    let mut child=command.arg(url.as_str()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().context("Cannot open the default browser")?;
+    std::thread::spawn(move||{let _=child.wait();});Ok(())
+}

@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 6 {
+    if version >= 7 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -111,8 +111,9 @@ fn migrate(db: &mut Connection) -> Result<()> {
     }
     if version < 4 { crate::research::migrate(&tx)?; }
     if version < 5 { crate::ai::migrate(&tx)?; }
-    crate::health::migrate(&tx)?;
-    tx.execute_batch("PRAGMA user_version=6")?;
+    if version < 6 { crate::health::migrate(&tx)?; }
+    crate::documents::migrate(&tx)?;
+    tx.execute_batch("PRAGMA user_version=7")?;
     tx.commit()?;
     Ok(())
 }
@@ -214,7 +215,7 @@ pub fn import_legacy(root: &Path, source: &Path) -> Result<Value> {
     crate::research::backfill(&tx)?;
     tx.commit()?;
     drop(db);
-    for result in [crate::health::legacy::seed(root), crate::legacy_research::seed(root)] {
+    for result in [crate::health::legacy::seed(root), crate::legacy_research::seed(root), crate::documents::seed_legacy(root)] {
         if let Err(e) = result { crate::runtime_log::push("warn", &format!("Additional legacy metadata import: {e:#}")); }
     }
     stats(root)
@@ -611,7 +612,7 @@ mod tests {
         assert_eq!(row["review_state"], "unreviewed");
         assert_eq!(row["position"], 0.0);
         assert!(row["opened_at"].is_null());
-        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 6);
+        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 7);
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
     }

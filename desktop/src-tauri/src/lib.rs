@@ -1,6 +1,7 @@
 #[cfg(debug_assertions)]
 mod smoke;
 pub mod db;
+pub mod documents;
 pub mod health;
 pub mod runtime_log;
 pub mod legacy_research;
@@ -15,7 +16,6 @@ pub mod speech;
 pub mod thumbnail;
 pub mod transcript;
 use anyhow::{Context, Result};
-use rusqlite::params;
 use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
@@ -26,6 +26,7 @@ use tauri::{Emitter, Manager, State};
 
 pub struct AppState {
     ai: Arc<ai::Control>,
+    documents: Arc<documents::Control>,
     maintenance: Arc<health::Control>,
     root: PathBuf,
     runtime: speech::Runtime,
@@ -297,46 +298,49 @@ async fn save_map_layout(state: State<'_, AppState>, view:String, nodes:Vec<Valu
 }
 #[tauri::command]
 async fn document(state: State<'_, AppState>, id: String) -> Result<Value, String> {
-    let root = state.root.clone();
-    work(move || {
-        db::rows(&db::open(&root)?, "SELECT * FROM docs WHERE id=?1", [id])?
-            .pop()
-            .context("Document not found")
-    })
-    .await
+    let root=state.root.clone();work(move||documents::read(&root,&id)).await
 }
 #[tauri::command]
 async fn import_documents(state: State<'_, AppState>, paths: Vec<String>) -> Result<usize, String> {
-    let root = state.root.clone();
-    work(move || {
-        let mut db = db::open(&root)?;
-        let tx = db.transaction()?;
-        for path in &paths {
-            let p = Path::new(path);
-            let ext = p
-                .extension()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_lowercase();
-            anyhow::ensure!(
-                ["md", "txt", "markdown"].contains(&ext.as_str()),
-                "Choose Markdown or plain text documents"
-            );
-            anyhow::ensure!(
-                std::fs::metadata(p)?.len() < 20 * 1024 * 1024,
-                "Document exceeds 20 MiB"
-            );
-            let text = std::fs::read_to_string(p)?;
-            let title = p.file_stem().unwrap_or_default().to_string_lossy();
-            tx.execute(
-                "INSERT INTO docs(id,title,body) VALUES (?1,?2,?3)",
-                params![uuid::Uuid::new_v4().to_string(), title, text],
-            )?;
-        }
-        tx.commit()?;
-        Ok(paths.len())
-    })
-    .await
+    let root=state.root.clone();let control=state.documents.clone();work(move||documents::import(&root,&control,&paths)).await
+}
+#[tauri::command]
+async fn documents_state(state:State<'_,AppState>)->Result<Value,String> {
+    let root=state.root.clone();work(move||documents::snapshot(&root)).await
+}
+#[tauri::command]
+async fn documents_sync(state:State<'_,AppState>)->Result<documents::SyncResult,String> {
+    let root=state.root.clone();let control=state.documents.clone();work(move||documents::sync(&root,&control,true)).await
+}
+#[tauri::command]
+async fn add_document_root(state:State<'_,AppState>,path:String,label:String)->Result<Value,String> {
+    let root=state.root.clone();let control=state.documents.clone();work(move||documents::add_root(&root,&control,&path,&label)).await
+}
+#[tauri::command]
+async fn edit_document_root(state:State<'_,AppState>,id:String,label:Option<String>,enabled:Option<bool>,remove:bool)->Result<(),String> {
+    let root=state.root.clone();let control=state.documents.clone();work(move||documents::edit_root(&root,&control,&id,label.as_deref(),enabled,remove)).await
+}
+#[tauri::command]
+async fn edit_document(state:State<'_,AppState>,id:String,starred:Option<bool>,category:Option<String>)->Result<(),String> {
+    let root=state.root.clone();work(move||documents::edit(&root,&id,starred,category.as_deref())).await
+}
+#[tauri::command]
+async fn document_asset(app:tauri::AppHandle,state:State<'_,AppState>,id:String,relative:String)->Result<String,String> {
+    let root=state.root.clone();work(move||{
+        let path=documents::resolve(&root,&id,&relative)?;
+        let ext=path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+        anyhow::ensure!(["png","jpg","jpeg","gif","webp","avif","svg","bmp"].contains(&ext.as_str()),"Choose an image in this document folder");
+        anyhow::ensure!(path.metadata()?.len()<=20*1024*1024,"Image exceeds 20 MiB");
+        app.asset_protocol_scope().allow_file(&path)?;Ok(path.to_string_lossy().into_owned())
+    }).await
+}
+#[tauri::command]
+async fn document_link(state:State<'_,AppState>,id:String,relative:String)->Result<String,String> {
+    let root=state.root.clone();work(move||{
+        let path=documents::resolve(&root,&id,&relative)?;
+        let db=db::open(&root)?;
+        db.query_row("SELECT id FROM docs WHERE path=?1",[path.to_string_lossy().as_ref()],|r|r.get(0)).context("Linked document is not indexed; refresh the document folder")
+    }).await
 }
 #[tauri::command]
 async fn save_note(state: State<'_, AppState>, note:research::Note) -> Result<String,String> {
@@ -403,6 +407,8 @@ async fn waveform(state: State<'_, AppState>, id: String) -> Result<Vec<f32>, St
     work(move || waveform::peaks(&root, &id)).await
 }
 #[tauri::command]
+async fn open_external(url:String)->Result<(),String>{work(move||system::open_external(&url)).await}
+#[tauri::command]
 async fn reveal_path(path: String) -> Result<(), String> {
     work(move || system::reveal(Path::new(&path))).await
 }
@@ -449,7 +455,11 @@ pub fn run() {
         db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'", [])?;
         ai::builtin::initialize(app.path().resource_dir()?);
         db.execute("UPDATE ai_jobs SET status='interrupted',message='Concord closed before indexing finished. Update index to resume.' WHERE status='running'",[])?;
+        if let Err(e)=documents::seed_legacy(&root){runtime_log::push("warn",&format!("Legacy document folders: {e:#}"));}
+        let docs_control=Arc::new(documents::Control::default());
+        documents::start(root.clone(),docs_control.clone());
         app.manage(AppState {
+            documents: docs_control,
             ai: Arc::new(ai::Control::default()),
             maintenance: Arc::new(health::Control::default()),
             root: root.clone(),
@@ -465,7 +475,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
       .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
 }

@@ -55,7 +55,7 @@ pub fn digest(chunks: &[Chunk]) -> String {
 pub fn chunks(db: &Connection, kind: &str, id: &str) -> Result<Vec<Chunk>> {
     let pieces=match kind {
         "recording"=>db::rows(db,"SELECT text,CAST(start AS REAL) AS start,CAST(end AS REAL) AS end FROM segments WHERE media_id=?1 ORDER BY CAST(start AS REAL),rowid",[id])?,
-        "document"=>db::rows(db,"SELECT title||char(10)||body AS text FROM docs WHERE id=?1",[id])?,
+        "document"=>db::rows(db,"SELECT title||char(10)||body AS text FROM docs WHERE id=?1 AND length(trim(body))>0",[id])?,
         "note"=>db::rows(db,"SELECT title||char(10)||body||char(10)||coalesce((SELECT group_concat(quote,char(10)) FROM note_anchors WHERE note_id=n.id),quote) AS text FROM notes n WHERE id=?1",[id])?,
         _=>anyhow::bail!("Unknown source type"),
     };
@@ -93,7 +93,7 @@ pub fn chunks(db: &Connection, kind: &str, id: &str) -> Result<Vec<Chunk>> {
     Ok(out)
 }
 pub fn sources(db: &Connection) -> Result<Vec<(String, String)>> {
-    let mut stmt=db.prepare("SELECT DISTINCT 'recording',media_id FROM segments JOIN media ON media.id=segments.media_id UNION ALL SELECT 'document',id FROM docs UNION ALL SELECT 'note',id FROM notes")?;
+    let mut stmt=db.prepare("SELECT DISTINCT 'recording',media_id FROM segments JOIN media ON media.id=segments.media_id UNION ALL SELECT 'document',id FROM docs WHERE length(trim(body))>0 UNION ALL SELECT 'note',id FROM notes")?;
     let rows = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
