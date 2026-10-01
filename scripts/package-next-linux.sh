@@ -12,6 +12,9 @@ for tool in patchelf gst-inspect-1.0 pkg-config; do
     exit 1
   fi
 done
+if [[ ! -x build/binaries/embedding/llama-server ]]; then
+  bash scripts/build-embedding-runtime.sh
+fi
 system_plugins="$(pkg-config --variable=pluginsdir gstreamer-1.0)"
 mkdir -p build
 staging_root="$(mktemp -d "$PWD/build/concord-media.XXXXXX")"

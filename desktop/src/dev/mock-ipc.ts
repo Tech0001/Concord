@@ -52,6 +52,11 @@ const find = (id: string) => fx.mediaList.find((m) => m.id === id);
 
 // Handlers receive the IPC argument object; `any` keeps this dev shim short.
 const handlers: Record<string, (a: any) => unknown> = {
+  ai_config: () => ({ embedding: { enabled: true, kind: "builtin", model: "Qwen3-Embedding-0.6B-Q8_0", baseUrl: "http://127.0.0.1", hasKey: false, local: true }, chat: { enabled: false, kind: "local", model: "", baseUrl: "http://127.0.0.1:11434/v1", hasKey: false, local: true } }),
+  ai_status: () => ({ modelReady: true, indexed: 0, total: fx.mediaList.length, chunks: 0, dimensions: null, job: null }),
+  ai_summary: () => null,
+  search_filters: () => ({ channels: [], speakers: [], tags: [] }),
+  research_search: ({ query }) => fx.searchHits(query).map((h: any) => ({ ...h, kind: "recording", score: 1 })),
   overview: () => ({
     media: fx.mediaList.length,
     speakers: fx.speakerList.length,

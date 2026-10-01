@@ -12,6 +12,7 @@ import { PageHeader } from "../ui/PageHeader.tsx";
 import { useToast } from "../ui/Toasts.tsx";
 import { useApp } from "../shell/AppContext.tsx";
 import "./settings.css";
+import { ProviderSettings } from "../ai/ProviderSettings.tsx";
 
 function themeLabel(name: string): string {
   if (name === "concord") return "Concord (default)";
@@ -115,6 +116,7 @@ export function SettingsPage() {
         <p className="settings-preview">“The words that matter, right where you left them.”</p>
       </Section>
 
+      <ProviderSettings />
       <Section icon={AudioLines} title="Speech">
         <Row label="Status">
           <Chip tone={runtime ? (runtime.ready ? "success" : "warn") : "neutral"}>{runtime ? (runtime.ready ? "Ready" : "Setup needed") : "Checking…"}</Chip>

@@ -19,6 +19,7 @@ import { ActivityPanel } from "./shell/ActivityPanel.tsx";
 import { NoteEditor } from "./notes/NoteEditor.tsx";
 import { LibraryPage } from "./library/LibraryPage.tsx";
 import { PlayerPage } from "./player/PlayerPage.tsx";
+import { AiPage } from "./ai/AiPage.tsx";
 import { SearchPage } from "./search/SearchPage.tsx";
 import { SpeakersPage } from "./speakers/SpeakersPage.tsx";
 import { DocumentsPage } from "./documents/DocumentsPage.tsx";
@@ -97,7 +98,7 @@ function Shell() {
       try {
         await api.transcribe(id, device);
         toast.info("Transcription started", {
-          label: "Activity",
+          label: "Status & Health",
           run: () => setActivityOpen(true),
         });
         setJobs(await api.jobs());
@@ -202,6 +203,9 @@ function Shell() {
       break;
     case "notes":
       page = <NotesPage />;
+      break;
+    case "ai":
+      page = <AiPage />;
       break;
     case "map":
       page = <MapPage />;

@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 4 {
+    if version >= 5 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -109,8 +109,9 @@ fn migrate(db: &mut Connection) -> Result<()> {
         FROM segments f JOIN media m ON m.id=f.media_id WHERE f.speaker IS NOT NULL AND f.speaker<>'' GROUP BY f.media_id,f.speaker;
       PRAGMA user_version = 3")?;
     }
-    crate::research::migrate(&tx)?;
-    tx.execute_batch("PRAGMA user_version=4")?;
+    if version < 4 { crate::research::migrate(&tx)?; }
+    crate::ai::migrate(&tx)?;
+    tx.execute_batch("PRAGMA user_version=5")?;
     tx.commit()?;
     Ok(())
 }
@@ -603,7 +604,7 @@ mod tests {
         assert_eq!(row["review_state"], "unreviewed");
         assert_eq!(row["position"], 0.0);
         assert!(row["opened_at"].is_null());
-        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 4);
+        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 5);
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
     }

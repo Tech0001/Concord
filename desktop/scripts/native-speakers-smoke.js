@@ -52,7 +52,7 @@ assert((await invoke('unidentified_speakers')).filter(a=>a.media_id===config.id)
 passed.push('native merge, noise and delete preserve local fingerprints');
 // History is collapsed by default, and clearing it must not remove recordings.
 const activity=document.querySelector('.activity-item');
-if(activity) activity.click(); else {click(document.querySelector('.tabbar'),'More');await until(()=>dialog(),'More menu');click(dialog(),'Activity');}
+if(activity) activity.click(); else {click(document.querySelector('.tabbar'),'More');await until(()=>dialog(),'More menu');click(dialog(),'Status & Health');}
 await until(()=>dialog()?.textContent.includes('Recent activity'),'activity history');
 assert(!document.querySelector('.job-history').open,'past failures collapsed by default');document.querySelector('.job-history').open=true;
 click(dialog(),'Clear finished');await until(async()=>(await invoke('jobs')).length===0,'clear finished history');

@@ -32,6 +32,7 @@ import { Transport } from "./Transport.tsx";
 import { RATES, useMedia } from "./useMedia.ts";
 import { buildVoices, groupVoices, type Voice } from "./voices.ts";
 import "./player.css";
+import { SummaryPane } from "../ai/SummaryPane.tsx";
 
 /** Saves the playback position every 10 s of movement, on pause, and when leaving. One failure toast per recording. */
 function usePositionSaver(id: string, time: TimeStore, playing: boolean, ready: boolean, onFail: (e: unknown) => void) {
@@ -80,7 +81,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   const [range, setRange] = useState<Range | null>(null);
   const [naming, setNaming] = useState<Voice | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [pane, setPane] = useState<"transcript" | "speakers">("transcript");
+  const [pane, setPane] = useState<"transcript" | "speakers" | "summary">("transcript");
   const [loop, setLoop] = useState(false);
   const [playingRange, setPlayingRange] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -526,7 +527,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
           {!stacked && speakerPanel}
         </section>
         <section className="player-transcript" aria-label="Transcript">
-          {stacked && (
+          {(
             <div className="pane-switch">
               <Segmented
                 label="Show"
@@ -534,12 +535,13 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
                 onChange={setPane}
                 options={[
                   { value: "transcript", label: "Transcript" },
-                  { value: "speakers", label: `Speakers (${people.length})` },
+                  ...(stacked ? [{ value: "speakers" as const, label: `Speakers (${people.length})` }] : []),
+                  { value: "summary", label: "Summary" },
                 ]}
               />
             </div>
           )}
-          {stacked && pane === "speakers" ? speakerPanel : transcript}
+          {pane === "summary" ? <SummaryPane id={id} title={media.title} /> : stacked && pane === "speakers" ? speakerPanel : transcript}
         </section>
       </SplitLayout>
       {naming && (

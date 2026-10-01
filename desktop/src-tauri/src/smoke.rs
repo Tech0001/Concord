@@ -10,7 +10,7 @@ pub fn on_load(webview: &tauri::Webview, payload: &tauri::webview::PageLoadPaylo
         std::env::var("CONCORD_NEXT_TEST_RECORDING"),
     ) else { return; };
     let Ok(script) = std::fs::read_to_string(script) else { return; };
-    let config = serde_json::json!({ "id": id, "root": root });
+    let config = serde_json::json!({ "id": id, "root": root, "aiUrl": std::env::var("CONCORD_NEXT_TEST_AI_URL").ok() });
     let app = webview.app_handle().clone();
     let report = std::path::Path::new(&root).join("native-test-result.json");
     webview.app_handle().once("concord-native-test-result", move |event| {

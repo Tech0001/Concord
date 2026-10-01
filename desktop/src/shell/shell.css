@@ -526,3 +526,5 @@
 .job-history summary { cursor:pointer; font-weight:500; }
 .job-history > p { font-size:var(--text-sm); }
 .job-actions { display:flex; align-items:center; gap:8px; }
+
+.health-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.health-console{margin:12px 0 18px;font-size:var(--text-sm)}.health-console summary{cursor:pointer}.health-console pre{padding:14px;border:1px solid var(--border);background:var(--background);border-radius:var(--r-2);font:12px/1.7 var(--font-code);white-space:pre-wrap;overflow-wrap:anywhere;margin-top:10px}

@@ -63,3 +63,6 @@ __pycache__/
 /desktop/src-tauri/gen/
 /build/binaries/gstreamer/
 /build/concord-media.*/
+
+/build/llama-source/
+/build/binaries/embedding/

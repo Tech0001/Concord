@@ -1,3 +1,4 @@
+import type { AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, Summary } from "../ai/types.ts";
 import { invoke, isTauri, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
@@ -69,6 +70,26 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const MEDIA_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "ogg", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 
 export const api = {
+  aiSuggestTags: (text: string) => call<string[]>("ai_suggest_tags", { text }),
+  aiConfig: () => call<AiConfig>("ai_config"),
+  aiSaveProvider: (task: "embedding" | "chat", provider: Provider, key: string | null) => call<AiConfig>("ai_save_provider", { task, provider, key }),
+  aiModels: (task: "embedding" | "chat") => call<{ id: string; name: string }[]>("ai_models", { task }),
+  aiCheck: (task: "embedding" | "chat") => call<{ message: string }>("ai_check", { task }),
+  aiStatus: () => call<IndexStatus>("ai_status"),
+  aiIndex: () => call<string>("ai_index"),
+  aiCancelIndex: () => call<void>("ai_cancel_index"),
+  aiClearIndex: () => call<void>("ai_clear_index"),
+  researchSearch: (query: string, semantic: boolean, filter: SearchFilter) => call<ResearchHit[]>("research_search", { query, semantic, filter }),
+  searchFilters: () => call<FilterOptions>("search_filters"),
+  aiConversations: () => call<Conversation[]>("ai_conversations"),
+  aiCreateChat: () => call<string>("ai_create_chat"),
+  aiReadChat: (id: string) => call<ChatDetail>("ai_read_chat", { id }),
+  aiEditChat: (id: string, options: { title?: string; pinned?: boolean; remove?: boolean }) => call<void>("ai_edit_chat", { id, title: options.title ?? null, pinned: options.pinned ?? null, remove: options.remove ?? false }),
+  aiSend: (request: { conversationId: string; text: string; useLibrary: boolean; semantic: boolean; filter: SearchFilter }) => call<ChatDetail>("ai_send", { request }),
+  aiCancelChat: (id: string) => call<void>("ai_cancel_chat", { id }),
+  aiStarMessage: (id: string, starred: boolean) => call<void>("ai_star_message", { id, starred }),
+  aiSummary: (id: string, generate = false) => call<Summary | null>("ai_summary", { id, generate }),
+  onAiDelta: (handler: (delta: { id: string; text: string }) => void) => transport.listen("ai-chat-delta", handler),
   available: () => transport.available(),
   version: () => transport.version(),
   overview: () => call<Overview>("overview"),

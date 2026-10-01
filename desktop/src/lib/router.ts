@@ -8,6 +8,7 @@ export type Route =
   | { page: "speakers" }
   | { page: "notes" }
   | { page: "map" }
+  | { page: "ai" }
   | { page: "settings" };
 export type Page = Route["page"];
 
@@ -33,6 +34,7 @@ export function parseRoute(hash: string): Route {
     case "speakers":
     case "notes":
     case "map":
+    case "ai":
     case "settings":
       return { page: head };
     default:

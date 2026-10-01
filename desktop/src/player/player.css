@@ -556,6 +556,17 @@
   overflow: visible;
   padding: 0 0 96px;
 }
+/* A continuous speaker turn stays identifiable after its name scrolls away. */
+.t-turn {
+  margin: 8px 0;
+  padding: 5px 0;
+  border: 1px solid color-mix(in oklab, var(--speaker) 20%, transparent);
+  border-inline-start: 3px solid color-mix(in oklab, var(--speaker) 75%, var(--card));
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--speaker) 9%, var(--card));
+}
+.t-turn:first-child { margin-top: 0; }
+.t-turn .t-line { border-radius: 6px; }
 .t-line {
   position: relative;
   display: grid;
@@ -937,3 +948,7 @@
 .t-line.has-note:not(.is-in-range) { background:color-mix(in oklab,var(--primary) 7%,transparent); border-inline-start:2px solid color-mix(in oklab,var(--primary) 45%,transparent); }
 .t-note-marks { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:4px; }
 .t-note-marks button { color:var(--primary); font-size:var(--text-xs); text-align:left; }
+
+.t-voice-heading { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:3px; }
+.t-name-voice { display:inline-flex; align-items:center; gap:5px; padding:3px 7px; border:1px solid color-mix(in oklab,var(--speaker) 35%,var(--border)); border-radius:999px; background:var(--card); color:var(--foreground); font:500 var(--text-xs) var(--font-ui); cursor:pointer; }
+.t-name-voice:hover { background:var(--hover); }

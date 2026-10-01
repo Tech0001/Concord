@@ -1,7 +1,7 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.4.0**
-(Delivery 1 plus verified native playback and range-tool repairs).
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.5.0**
+(preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
 stack and preserved on its own branch. The Linux-first Rust/Tauri rebuild is
@@ -9,6 +9,57 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Current direction and 0.5.0 work (September 30, late evening)
+
+The user reiterated full parity without stopping for approval, and refined navigation:
+Library, ordinary word Search, Notes, Docs, Speakers, AI, Map, Pipeline, Settings.
+**AI has Semantic search and Chat tabs.** Semantic search is available by default with
+an app-managed local embedding model; Chat is disabled until a provider is configured.
+The user does not want semantic search in ordinary Search. Keep embedding/chat settings
+independent. Status and Health share one diagnostics panel. Extract belongs in Tools and
+recording actions. Compare remains omitted pending a concrete use case. These latest
+choices override the old combined words/meaning/chat design below.
+
+0.5.0 is packaged and installed beside Electron. The installed app runs schema 5.
+Backup: `~/.local/share/concord-next/backups/before-0.5.0-20260930-202621.db`.
+The already-downloaded embedding GGUF was SHA-256 verified and copied into the native
+model directory; no full-archive indexing or remote AI request was started.
+
+Implemented in 0.5.0:
+- Built-in Qwen3-Embedding-0.6B Q8 (639,150,592 bytes), pinned SHA-256 and HF revision,
+  downloaded on first Prepare semantic search. App-managed llama.cpp CPU runtime;
+  no Python, separate AI app, key or dedicated GPU needed. External embedding providers
+  are optional. Runtime uses a private loopback endpoint and ends with the app.
+- Separate local/OpenRouter/custom providers, model pickers, keys and connection tests.
+  Credentials are atomically saved mode 0600 outside the SQLite DB and redacted from IPC.
+  Endpoint changes clear an old credential. No actual remote provider was called in tests.
+- Durable/resumable model-specific embedding indexes; source edits invalidate vectors.
+  Search filters for source type, collection, speaker, date and tags. Schema 5.
+- Separate AI page, streamed chat with citation snapshots, conversations, pin/rename/delete,
+  starred messages, answer-to-note, transcript summaries and AI tag suggestions.
+- Status & Health combines activity history, speech checks, indexing and diagnostics.
+- Transcript speaker turns have soft colored bubbles, grouped by saved identity across
+  fingerprints. Unknown turns have a visible Name speaker action opening the full mapping
+  dialog (existing person, new person, same-person locals, noise/unlink/sample).
+- User requested removal of Terminal, Amber Terminal and Altar Invert themes, explicitly
+  **without adding fallback/migration behavior**. Only those CSS files were removed.
+
+Verification so far: 47 Rust tests, 34 TS tests, seven player browser regressions, Clippy.
+Real CPU embedding check passes: three short inputs, 1024 dimensions, ~937 MiB peak RSS,
+0.36 s inference on this PC; prayer query ranks prayer over car-maintenance passage.
+Native WebKitGTK/real Rust IPC tests pass independent settings, disabled chat defaults,
+indexing, semantic results, streamed chat/citations, saved answer note, separate word search,
+and speaker bubbles/naming/mapping multiple fingerprints to one person. Tests use scratch
+libraries and a localhost synthetic AI server. Relevant scripts: native-ai-smoke.js,
+mock-ai-server.py, native-speaker-bubbles.js; real model test is opt-in with
+CONCORD_EMBEDDING_MODEL pointing to the pinned GGUF.
+
+Remaining: ChatGPT sign-in is researched but **not implemented**; then Map and Pipeline,
+and audit remaining Electron features (saved views/categories, recorder, Extract, Discover,
+pop-out, silence skip, folder document sync, backups/runtime setup). Only Watchers and Compare
+are agreed removals; the old Delivery 6 brief incorrectly calls some other features removed.
+Do not stop at this increment or claim full parity.
 
 ## Notes and evidence (0.4.0)
 
@@ -254,8 +305,9 @@ reaches Electron parity, then gets polished. Order:
    `speakers.is_noise`, `sample_count`, and the training ledger.
 3. **Notes** — implemented in 0.4.0: multi-anchor notes (ranges and document passages),
    tags, typed links, a real Notes page, and range notes from the player.
-4. **Search and AI** — one search experience (words, meaning, chat); embedding and
-   chat providers and models configured separately (local, OpenRouter, …).
+4. **Search and AI** — ordinary Search stays separate. AI contains Semantic search and
+   Chat tabs; embeddings default to a built-in local model, while chat requires configuration.
+   Embedding and chat providers/models/credentials are independent. See 0.5.0 status above.
 5. **Map** — Electron parity, then better (explicit user control, persisted layouts).
 6. **Channels and pipeline** — subscriptions, downloads, a durable batch
    re-transcription queue. No Watchers.

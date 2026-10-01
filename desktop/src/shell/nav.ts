@@ -1,16 +1,56 @@
-import { FileText, Library, Network, NotebookPen, Search, Users, type LucideIcon } from "lucide-react";
+import {
+  MessageCircle,
+  FileText,
+  Library,
+  Network,
+  NotebookPen,
+  Search,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import type { Page, Route } from "../lib/router.ts";
 
-export type NavItem = { page: Page; label: string; icon: LucideIcon; route: Route };
+export type NavItem = {
+  page: Page;
+  label: string;
+  icon: LucideIcon;
+  route: Route;
+};
 
 export const ARCHIVE: NavItem[] = [
-  { page: "library", label: "Library", icon: Library, route: { page: "library" } },
-  { page: "search", label: "Search", icon: Search, route: { page: "search", q: "" } },
-  { page: "documents", label: "Documents", icon: FileText, route: { page: "documents" } },
-  { page: "notes", label: "Notes", icon: NotebookPen, route: { page: "notes" } },
+  {
+    page: "library",
+    label: "Library",
+    icon: Library,
+    route: { page: "library" },
+  },
+  {
+    page: "search",
+    label: "Search",
+    icon: Search,
+    route: { page: "search", q: "" },
+  },
+  {
+    page: "notes",
+    label: "Notes",
+    icon: NotebookPen,
+    route: { page: "notes" },
+  },
+  {
+    page: "documents",
+    label: "Docs",
+    icon: FileText,
+    route: { page: "documents" },
+  },
 ];
 export const ANALYSIS: NavItem[] = [
-  { page: "speakers", label: "Speakers", icon: Users, route: { page: "speakers" } },
+  {
+    page: "speakers",
+    label: "Speakers",
+    icon: Users,
+    route: { page: "speakers" },
+  },
+  { page: "ai", label: "AI", icon: MessageCircle, route: { page: "ai" } },
   { page: "map", label: "Map", icon: Network, route: { page: "map" } },
 ];
 
@@ -22,6 +62,7 @@ export const PAGE_TITLES: Record<Page, string> = {
   notes: "Notes",
   speakers: "Speakers",
   map: "Map",
+  ai: "AI",
   settings: "Settings",
 };
 

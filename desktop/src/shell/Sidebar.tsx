@@ -60,7 +60,7 @@ export function Sidebar({ mode, onToggle, onNavigate }: { mode: SidebarMode; onT
             onNavigate?.();
             openActivity();
           }}
-          data-tip={rail ? (activeJob ? `Transcribing ${activeJob.title}` : "Activity") : undefined}
+          data-tip={rail ? (activeJob ? `Transcribing ${activeJob.title}` : "Status & Health") : undefined}
         >
           {activeJob ? <LoaderCircle size={18} className="spin" aria-hidden /> : <Check size={18} aria-hidden />}
           <span className="nav-label activity-text">
@@ -70,7 +70,7 @@ export function Sidebar({ mode, onToggle, onNavigate }: { mode: SidebarMode; onT
                 <small>{activeJob.message || "Processing"}</small>
               </>
             ) : (
-              "No activity"
+              "Status & Health"
             )}
           </span>
         </button>

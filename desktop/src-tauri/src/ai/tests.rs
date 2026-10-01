@@ -1,0 +1,440 @@
+use super::{
+    chat,
+    config::{self, Provider},
+    index::{self, Filter},
+    Control,
+};
+use crate::db;
+use serde_json::{json, Value};
+use std::{
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
+struct Fake {
+    url: String,
+    requests: Arc<Mutex<Vec<(String, String, Value)>>>,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl Fake {
+    fn new() -> Self {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1", server.server_addr());
+        let requests = Arc::new(Mutex::new(vec![]));
+        let seen = requests.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = stop.clone();
+        let thread = std::thread::spawn(move || {
+            while !done.load(Ordering::SeqCst) {
+                let Ok(Some(mut request)) = server.recv_timeout(Duration::from_millis(30)) else {
+                    continue;
+                };
+                let path = request.url().to_owned();
+                let auth = request
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.equiv("Authorization"))
+                    .map(|h| h.value.to_string())
+                    .unwrap_or_default();
+                let mut text = String::new();
+                request.as_reader().read_to_string(&mut text).unwrap();
+                let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                seen.lock()
+                    .unwrap()
+                    .push((path.clone(), auth, body.clone()));
+                let result = if path.ends_with("/embeddings") {
+                    let data = body["input"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .map(|(i, t)| {
+                            let text = t.as_str().unwrap().to_lowercase();
+                            let vector = if body["model"] == "wrong-dim" {
+                                vec![1., 0., 0.]
+                            } else if text.contains("prayer") || text.contains("faith") {
+                                vec![1., 0.]
+                            } else {
+                                vec![0., 1.]
+                            };
+                            json!({"index":i,"embedding":vector})
+                        })
+                        .collect::<Vec<_>>();
+                    json!({"data":data}).to_string()
+                } else if path.ends_with("/chat/completions") {
+                    let mut s = format!(
+                        "data: {}\n\ndata: {}\n\n",
+                        json!({"choices":[{"delta":{"content":"Prayer supports the community [1]."}}]}),
+                        json!({"choices":[{"delta":{},"finish_reason":"stop"}]})
+                    );
+                    if body["model"] != "broken-stream" {
+                        s.push_str("data: [DONE]\n\n");
+                    }
+                    s
+                } else {
+                    json!({"data":[{"id":"tiny-embedding"},{"id":"tiny-chat"}]}).to_string()
+                };
+                request
+                    .respond(tiny_http::Response::from_string(result))
+                    .unwrap();
+            }
+        });
+        Self {
+            url,
+            requests,
+            stop,
+            thread: Some(thread),
+        }
+    }
+    fn config(&self, root: &Path, task: &str, model: &str, key: &str) {
+        config::save(
+            root,
+            task,
+            Provider {
+                enabled: true,
+                kind: "local".into(),
+                base_url: self.url.clone(),
+                model: model.into(),
+                api_key: String::new(),
+            },
+            Some(key.into()),
+        )
+        .unwrap();
+    }
+}
+impl Drop for Fake {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.thread.take().unwrap().join().unwrap();
+    }
+}
+fn fixture(root: &Path) {
+    let db = db::open(root).unwrap();
+    db.execute_batch("INSERT INTO media(id,title,channel,date,duration) VALUES('prayer','Prayer meeting','Meetings','2025-10-07',30),('car','Car repairs','Personal','2025-10-22',30);
+ INSERT INTO segments(media_id,start,end,speaker,text) VALUES('prayer',0,10,'S0','Faith and prayer support our community.'),('car',0,10,'S1','The car needs tires and oil.');
+ INSERT INTO speakers(id,name) VALUES('sarah','Sarah');INSERT INTO assignments(media_id,local_id,speaker_id) VALUES('prayer','S0','sarah');
+ INSERT INTO docs(id,title,body) VALUES('doc','Prayer document','Prayer and encouragement.');
+ INSERT INTO notes(id,title,body) VALUES('note','A prayer note','Faith helps people.');INSERT INTO note_tags VALUES('note','faith');
+ INSERT INTO note_anchors(id,note_id,position,media_id,start,end,quote) VALUES('anchor','note',0,'prayer',0,10,'Faith and prayer.');").unwrap();
+}
+fn build(root: &Path, control: Arc<Control>) {
+    index::start(root.to_owned(), control.clone()).unwrap();
+    let start = Instant::now();
+    while control.indexing.load(Ordering::SeqCst) {
+        assert!(start.elapsed() < Duration::from_secs(15));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let state = index::status(root).unwrap();
+    assert_eq!(state["job"]["status"], "complete", "{state}");
+}
+#[test]
+fn providers_are_independent_and_secrets_stay_out_of_database_and_ipc() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Fake::new();
+    fixture(root.path());
+    server.config(root.path(), "embedding", "tiny-embedding", "embed-secret");
+    server.config(root.path(), "chat", "tiny-chat", "chat-secret");
+    let c = config::read(root.path()).unwrap();
+    assert_eq!(c.embedding.api_key, "embed-secret");
+    assert_eq!(c.chat.api_key, "chat-secret");
+    let view = config::view(root.path()).unwrap().to_string();
+    assert!(!view.contains("secret"));
+    let db = db::open(root.path()).unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM settings", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let mut changed = c.embedding;
+    changed.base_url = "http://127.0.0.1:1/v1".into();
+    config::save(root.path(), "embedding", changed, None).unwrap();
+    let c = config::read(root.path()).unwrap();
+    assert!(c.embedding.api_key.is_empty());
+    assert_eq!(c.chat.api_key, "chat-secret");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(root.path().join("ai-providers.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+}
+#[test]
+fn indexing_resumes_separates_models_and_invalidates_changed_sources() {
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    let fake = Fake::new();
+    fake.config(root.path(), "embedding", "tiny-embedding", "embedding-key");
+    let control = Arc::new(Control::default());
+    build(root.path(), control.clone());
+    let count = fake.requests.lock().unwrap().len();
+    build(root.path(), control.clone());
+    assert_eq!(
+        fake.requests.lock().unwrap().len(),
+        count,
+        "Unchanged sources must not be billed again"
+    );
+    assert_eq!(index::status(root.path()).unwrap()["indexed"], 4);
+    let hits = index::search(
+        root.path(),
+        "prayer",
+        true,
+        &Filter {
+            kind: "recording".into(),
+            ..Default::default()
+        },
+        10,
+    )
+    .unwrap();
+    assert_eq!(hits[0].id, "prayer");
+    db::open(root.path())
+        .unwrap()
+        .execute("UPDATE docs SET body='Changed document' WHERE id='doc'", [])
+        .unwrap();
+    assert_eq!(index::status(root.path()).unwrap()["indexed"], 3);
+    build(root.path(), control.clone());
+    fake.config(root.path(), "embedding", "other-model", "embedding-key");
+    assert_eq!(index::status(root.path()).unwrap()["indexed"], 0);
+    assert!(index::search(root.path(), "prayer", true, &Filter::default(), 10).is_err());
+    build(root.path(), control.clone());
+    index::clear(root.path(), &control).unwrap();
+    fake.config(root.path(), "embedding", "tiny-embedding", "embedding-key");
+    assert_eq!(index::status(root.path()).unwrap()["indexed"], 4);
+}
+#[test]
+fn search_filters_apply_before_limit_and_support_note_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    let fake = Fake::new();
+    fake.config(root.path(), "embedding", "tiny-embedding", "");
+    build(root.path(), Arc::new(Control::default()));
+    for semantic in [false, true] {
+        let filter = Filter {
+            speaker: "sarah".into(),
+            tag: "faith".into(),
+            from: "2025-10-01".into(),
+            to: "2025-10-09".into(),
+            ..Default::default()
+        };
+        let hits = index::search(root.path(), "prayer", semantic, &filter, 1).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "prayer");
+        let none = index::search(
+            root.path(),
+            "prayer",
+            semantic,
+            &Filter {
+                channel: "Missing".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+        assert!(none.is_empty());
+    }
+}
+#[test]
+fn wrong_dimensions_are_rejected_before_search() {
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    let fake = Fake::new();
+    fake.config(root.path(), "embedding", "wrong-dim", "");
+    build(root.path(), Arc::new(Control::default()));
+    let sig = config::read(root.path()).unwrap().embedding.signature();
+    db::open(root.path())
+        .unwrap()
+        .execute(
+            "UPDATE ai_indexes SET dimensions=2 WHERE signature=?1",
+            [sig],
+        )
+        .unwrap();
+    assert!(
+        index::search(root.path(), "prayer", true, &Filter::default(), 10)
+            .unwrap_err()
+            .to_string()
+            .contains("dimensions")
+    );
+}
+#[test]
+fn chat_streams_saves_citation_snapshots_and_uses_only_its_credential() {
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    let fake = Fake::new();
+    fake.config(root.path(), "embedding", "tiny-embedding", "embed-key");
+    fake.config(root.path(), "chat", "tiny-chat", "chat-key");
+    let control = Arc::new(Control::default());
+    build(root.path(), control.clone());
+    let id = chat::create(root.path()).unwrap();
+    let mut streamed = String::new();
+    let result = chat::send(
+        root.path(),
+        &control,
+        &chat::Send {
+            conversation_id: id.clone(),
+            text: "prayer".into(),
+            use_library: true,
+            semantic: true,
+            filter: Filter::default(),
+        },
+        |d| streamed.push_str(d),
+    )
+    .unwrap();
+    assert!(streamed.contains("[1]"));
+    assert_eq!(result["messages"][1]["error"], 0);
+    assert!(!result["messages"][1]["sources"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let seen = fake.requests.lock().unwrap();
+    for (path, auth, _) in seen.iter() {
+        assert_eq!(
+            auth,
+            if path.ends_with("/embeddings") {
+                "Bearer embed-key"
+            } else {
+                "Bearer chat-key"
+            }
+        );
+    }
+    drop(seen);
+    let message = result["messages"][1]["id"].as_str().unwrap();
+    chat::star(root.path(), message, true).unwrap();
+    chat::edit(
+        root.path(),
+        &control,
+        &id,
+        Some("Prayer research"),
+        Some(true),
+        false,
+    )
+    .unwrap();
+    let saved = chat::read(root.path(), &id).unwrap();
+    assert_eq!(saved["conversation"]["pinned"], 1);
+    assert_eq!(saved["messages"][1]["starred"], 1);
+    db::open(root.path())
+        .unwrap()
+        .execute(
+            "UPDATE docs SET body='Completely changed' WHERE id='doc'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        chat::read(root.path(), &id).unwrap()["messages"][1]["sources"],
+        result["messages"][1]["sources"]
+    );
+    chat::edit(root.path(), &control, &id, None, None, true).unwrap();
+    assert!(chat::read(root.path(), &id).is_err());
+    assert_eq!(
+        db::open(root.path())
+            .unwrap()
+            .query_row("SELECT count(*) FROM ai_messages", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+#[test]
+fn incomplete_stream_is_saved_as_error_and_can_be_retried() {
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    let fake = Fake::new();
+    fake.config(root.path(), "chat", "broken-stream", "");
+    let control = Control::default();
+    let id = chat::create(root.path()).unwrap();
+    let result = chat::send(
+        root.path(),
+        &control,
+        &chat::Send {
+            conversation_id: id.clone(),
+            text: "Hello".into(),
+            use_library: false,
+            semantic: false,
+            filter: Filter::default(),
+        },
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(result["messages"][1]["error"], 1);
+    assert!(control.chats.lock().unwrap().is_empty());
+}
+#[test]
+#[ignore = "Opt-in: requires the pinned local Qwen GGUF and compiled embedding runtime"]
+fn builtin_cpu_model_returns_real_retrieval_vectors() {
+    let path = std::env::var("CONCORD_EMBEDDING_MODEL")
+        .expect("Set CONCORD_EMBEDDING_MODEL to the pinned Qwen GGUF");
+    let root = tempfile::tempdir().unwrap();
+    let dest = root
+        .path()
+        .join("models/embedding/Qwen3-Embedding-0.6B-Q8_0.gguf");
+    std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    std::fs::copy(path, dest).unwrap();
+    let p = super::builtin::provider(root.path(), |_| Ok(())).unwrap();
+    let vectors = p
+        .embed(
+            &p.client().unwrap(),
+            &[
+                "Prayer supports our community.".into(),
+                "Cars need new tires and oil.".into(),
+                index::query_input("encouraging one another through prayer", &p.model),
+            ],
+        )
+        .unwrap();
+    assert_eq!(vectors[0].len(), 1024);
+    let score = |n: usize| {
+        vectors[n]
+            .iter()
+            .zip(&vectors[2])
+            .map(|(a, b)| a * b)
+            .sum::<f32>()
+    };
+    assert!(score(0) > score(1));
+    super::builtin::stop();
+}
+
+#[test]
+fn stop_chat_interrupts_before_first_token() {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/v1", server.server_addr());
+    let worker = std::thread::spawn(move || {
+        let request = server
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        let _ = request.respond(tiny_http::Response::from_string("data: [DONE]\n\n"));
+    });
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    let trigger = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        signal.store(true, Ordering::SeqCst);
+    });
+    let p = Provider {
+        enabled: true,
+        kind: "local".into(),
+        base_url: url,
+        model: "slow".into(),
+        api_key: String::new(),
+    };
+    let start = Instant::now();
+    let result = chat::complete(
+        &p,
+        &[json!({"role":"user","content":"Hello"})],
+        &cancel,
+        |_| {},
+    );
+    assert!(result.unwrap_err().to_string().contains("cancelled"));
+    assert!(start.elapsed() < Duration::from_millis(600));
+    trigger.join().unwrap();
+    worker.join().unwrap();
+}

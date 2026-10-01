@@ -10,7 +10,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ArrowDownToLine, AudioLines } from "lucide-react";
+import { ArrowDownToLine, AudioLines, UserRoundPlus } from "lucide-react";
 import { clock } from "../lib/format.ts";
 import { indexAt, markParts } from "../lib/range.ts";
 import type { TimeStore } from "../lib/timeStore.ts";
@@ -55,15 +55,34 @@ type LineProps = {
 };
 
 const TranscriptLine = memo(
-  function TranscriptLine({ index, line, voice, showSpeaker, state, onLine, onVoice, register, press, noteMarks, onNote }: LineProps) {
+  function TranscriptLine({
+    index,
+    line,
+    voice,
+    showSpeaker,
+    state,
+    onLine,
+    onVoice,
+    register,
+    press,
+    noteMarks,
+    onNote,
+  }: LineProps) {
     const name = voice?.name ?? (line.speaker ? voiceLabel(line.speaker) : "");
     return (
       <div
         ref={(el) => register(index, el)}
-        className={cx("t-line", state.inRange && "is-in-range", state.activeMatch && "is-active-match", !!noteMarks?.length && "has-note")}
+        className={cx(
+          "t-line",
+          state.inRange && "is-in-range",
+          state.activeMatch && "is-active-match",
+          !!noteMarks?.length && "has-note",
+        )}
         data-line={index}
         data-edge={state.edge || undefined}
-        style={voice ? ({ "--speaker": voice.color } as CSSProperties) : undefined}
+        style={
+          voice ? ({ "--speaker": voice.color } as CSSProperties) : undefined
+        }
         onClick={(e) => onLine(index, e)}
         {...press}
       >
@@ -80,19 +99,56 @@ const TranscriptLine = memo(
         </button>
         <div className="t-body">
           {showSpeaker && line.speaker && (
-            <button
-              type="button"
-              className="t-speaker"
-              onClick={(e) => {
-                e.stopPropagation();
-                onVoice(line.speaker!);
-              }}
-              title={voice?.named ? `${name} · rename voice` : "Name this voice"}
-            >
-              {name}
-            </button>
+            <div className="t-voice-heading">
+              <button
+                type="button"
+                className="t-speaker"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onVoice(line.speaker!);
+                }}
+                title={
+                  voice?.named
+                    ? `${name} · change speaker mapping`
+                    : "Name this voice"
+                }
+              >
+                {name}
+              </button>
+              {!voice?.named && (
+                <button
+                  type="button"
+                  className="t-name-voice"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onVoice(line.speaker!);
+                  }}
+                >
+                  <UserRoundPlus size={12} aria-hidden /> Name speaker
+                </button>
+              )}
+            </div>
           )}
-          {!!noteMarks?.length && <div className="t-note-marks">{noteMarks.map((n,i) => <button key={`${n.id}:${i}`} type="button" onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onNote?.(n.id); }} title="Open saved note">Note · {n.title}</button>)}</div>}
+          {!!noteMarks?.length && (
+            <div className="t-note-marks">
+              {noteMarks.map((n, i) => (
+                <button
+                  key={`${n.id}:${i}`}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onNote?.(n.id);
+                  }}
+                  title="Open saved note"
+                >
+                  Note · {n.title}
+                </button>
+              ))}
+            </div>
+          )}
           <p className="t-text">
             {state.query
               ? markParts(line.text, state.query).map((p, i) =>
@@ -162,7 +218,28 @@ export function Transcript({
   footer?: ReactNode;
   banner?: ReactNode;
 }) {
-  const noteMarks = useMemo(() => lines.map(line => notes?.filter(n => line.end > n.start && line.start < (n.end ?? n.start + 0.01))), [lines, notes]);
+  const turns = useMemo(() => {
+    const groups: { start: number; lines: Segment[]; voice?: Voice }[] = [];
+    let previous: string | null | undefined;
+    for (const [index, line] of lines.entries()) {
+      const voice = voices.get(line.speaker ?? "");
+      const person = voice?.speakerId ?? line.speaker;
+      if (!groups.length || person !== previous)
+        groups.push({ start: index, lines: [line], voice });
+      else groups[groups.length - 1].lines.push(line);
+      previous = person;
+    }
+    return groups;
+  }, [lines, voices]);
+  const noteMarks = useMemo(
+    () =>
+      lines.map((line) =>
+        notes?.filter(
+          (n) => line.end > n.start && line.start < (n.end ?? n.start + 0.01),
+        ),
+      ),
+    [lines, notes],
+  );
   const rows = useRef(new Map<number, HTMLDivElement>());
   const current = useRef(-1);
   const followRef = useRef(follow);
@@ -181,7 +258,8 @@ export function Transcript({
       const r = row.getBoundingClientRect();
       const b = root.getBoundingClientRect();
       if (r.top < b.top + 32 || r.bottom > b.bottom - 80) {
-        if (root.scrollHeight > root.clientHeight) root.scrollTop += r.top - b.top - root.clientHeight * 0.3;
+        if (root.scrollHeight > root.clientHeight)
+          root.scrollTop += r.top - b.top - root.clientHeight * 0.3;
         else row.scrollIntoView({ block: "nearest" });
       }
     },
@@ -219,35 +297,59 @@ export function Transcript({
         className="transcript-scroll"
         onWheel={stopFollowing}
         onTouchMove={stopFollowing}
-        onKeyDown={(e) => ["PageUp", "PageDown", "Home", "End"].includes(e.key) && stopFollowing()}
+        onKeyDown={(e) =>
+          ["PageUp", "PageDown", "Home", "End"].includes(e.key) &&
+          stopFollowing()
+        }
         onPointerDown={stopFollowing}
       >
         {!lines.length && (
-          <Empty icon={AudioLines} title="No transcript yet" text="Choose Transcribe to create one, with speakers and timestamps." />
-        )}
-        {lines.map((line, i) => (
-          <TranscriptLine
-            key={i}
-            index={i}
-            line={line}
-            voice={line.speaker ? voices.get(line.speaker) : undefined}
-            showSpeaker={
-              i === 0 ||
-              (voices.get(lines[i - 1].speaker ?? "")?.speakerId ?? lines[i - 1].speaker) !==
-                (voices.get(line.speaker ?? "")?.speakerId ?? line.speaker)
-            }
-            state={lineState ? lineState(i) : PLAIN}
-            onLine={onLine}
-            onVoice={onVoice}
-            register={register}
-            press={press?.(i)}
-            noteMarks={noteMarks[i]}
-            onNote={onNote}
+          <Empty
+            icon={AudioLines}
+            title="No transcript yet"
+            text="Choose Transcribe to create one, with speakers and timestamps."
           />
+        )}
+        {turns.map((turn) => (
+          <div
+            key={turn.start}
+            className="t-turn"
+            role="group"
+            aria-label={turn.voice?.name ?? "Unknown speaker"}
+            style={
+              {
+                "--speaker": turn.voice?.color ?? "var(--muted-foreground)",
+              } as CSSProperties
+            }
+          >
+            {turn.lines.map((line, offset) => {
+              const i = turn.start + offset;
+              return (
+                <TranscriptLine
+                  key={i}
+                  index={i}
+                  line={line}
+                  voice={line.speaker ? voices.get(line.speaker) : undefined}
+                  showSpeaker={offset === 0}
+                  state={lineState ? lineState(i) : PLAIN}
+                  onLine={onLine}
+                  onVoice={onVoice}
+                  register={register}
+                  press={press?.(i)}
+                  noteMarks={noteMarks[i]}
+                  onNote={onNote}
+                />
+              );
+            })}
+          </div>
         ))}
       </div>
       {!follow && (
-        <button type="button" className="follow-pill" onClick={() => setFollow(true)}>
+        <button
+          type="button"
+          className="follow-pill"
+          onClick={() => setFollow(true)}
+        >
           <ArrowDownToLine size={14} aria-hidden />
           Back to playback
         </button>

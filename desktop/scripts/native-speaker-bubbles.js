@@ -1,0 +1,21 @@
+// Speaker identity, colored turn bubbles and visible mapping controls in real WebKitGTK.
+const invoke=(cmd,args)=>window.__TAURI_INTERNALS__.invoke(cmd,args);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));const assert=(ok,why)=>{if(!ok)throw Error(why);};
+const until=async(fn,why)=>{for(let i=0;i<150;i++){if(await fn())return;await sleep(100);}throw Error(`Timed out: ${why}`);};
+const click=(root,text)=>{const b=[...root.querySelectorAll('button')].find(b=>b.textContent.trim()===text);assert(b,`button ${text}`);b.click();};
+const input=(el,value)=>{assert(el,'input exists');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}));};
+const dialog=()=>document.querySelector('[role=dialog]');const passed=[];window.__concordSmokePassed=passed;
+location.hash=`#/recording/${encodeURIComponent(config.id)}?t=0`;
+await until(()=>document.querySelectorAll('.t-turn').length===3,'three unidentified speaker bubbles');
+assert(document.querySelectorAll('.t-name-voice').length===3,'explicit Name speaker buttons');
+const color=getComputedStyle(document.querySelector('.t-turn')).backgroundColor;assert(color!=='rgba(0, 0, 0, 0)'&&color!=='transparent','speaker bubble background');
+document.querySelector('.t-name-voice').click();await until(()=>dialog(),'visible name action opens mapping dialog');
+input([...dialog().querySelectorAll('label')].find(n=>n.textContent.startsWith('New speaker name')).querySelector('input'),'__Bubble Ada');await sleep(100);click(dialog(),'Save');
+await until(()=>!dialog()&&document.querySelectorAll('.t-turn').length===2,'matching fingerprints form one continuous person bubble');
+assert(document.querySelector('.t-turn').getAttribute('aria-label')==='__Bubble Ada','bubble names the mapped person');
+assert(document.querySelector('.t-turn').querySelectorAll('.t-line').length===2,'two fingerprints share the bubble');assert(document.querySelectorAll('.t-name-voice').length===1,'only remaining unknown needs a name');
+passed.push('native colored turns, visible naming, same-person fingerprints grouped');
+document.querySelector('.t-name-voice').click();await until(()=>dialog()?.querySelector('[role=radio][aria-checked]'),'existing profile choices');await until(()=>[...dialog().querySelectorAll('[role=radio]')].some(b=>b.textContent.trim()==='__Bubble Ada'),'saved speaker loaded');
+click(dialog(),'__Bubble Ada');await sleep(100);click(dialog(),'Save');await until(()=>!dialog()&&document.querySelectorAll('.t-turn').length===1,'mapping to an existing profile');
+const recording=await invoke('recording',{id:config.id});assert(new Set(recording.assignments.map(a=>a.speaker_id)).size===1,'all fingerprints attached to same person');
+passed.push('native unknown voice mapped to existing person');return {passed};

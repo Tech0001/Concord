@@ -1,6 +1,7 @@
 #[cfg(debug_assertions)]
 mod smoke;
 pub mod db;
+pub mod ai;
 pub mod speakers;
 pub mod research;
 pub mod export;
@@ -21,6 +22,7 @@ use std::sync::atomic::Ordering;
 use tauri::{Emitter, Manager, State};
 
 pub struct AppState {
+    ai: Arc<ai::Control>,
     root: PathBuf,
     runtime: speech::Runtime,
     control: Arc<speech::Control>,
@@ -36,6 +38,44 @@ async fn work<T: Send + 'static>(
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("{e:#}"))
 }
+#[tauri::command]
+async fn ai_config(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||ai::config::view(&root)).await}
+#[tauri::command]
+async fn ai_save_provider(state:State<'_,AppState>,task:String,provider:ai::config::Provider,key:Option<String>)->Result<Value,String>{let root=state.root.clone();let control=state.ai.clone();work(move||{anyhow::ensure!(task!="embedding"||!control.indexing.load(Ordering::SeqCst),"Stop indexing before changing embedding providers");ai::config::save(&root,&task,provider,key)}).await}
+#[tauri::command]
+async fn ai_models(state:State<'_,AppState>,task:String)->Result<Vec<Value>,String>{let root=state.root.clone();work(move||{let c=ai::config::read(&root)?;let p=if task=="embedding"{c.embedding}else{c.chat};p.models(&task)}).await}
+#[tauri::command]
+async fn ai_check(state:State<'_,AppState>,task:String)->Result<Value,String>{let root=state.root.clone();work(move||{let c=ai::config::read(&root)?;if task=="embedding"{let p=if c.embedding.kind=="builtin"{ai::builtin::provider(&root,|_|Ok(()))?}else{c.embedding};let v=p.embed(&p.client()?,&["Concord connection check".into()])?;Ok(serde_json::json!({"message":format!("Embedding model ready · {} dimensions",v[0].len())}))}else{let text=ai::chat::complete(&c.chat,&[serde_json::json!({"role":"user","content":"Reply with OK."})],&std::sync::atomic::AtomicBool::new(false),|_|{})?;Ok(serde_json::json!({"message":format!("Chat model ready · {}",text.chars().take(80).collect::<String>())}))}}).await}
+#[tauri::command]
+async fn ai_status(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||ai::index::status(&root)).await}
+#[tauri::command]
+async fn ai_index(state:State<'_,AppState>)->Result<String,String>{let root=state.root.clone();let control=state.ai.clone();work(move||ai::index::start(root,control)).await}
+#[tauri::command]
+fn ai_cancel_index(state:State<'_,AppState>){state.ai.cancel_index.store(true,Ordering::SeqCst);}
+#[tauri::command]
+async fn ai_clear_index(state:State<'_,AppState>)->Result<(),String>{let root=state.root.clone();let control=state.ai.clone();work(move||ai::index::clear(&root,&control)).await}
+#[tauri::command]
+async fn research_search(state:State<'_,AppState>,query:String,semantic:bool,filter:ai::index::Filter)->Result<Vec<ai::index::Hit>,String>{let root=state.root.clone();work(move||ai::index::search(&root,&query,semantic,&filter,100)).await}
+#[tauri::command]
+async fn search_filters(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||ai::index::filters(&root)).await}
+#[tauri::command]
+async fn ai_conversations(state:State<'_,AppState>)->Result<Vec<Value>,String>{let root=state.root.clone();work(move||ai::chat::list(&root)).await}
+#[tauri::command]
+async fn ai_create_chat(state:State<'_,AppState>)->Result<String,String>{let root=state.root.clone();work(move||ai::chat::create(&root)).await}
+#[tauri::command]
+async fn ai_read_chat(state:State<'_,AppState>,id:String)->Result<Value,String>{let root=state.root.clone();work(move||ai::chat::read(&root,&id)).await}
+#[tauri::command]
+async fn ai_edit_chat(state:State<'_,AppState>,id:String,title:Option<String>,pinned:Option<bool>,remove:bool)->Result<(),String>{let root=state.root.clone();let control=state.ai.clone();work(move||ai::chat::edit(&root,&control,&id,title.as_deref(),pinned,remove)).await}
+#[tauri::command]
+async fn ai_send(app:tauri::AppHandle,state:State<'_,AppState>,request:ai::chat::Send)->Result<Value,String>{let root=state.root.clone();let control=state.ai.clone();work(move||ai::chat::send(&root,&control,&request,|text|{let _=app.emit("ai-chat-delta",serde_json::json!({"id":request.conversation_id,"text":text}));})).await}
+#[tauri::command]
+fn ai_cancel_chat(state:State<'_,AppState>,id:String){ai::chat::cancel(&state.ai,&id);}
+#[tauri::command]
+async fn ai_star_message(state:State<'_,AppState>,id:String,starred:bool)->Result<(),String>{let root=state.root.clone();work(move||ai::chat::star(&root,&id,starred)).await}
+#[tauri::command]
+async fn ai_suggest_tags(state:State<'_,AppState>,text:String)->Result<Vec<String>,String>{let root=state.root.clone();work(move||ai::chat::suggest_tags(&root,&text)).await}
+#[tauri::command]
+async fn ai_summary(state:State<'_,AppState>,id:String,generate:bool)->Result<Value,String>{let root=state.root.clone();work(move||ai::chat::summary(&root,&id,generate)).await}
 #[tauri::command]
 async fn overview(state: State<'_, AppState>) -> Result<Value, String> {
     let root = state.root.clone();
@@ -370,7 +410,10 @@ pub fn run() {
       .setup(move |app| {
         let db = db::open(&root)?;
         db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'", [])?;
+        ai::builtin::initialize(app.path().resource_dir()?);
+        db.execute("UPDATE ai_jobs SET status='interrupted',message='Concord closed before indexing finished. Update index to resume.' WHERE status='running'",[])?;
         app.manage(AppState {
+            ai: Arc::new(ai::Control::default()),
             root: root.clone(),
             runtime: speech::Runtime::resolve(app.path().resource_dir().ok()),
             control: control.clone(),
@@ -384,7 +427,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
-      .run(move|_,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();}});
+      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.ai.cancel_index.store(true,Ordering::SeqCst);for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
 }
