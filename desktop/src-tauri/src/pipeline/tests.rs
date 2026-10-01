@@ -186,6 +186,7 @@ fn real_queue_publishes_a_transcript_and_releases_the_worker() {
 fn download_cap_resets_by_date_and_does_not_block_local_transcription() {
     let (dir, c) = fixture();
     let root = dir.path();
+    downloader::fixture(root);
     let db = db::open(root).unwrap();
     save_config(
         root,
@@ -463,4 +464,31 @@ fn the_device_saves_even_when_other_pipeline_settings_are_stale() {
     set_device(root, "cpu").unwrap();
     assert_eq!(device(root).unwrap(), "cpu");
     assert_eq!(config(root).unwrap().cookies_file, "/gone/cookies.txt");
+}
+
+#[test]
+fn disabled_downloads_wait_without_blocking_local_work_or_spending_retries() {
+    let (dir,c)=fixture(); let root=dir.path();
+    downloader::fixture(root);
+    downloader::set_enabled(root,&c.downloader,false).unwrap();
+    let db=db::open(root).unwrap();
+    db.execute("INSERT INTO media(id,title,url,status) VALUES ('remote-opt','Remote','https://www.youtube.com/watch?v=fixture1234','pending')",[]).unwrap();
+    let remote=queue::insert(&db,"remote-opt","Remote","download","auto",true).unwrap().unwrap();
+    enqueue(root,&c,&Batch{ids:vec!["one".into()],..Default::default()},true).unwrap();
+    let local=queue::claim(root,1).unwrap().unwrap(); assert_eq!(local["media_id"],"one");
+    queue::finish(root,local["id"].as_str().unwrap(),Ok(()),&c,2).unwrap();
+    assert!(queue::claim(root,3).unwrap().is_none()); assert_eq!(state(root,&remote)["attempts"],0);
+    assert!(super::download::command(root,&Config::default()).is_err());
+    downloader::set_enabled(root,&c.downloader,true).unwrap();
+    assert_eq!(queue::claim(root,4).unwrap().unwrap()["id"],remote);
+    downloader::set_enabled(root,&c.downloader,false).unwrap();
+    c.speech.cancel();
+    queue::finish(root,&remote,Err(anyhow::anyhow!("Cancelled")),&c,5).unwrap();
+    assert_eq!(state(root,&remote)["status"],"queued"); assert_eq!(state(root,&remote)["attempts"],0);
+    db.execute("UPDATE media SET path=(SELECT path FROM media WHERE id='one') WHERE id='remote-opt'",[]).unwrap();
+    c.speech.begin();
+    assert_eq!(queue::claim(root,6).unwrap().unwrap()["id"],remote);
+    queue::finish(root,&remote,Err(anyhow::anyhow!("ASR failure on an already downloaded file")),&c,7).unwrap();
+    assert_eq!(state(root,&remote)["status"],"retry");
+    assert_eq!(state(root,&remote)["attempts"],1);
 }

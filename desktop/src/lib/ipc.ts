@@ -77,6 +77,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
 }
 
+export type DownloaderStatus = { enabled: boolean; installed: boolean; version: string | null; install: { running: boolean; message: string; error: string | null; done: number; total: number } };
+
 export const MEDIA_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "ogg", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 
 export const api = {
@@ -119,7 +121,10 @@ export const api = {
   pipelineRemoveSource: (id: string) => call<void>("pipeline_remove_source", { id }),
   pipelineCheck: (id?: string, full = false, category = "") => call<void>("pipeline_check", { id, full, category }),
   pipelineStopCheck: () => call<void>("pipeline_stop_check"),
-  pipelineTools: () => call<{ ready: boolean; version?: string; error?: string }>("pipeline_tools"),
+  pipelineTools: () => call<{ enabled: boolean; ready: boolean; version?: string; error?: string }>("pipeline_tools"),
+  downloaderStatus: () => call<DownloaderStatus>("downloader_status"),
+  downloaderInstall: () => call<void>("downloader_install"),
+  downloaderEnable: (enabled: boolean) => call<void>("downloader_enable", { enabled }),
   pipelineState: () => call<PipelineState>("pipeline_state"),
   pipelineAiState: () => call<AutomaticAi>("pipeline_ai_state"),
   pipelineAiSave: (embedding: boolean, summary: boolean) => call<AutomaticAi>("pipeline_ai_save", { embedding, summary }),

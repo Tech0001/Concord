@@ -25,7 +25,7 @@ export function youtubeName(url: string): string {
 }
 
 export function RecordingsStep({ status, next, skip, back, detour }: StepProps) {
-  const { category, device, refresh, refreshSetup } = useApp();
+  const { category, device, refresh, refreshSetup, navigate } = useApp();
   const toast = useToast();
   const [target, setTarget] = useState<"personal" | "work">(category === "work" ? "work" : "personal");
   const [added, setAdded] = useState<Added[]>([]);
@@ -146,9 +146,8 @@ export function RecordingsStep({ status, next, skip, back, detour }: StepProps) 
           {tile(
             "youtube",
             "YouTube channel or playlist",
-            tools === false ? "Needs Concord's download tools, which aren't available in this build." : "Queues its videos to download and transcribe.",
-            () => setYoutube(true),
-            tools === false,
+            tools === false ? "Enable YouTube downloads in Settings first." : "Queues its videos to download and transcribe.",
+            () => tools ? setYoutube(true) : navigate({ page: "settings", section: "youtube" }),
           )}
           {tile("docs", "Documents folder", "PDF, Word and Markdown files, searchable in Docs.", () => void addDocuments())}
         </div>

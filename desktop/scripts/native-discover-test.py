@@ -10,6 +10,10 @@ import urllib.parse
 
 repo=pathlib.Path(__file__).resolve().parents[2]
 root=pathlib.Path(subprocess.check_output(['python3',str(pathlib.Path(__file__).with_name('prepare-health-review.py'))],text=True).strip())
+from downloader_fixture import stage
+fixture=root/"yt-dlp-fixture"
+fixture.write_text("#!/bin/sh\nprintf 'fixture-1.0\\n'\n")
+stage(root,fixture,"fixture-1.0")
 requests=[]
 def hit(id,title,description):
     return {'id':{'videoId':id},'snippet':{'title':title,'description':description,'channelTitle':'Synthetic source','channelId':'fake-channel','publishedAt':'2026-09-30T12:00:00Z'}}

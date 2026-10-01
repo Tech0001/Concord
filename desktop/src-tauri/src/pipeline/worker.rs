@@ -10,6 +10,9 @@ use std::{
 };
 
 pub struct Control {
+    pub downloader: Arc<super::downloader::Control>,
+    pub downloading: AtomicBool,
+    pub checking_youtube: AtomicBool,
     pub(crate) gate: Mutex<Option<String>>,
     pub speech: Arc<speech::Control>,
     pub closing: AtomicBool,
@@ -20,6 +23,9 @@ pub struct Control {
 impl Control {
     pub fn new(speech: Arc<speech::Control>) -> Self {
         Self {
+            downloader: Arc::new(super::downloader::Control::default()),
+            downloading: AtomicBool::new(false),
+            checking_youtube: AtomicBool::new(false),
             gate: Mutex::new(None),
             speech,
             closing: AtomicBool::new(false),
@@ -33,6 +39,7 @@ impl Control {
         self.closing.store(true, Ordering::SeqCst);
         self.speech.cancel();
         self.scanner.cancel();
+        self.downloader.shutdown();
     }
 }
 pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
@@ -50,7 +57,10 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                 if !runtime.for_root(&root).installed() {
                     let setup = crate::speech_setup::saved(&root);
                     if setup.status == "failed" {
-                        return queue::fail_waiting_for_speech(&root, &format!("Speech setup failed: {}", setup.message));
+                        return queue::fail_waiting_for_speech(
+                            &root,
+                            &format!("Speech setup failed: {}", setup.message),
+                        );
                     }
                     return queue::wait_for_speech(&root);
                 }
@@ -60,11 +70,20 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                 let id = row["id"].as_str().unwrap();
                 *active = Some(id.into());
                 control.speech.begin();
+                control.downloading.store(
+                    row["kind"] == "download"
+                        && !row["path"]
+                            .as_str()
+                            .is_some_and(|p| std::path::Path::new(p).is_file()),
+                    Ordering::SeqCst,
+                );
                 drop(active);
                 let result = (|| -> anyhow::Result<bool> {
                     let cfg = super::config(&root)?;
                     let path = if row["kind"] == "download" {
-                        match super::download::fetch(&root, &control.speech, &row, &cfg)? {
+                        let result = super::download::fetch(&root, &control.speech, &row, &cfg);
+                        control.downloading.store(false, Ordering::SeqCst);
+                        match result? {
                             super::download::Outcome::File(path) => path,
                             super::download::Outcome::Waiting => return Ok(false),
                         }
@@ -86,6 +105,7 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                     )?;
                     Ok(true)
                 })();
+                control.downloading.store(false, Ordering::SeqCst);
                 let mut active = control.gate.lock().unwrap();
                 let saved = match result {
                     Ok(false) if !control.speech.is_cancelled() => {

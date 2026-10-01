@@ -48,6 +48,7 @@ pub fn enqueue(
         "Video metadata is too large"
     );
     let _gate = c.gate.lock().unwrap();
+    super::downloader::binary(root)?;
     let mut db = crate::db::open(root)?;
     let cfg = config(root)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -86,6 +87,7 @@ mod tests {
     fn manual_download_is_deduplicated_and_does_not_start_or_create_subscriptions() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
+        super::super::downloader::fixture(root);
         let control = Control::new(Arc::new(crate::speech::Control::default()));
         let hit = crate::tools::discover::Hit {
             video_id: "abc123_-XYZ".into(),

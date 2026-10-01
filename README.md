@@ -90,9 +90,13 @@ pnpm --dir desktop package
 bash scripts/install-next-local.sh
 ```
 
-Packaging includes NeMo-Speech.cpp, the local embedding runtime, private yt-dlp/Node/uv
+Packaging includes NeMo-Speech.cpp, the local embedding runtime, private Node/uv
 helpers, and GStreamer playback codecs. There is no Electron runtime or Node application
-server. Node is used only by the bundled YouTube downloader. Downloaded build tools are
+server. YouTube downloads are off by default. Settings → YouTube downloads installs yt-dlp
+from the latest stable official GitHub release after opt-in, verifies its SHA-256 checksum,
+and stores it privately for that library. yt-dlp is not bundled and system copies are not
+used automatically. Updates are explicit; failed updates retain the previous copy. Node is
+used only when running the optional downloader. Downloaded build tools are
 pinned and SHA-256 verified. Model weights are downloaded during setup and are not in Git.
 Packaging checks AAC, H.264, AV1, Opus and Vorbis playback support. Additional distro-matched
 plugins can be supplied through `CONCORD_GST_PLUGINS`.

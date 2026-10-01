@@ -255,7 +255,7 @@ fn youtube(root: &Path, control: &Control, source: &Value, full: bool) -> Result
         source["url"].as_str().unwrap_or(""),
         source["include_shorts"] == 1,
     )? {
-        let mut cmd = download::command(root, &cfg);
+        let mut cmd = download::command(root, &cfg)?;
         cmd.args([
             "--flat-playlist",
             "--dump-single-json",
@@ -352,7 +352,15 @@ pub fn start_filtered(root: PathBuf, control: Arc<Control>, id: Option<String>, 
                 let result = if source["kind"] == "folder" {
                     local(&root, &control, &source)
                 } else {
-                    youtube(&root, &control, &source, full)
+                    let result = (|| {
+                        let guard=control.gate.lock().unwrap();
+                        super::downloader::binary(&root)?;
+                        control.checking_youtube.store(true, Ordering::SeqCst);
+                        drop(guard);
+                        youtube(&root, &control, &source, full)
+                    })();
+                    control.checking_youtube.store(false, Ordering::SeqCst);
+                    result
                 };
                 let (status, message) = match result {
                     Ok(n) => ("complete", format!("{n} new recordings queued")),
@@ -392,6 +400,7 @@ pub fn monitor(root: PathBuf, control: Arc<Control>) {
                     let due = list(&root)?.into_iter().find(|s| {
                         s["enabled"] == 1
                             && s["kind"] != "collection"
+                            && (s["kind"] != "youtube" || super::downloader::available(&root))
                             && s["last_check"].as_i64().unwrap_or(0)
                                 + i64::from(cfg.check_minutes) * 60
                                 <= now()

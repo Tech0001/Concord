@@ -1,3 +1,4 @@
+import { DownloadSettings } from "./DownloadSettings.tsx";
 import { YouTubeSettings } from "../tools/YouTubeSettings.tsx";
 import { useEffect, useState } from "react";
 import { AudioLines, Check, CircleAlert, Cpu, FolderOpen, HardDrive, Info, Palette, RefreshCw } from "lucide-react";
@@ -138,6 +139,7 @@ export function SettingsPage({ section }: { section?: SettingsSection }) {
         <ProviderSettings />
       </div>
       <div id="settings-youtube" className="settings-anchor">
+        <DownloadSettings />
         <YouTubeSettings />
       </div>
       <Section id="speech" icon={AudioLines} title="Speech">

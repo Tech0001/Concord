@@ -192,13 +192,25 @@ pub fn recover(root: &Path) -> Result<()> {
 }
 pub(super) fn claim(root: &Path, at: i64) -> Result<Option<Value>> {
     let cfg = config(root)?;
+    let downloads_ready = super::downloader::available(root);
     let mut db = db::open(root)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if !running(&tx)? {
         return Ok(None);
     }
     let limited = super::download::daily_count(&tx)? >= cfg.daily_limit;
-    let row=db::rows(&tx,"SELECT j.*,p.kind,p.diarize,p.device,p.attempts,m.path,m.url,m.source_id FROM jobs j JOIN pipeline_work p ON p.id=j.id JOIN media m ON m.id=j.media_id WHERE p.cancelled=0 AND (j.status='queued' OR (j.status IN ('retry','waiting_live') AND p.retry_at<=?1)) ORDER BY j.rowid",[at])?.into_iter().find(|r|!limited || r["kind"]!="download" || available(r));
+    let rows=db::rows(&tx,"SELECT j.*,p.kind,p.diarize,p.device,p.attempts,m.path,m.url,m.source_id FROM jobs j JOIN pipeline_work p ON p.id=j.id JOIN media m ON m.id=j.media_id WHERE p.cancelled=0 AND (j.status='queued' OR (j.status IN ('retry','waiting_live') AND p.retry_at<=?1)) ORDER BY j.rowid",[at])?;
+    if !downloads_ready {
+        for r in rows
+            .iter()
+            .filter(|r| r["kind"] == "download" && !available(r))
+        {
+            tx.execute("UPDATE jobs SET message='Waiting for YouTube downloads to be enabled in Settings' WHERE id=?1",[r["id"].as_str()])?;
+        }
+    }
+    let row = rows
+        .into_iter()
+        .find(|r| r["kind"] != "download" || available(r) || (downloads_ready && !limited));
     if let Some(row) = &row {
         let id = row["id"].as_str().unwrap();
         tx.execute(
@@ -221,6 +233,7 @@ pub(super) fn finish(
     at: i64,
 ) -> Result<()> {
     let cfg = config(root)?;
+    let downloads_enabled = super::downloader::enabled(root)?;
     let mut db = db::open(root)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let (attempts, cancelled): (u32, bool) = tx.query_row(
@@ -240,6 +253,20 @@ pub(super) fn finish(
             "queued",
             "Resuming after Concord closed; the previous transcript is preserved".into(),
         ),
+        Err(_)
+            if !downloads_enabled
+                && control.speech.is_cancelled()
+                && tx.query_row(
+                    "SELECT kind='download' FROM pipeline_work WHERE id=?1",
+                    [id],
+                    |r| r.get::<_, bool>(0),
+                )? =>
+        {
+            (
+                "queued",
+                "Waiting for YouTube downloads to be enabled in Settings".into(),
+            )
+        }
         Err(e) if attempts <= cfg.retries => (
             "retry",
             format!(
@@ -264,9 +291,12 @@ pub(super) fn finish(
     media_state(&tx, id)?;
     if status == "complete" {
         tx.execute_batch("SAVEPOINT automatic_ai")?;
-        if let Err(e) = crate::ai::automation::enqueue(&tx,id) {
+        if let Err(e) = crate::ai::automation::enqueue(&tx, id) {
             tx.execute_batch("ROLLBACK TO automatic_ai")?;
-            crate::runtime_log::push("error",&format!("Transcript saved but automatic AI could not be queued: {e:#}"));
+            crate::runtime_log::push(
+                "error",
+                &format!("Transcript saved but automatic AI could not be queued: {e:#}"),
+            );
         }
         tx.execute_batch("RELEASE automatic_ai")?;
     }
@@ -333,8 +363,14 @@ pub(super) fn fail_waiting_for_speech(root: &Path, message: &str) -> Result<()> 
     let mut db = db::open(root)?;
     let tx = db.transaction()?;
     let waiting = "SELECT id FROM jobs WHERE status='queued' AND message=?1 AND id IN (SELECT id FROM pipeline_work)";
-    tx.execute(&format!("UPDATE pipeline_work SET finished_at=datetime('now') WHERE id IN ({waiting})"), [WAITING_FOR_SPEECH])?;
-    tx.execute(&format!("UPDATE jobs SET status='failed',message=?2 WHERE id IN ({waiting})"), params![WAITING_FOR_SPEECH, message])?;
+    tx.execute(
+        &format!("UPDATE pipeline_work SET finished_at=datetime('now') WHERE id IN ({waiting})"),
+        [WAITING_FOR_SPEECH],
+    )?;
+    tx.execute(
+        &format!("UPDATE jobs SET status='failed',message=?2 WHERE id IN ({waiting})"),
+        params![WAITING_FOR_SPEECH, message],
+    )?;
     tx.commit()?;
     Ok(())
 }

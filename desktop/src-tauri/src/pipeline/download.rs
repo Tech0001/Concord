@@ -17,30 +17,49 @@ pub fn initialize(path: PathBuf) {
 }
 fn tool(name: &str) -> PathBuf {
     let packaged = RESOURCES.get().map(|r| r.join("downloads").join(name));
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../build/binaries/downloads").join(name);
-    packaged.filter(|p| p.is_file()).or_else(|| dev.is_file().then_some(dev)).unwrap_or_else(|| PathBuf::from(name))
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../build/binaries/downloads")
+        .join(name);
+    packaged
+        .filter(|p| p.is_file())
+        .or_else(|| dev.is_file().then_some(dev))
+        .unwrap_or_else(|| PathBuf::from(name))
 }
-pub fn binary() -> PathBuf {
-    std::env::var_os("CONCORD_YTDLP_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| tool("yt-dlp"))
-}
-pub fn status() -> Value {
+pub fn status(root: &Path) -> Value {
+    let enabled = super::downloader::enabled(root).unwrap_or(false);
+    let binary = super::downloader::binary(root);
     let version = |path: &Path, arg: &str| {
         let mut cmd = Command::new(path);
         subprocess::host(&mut cmd);
         cmd.env_remove("NODE_OPTIONS").env_remove("NODE_PATH");
-        cmd.arg(arg).output().ok().filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").to_owned())
+        cmd.arg(arg)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            })
     };
-    let yt = version(&binary(), "--version");
+    let yt = binary.as_ref().ok().and_then(|p| version(p, "--version"));
     let node = version(&tool("node"), "--version");
     let ffmpeg = version(Path::new("ffmpeg"), "-version");
-    let missing = [("yt-dlp",yt.is_none()),("JavaScript runtime",node.is_none()),("FFmpeg",ffmpeg.is_none())].into_iter().filter_map(|(n,m)|m.then_some(n)).collect::<Vec<_>>();
-    json!({"ready":missing.is_empty(),"version":yt,"path":binary(),"javascriptVersion":node,"javascriptPath":tool("node"),"ffmpeg":ffmpeg,
-        "error":(!missing.is_empty()).then(||format!("Download tools unavailable: {}. Check the Concord installation and install FFmpeg if missing.",missing.join(", ")))})
+    let missing = [
+        ("yt-dlp", yt.is_none()),
+        ("JavaScript runtime", node.is_none()),
+        ("FFmpeg", ffmpeg.is_none()),
+    ]
+    .into_iter()
+    .filter_map(|(n, m)| m.then_some(n))
+    .collect::<Vec<_>>();
+    json!({"enabled":enabled,"ready":enabled && missing.is_empty(),"version":yt,"path":binary.as_ref().ok(),"javascriptVersion":node,"javascriptPath":tool("node"),"ffmpeg":ffmpeg,
+        "error":if !enabled {Some("YouTube downloads are off. Enable them in Settings → YouTube downloads.".to_owned())} else {(!missing.is_empty()).then(||format!("Download tools unavailable: {}. Open Settings → YouTube downloads to install yt-dlp; install FFmpeg if missing.",missing.join(", ")))}})
 }
-pub fn command(root: &Path, cfg: &Config) -> Command {
-    command_using(root, cfg, &binary())
+pub fn command(root: &Path, cfg: &Config) -> Result<Command> {
+    Ok(command_using(root, cfg, &super::downloader::binary(root)?))
 }
 fn command_using(root: &Path, cfg: &Config, executable: &Path) -> Command {
     let mut cmd = Command::new(executable);
@@ -65,7 +84,9 @@ fn command_using(root: &Path, cfg: &Config, executable: &Path) -> Command {
         cmd.arg("--cookies-from-browser").arg(&cfg.cookies_browser);
     }
     // Bundled Node handles YouTube's JS challenges without installing remote code.
-    cmd.arg("--js-runtimes").arg(format!("node:{}",tool("node").display())).arg("--no-remote-components");
+    cmd.arg("--js-runtimes")
+        .arg(format!("node:{}", tool("node").display()))
+        .arg("--no-remote-components");
     cmd.env_remove("NODE_OPTIONS").env_remove("NODE_PATH");
     cmd
 }
@@ -163,7 +184,14 @@ pub enum Outcome {
     Waiting,
 }
 pub fn fetch(root: &Path, control: &speech::Control, row: &Value, cfg: &Config) -> Result<Outcome> {
-    fetch_using(root, control, row, cfg, &binary())
+    if let Some(path) = row["path"]
+        .as_str()
+        .map(PathBuf::from)
+        .filter(|p| p.is_file())
+    {
+        return Ok(Outcome::File(path));
+    }
+    fetch_using(root, control, row, cfg, &super::downloader::binary(root)?)
 }
 fn fetch_using(
     root: &Path,

@@ -6,7 +6,7 @@ folder=root/'incoming';folder.mkdir();(folder/'meeting.wav').write_bytes((root/'
 tool=root/'yt-dlp-fixture.py'
 tool.write_text('''#!/usr/bin/env python3
 import sys,json,pathlib,urllib.parse
-root=pathlib.Path(__file__).parent
+root=pathlib.Path(__file__).resolve().parents[3]
 args=sys.argv[1:]
 if '--version' in args:print('fixture-1.0');raise SystemExit(0)
 with (root/'fixture-calls.jsonl').open('a') as log:log.write(json.dumps(args)+'\\n')
@@ -22,4 +22,6 @@ else:
  print('CONCORD_FILE:'+json.dumps(str(out)))
 ''')
 tool.chmod(0o755)
+from downloader_fixture import stage
+stage(root,tool,"fixture-1.0")
 print(root)

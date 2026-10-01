@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.22.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.23.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,44 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Optional YouTube downloader (0.23.0 installed)
+
+The user requested that yt-dlp be an explicit Settings opt-in, obtained from the official
+repository instead of distributed by default with Concord.
+
+- Settings → YouTube downloads has an off-by-default switch. First enable downloads the latest
+  stable official `yt-dlp/yt-dlp` release for Linux x86_64/ARM64. It validates the asset URL,
+  size and GitHub release SHA-256 digest, then tests the executable's version before publishing
+  an atomic active-version pointer. It downloads upstream license notices alongside the binary.
+- Installation runs in the background with progress and cancellable/resumable partial files.
+  Updates happen only through Check & install update. Failed downloads/checks/updates keep the
+  previous working copy; re-enabling an installed copy is offline. An unavailable repository
+  prevents new installs/updates rather than falling back to another download source.
+- The opt-in is per library (`settings['downloads.enabled']`); managed executables live under
+  `download-tools/versions/`. No system, environment-override or legacy bundled yt-dlp fallback.
+  Existing/imported libraries also default off unless this setting was explicitly enabled.
+- Disabling stops active downloads and YouTube checks. Queued download jobs wait without using
+  retries, while local files and already downloaded media can transcribe. Automatic source checks
+  skip YouTube when disabled. Local folder checks and ordinary archive functions are independent.
+- Pipeline and onboarding point to the Settings control. Discover's API key remains separate;
+  its manual download action requires the downloader opt-in. Private Node remains bundled;
+  `scripts/stage-next-downloads.sh` removes old generated yt-dlp artifacts before packaging.
+- Validation: 155 Rust tests passed, 58 TypeScript tests passed, Clippy all-targets `-D warnings`
+  passed, frontend/release build passed. Eight opt-in integration tests were not run by the unit suite.
+  Native WebKitGTK test installed the real official 2026.08.19 release in a scratch library,
+  checked its version/checksum, exercised explicit update, disable, offline re-enable and restart.
+  Report: `/tmp/concord-023-native-test.log`; root: `/tmp/concord-downloader-native-f1w22e_d`.
+  Reproduce with `desktop/scripts/native-downloader-test.py` (requires Internet).
+  Synthetic native Discover regression also passed: `/tmp/concord-023-native-discover.log`.
+  Existing native downloader fixtures now explicitly stage a synthetic managed installation.
+- Installed and launched 0.23.0 after the user's previous app had closed. Database schema remains
+  12; no user download preference was enabled. Backup: `/home/pc/.local/share/concord-next/backups/before-0.23.0-20261001-123235.db`.
+  AppImage is 248.46 MiB; deb is 157.28 MiB. Checked the installed AppImage contains no yt-dlp.
+  Build/check logs: `/tmp/concord-023-{tests,ts,clippy,frontend,package}.log`;
+  startup: `/tmp/concord-next-023-installed.log`.
+- This installation design does not establish legal permission to download content. UI directs
+  users to use content they are permitted to download under service terms and applicable law.
 
 ## First-run setup (0.22.0 merged and installed)
 
