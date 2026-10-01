@@ -72,6 +72,18 @@ Clippy and frontend compilation pass. Desktop and phone screenshots checked.
 Packaging/install of 0.7.0 is in progress; 0.6.0 remains installed until updated below.
 Next: Docs folder tree/live sync, Pipeline, and remaining parity. Full port is not complete.
 
+Follow-up fixes included before installing 0.7.0: Status & Health keeps the title/tabs outside
+its clipped scroll area (the user saw content leaking above the tabs). A native WebKitGTK
+check confirms the header stays fixed while content scrolls. Speech runtime probing and the
+Python coordinator now isolate LD_LIBRARY_PATH to the private NeMo folder, in addition to
+clearing AppImage PYTHONHOME/PYTHONPATH. The AppImage's WebKit libraries had caused NeMo's
+GPU/backend discovery to fail; the UI misleadingly said CPU and Setup needed. The actual
+RTX 2080 Ti is detected with Vulkan and CUDA voice matching works. Doctor's valid CPU report
+is accepted even when it exits 1 for absent GPU drivers, preserving CPU-only support.
+Settings explicitly says Selected processing and exposes runtime errors separately. A real
+25-second speech job passed using the installed AppImage's environment and speech binary.
+
+
 ## Current direction and 0.5.0 work (September 30, late evening)
 
 The user reiterated full parity without stopping for approval, and refined navigation:

@@ -333,412 +333,414 @@ export function ArchiveWorkspace({
           Refresh
         </Button>
       </div>
-      {tab === "status" && status && (
-        <>
-          <div className="archive-intro">
-            <p>
-              Single-glance view of the archive.{" "}
-              {number(status.archive.complete)} recordings complete ·{" "}
-              {number(Math.round(status.archive.hours))} h archived.
-            </p>
-            <span>
-              {runtime?.ready ? "Speech ready" : "Speech setup needed"} · Chat{" "}
-              {status.chat.configured ? "configured" : "not configured"}
-            </span>
-          </div>
-          <div className="archive-totals">
-            {[
-              ["Recordings", number(status.archive.total)],
-              ["Hours", `${number(Math.round(status.archive.hours))} h`],
-              ["Pending", number(status.archive.pending)],
-              ["Failed", number(status.archive.failed)],
-              ["Speakers", number(status.speakers.total)],
-            ].map(([label, value]) => (
-              <div key={label}>
-                <span>{label}</span>
-                <strong>{value}</strong>
-              </div>
-            ))}
-          </div>
-          <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />
-          <div className="archive-coverage-grid">
-            <CoverageCard
-              title="Transcripts"
-              value={status.coverage.transcripts}
-              detail={`FTS index: ${number(status.coverage.fts.covered)} files · ${number(status.coverage.segments)} passages`}
-              action={
-                <Button size="sm" onClick={() => setTab("health")}>
-                  Review integrity
-                </Button>
-              }
-            />
-            <CoverageCard
-              title={`Semantic index · ${status.embedding.model}`}
-              value={status.coverage.embeddings}
-              detail="Coverage in the currently selected embedding model."
-              action={linked("ai", "Open AI")}
-            />
-            <CoverageCard
-              title="AI summaries"
-              value={status.coverage.summaries}
-              detail="Saved summaries for complete recordings."
-            />
-            <CoverageCard
-              title="Diarization"
-              value={status.coverage.diarization}
-              detail={`${number(status.speakers.unidentified)} unidentified voices waiting for names`}
-              action={linked("speakers", "Open Speakers")}
-            />
-            <CoverageCard
-              title="Documents with text"
-              value={status.coverage.documents}
-              detail={`${status.documents.starred} starred · ${status.documents.personal} personal · ${status.documents.work} work`}
-              action={linked("documents", "Open Docs")}
-            />
-            <CoverageCard
-              title={`Docs embedded · ${status.embedding.model}`}
-              value={status.coverage.documentEmbeddings}
-              detail="Empty documents are excluded from embedding coverage."
-              action={linked("ai", "Open AI")}
-            />
-          </div>
-          <section className="archive-section">
-            <h3>
-              Channels & collections ·{" "}
-              {status.channels.filter((c) => c.enabled === 1).length} enabled /{" "}
-              {status.channels.length} total
-            </h3>
-            <div className="archive-table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    {[
-                      "Channel",
-                      "Recordings",
-                      "Done",
-                      "Pending",
-                      "Failed",
-                      "Embed",
-                      "Summary",
-                      "Diarized",
-                      "Flags",
-                    ].map((x) => (
-                      <th key={x}>{x}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {status.channels.map((c) => (
-                    <tr key={c.id}>
-                      <th>{c.name}</th>
-                      {[
-                        c.total,
-                        c.complete,
-                        c.pending,
-                        c.failed,
-                        c.embedded,
-                        c.summarized,
-                        c.diarized,
-                      ].map((n, i) => (
-                        <td key={i}>{number(n)}</td>
-                      ))}
-                      <td>
-                        {[
-                          c.enabled === 0 ? "Off" : null,
-                          c.diarize ? "diarize" : null,
-                          c.include_shorts ? "shorts" : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-          <small className="muted">
-            Updated {when(status.generatedAt)} · refreshes every 5 minutes.
-          </small>
-        </>
-      )}
-      {tab === "status" && !status && <p>Reading archive status…</p>}
-      {tab === "health" && (
-        <>
-          <div className="archive-intro">
-            <div>
-              <h2>Archive Health & Repair</h2>
+      <div className="archive-scroll" key={tab}>
+        {tab === "status" && status && (
+          <>
+            <div className="archive-intro">
               <p>
-                Local integrity checks, recoverable repairs, provenance, and
-                database backups.
+                Single-glance view of the archive.{" "}
+                {number(status.archive.complete)} recordings complete ·{" "}
+                {number(Math.round(status.archive.hours))} h archived.
               </p>
+              <span>
+                {runtime?.ready ? "Speech ready" : "Speech setup needed"} · Chat{" "}
+                {status.chat.configured ? "configured" : "not configured"}
+              </span>
             </div>
-            <Button
-              icon={HeartPulse}
-              disabled={!!busy}
-              onClick={() => void scan()}
-            >
-              {busy === "audit" ? "Auditing…" : "Run audit"}
-            </Button>
-          </div>
-          {audit ? (
-            <section
-              className={`archive-audit-summary ${audit.errors ? "has-errors" : ""}`}
-            >
+            <div className="archive-totals">
+              {[
+                ["Recordings", number(status.archive.total)],
+                ["Hours", `${number(Math.round(status.archive.hours))} h`],
+                ["Pending", number(status.archive.pending)],
+                ["Failed", number(status.archive.failed)],
+                ["Speakers", number(status.speakers.total)],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
+            </div>
+            <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />
+            <div className="archive-coverage-grid">
+              <CoverageCard
+                title="Transcripts"
+                value={status.coverage.transcripts}
+                detail={`FTS index: ${number(status.coverage.fts.covered)} files · ${number(status.coverage.segments)} passages`}
+                action={
+                  <Button size="sm" onClick={() => setTab("health")}>
+                    Review integrity
+                  </Button>
+                }
+              />
+              <CoverageCard
+                title={`Semantic index · ${status.embedding.model}`}
+                value={status.coverage.embeddings}
+                detail="Coverage in the currently selected embedding model."
+                action={linked("ai", "Open AI")}
+              />
+              <CoverageCard
+                title="AI summaries"
+                value={status.coverage.summaries}
+                detail="Saved summaries for complete recordings."
+              />
+              <CoverageCard
+                title="Diarization"
+                value={status.coverage.diarization}
+                detail={`${number(status.speakers.unidentified)} unidentified voices waiting for names`}
+                action={linked("speakers", "Open Speakers")}
+              />
+              <CoverageCard
+                title="Documents with text"
+                value={status.coverage.documents}
+                detail={`${status.documents.starred} starred · ${status.documents.personal} personal · ${status.documents.work} work`}
+                action={linked("documents", "Open Docs")}
+              />
+              <CoverageCard
+                title={`Docs embedded · ${status.embedding.model}`}
+                value={status.coverage.documentEmbeddings}
+                detail="Empty documents are excluded from embedding coverage."
+                action={linked("ai", "Open AI")}
+              />
+            </div>
+            <section className="archive-section">
+              <h3>
+                Channels & collections ·{" "}
+                {status.channels.filter((c) => c.enabled === 1).length} enabled
+                / {status.channels.length} total
+              </h3>
+              <div className="archive-table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      {[
+                        "Channel",
+                        "Recordings",
+                        "Done",
+                        "Pending",
+                        "Failed",
+                        "Embed",
+                        "Summary",
+                        "Diarized",
+                        "Flags",
+                      ].map((x) => (
+                        <th key={x}>{x}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.channels.map((c) => (
+                      <tr key={c.id}>
+                        <th>{c.name}</th>
+                        {[
+                          c.total,
+                          c.complete,
+                          c.pending,
+                          c.failed,
+                          c.embedded,
+                          c.summarized,
+                          c.diarized,
+                        ].map((n, i) => (
+                          <td key={i}>{number(n)}</td>
+                        ))}
+                        <td>
+                          {[
+                            c.enabled === 0 ? "Off" : null,
+                            c.diarize ? "diarize" : null,
+                            c.include_shorts ? "shorts" : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+            <small className="muted">
+              Updated {when(status.generatedAt)} · refreshes every 5 minutes.
+            </small>
+          </>
+        )}
+        {tab === "status" && !status && <p>Reading archive status…</p>}
+        {tab === "health" && (
+          <>
+            <div className="archive-intro">
               <div>
-                <strong>
-                  {audit.errors || audit.warnings
-                    ? "The archive needs attention"
-                    : "Archive checks are healthy"}
-                </strong>
+                <h2>Archive Health & Repair</h2>
                 <p>
-                  {audit.errors} errors · {audit.warnings} warnings · scanned{" "}
-                  {when(audit.generatedAt)}
+                  Local integrity checks, recoverable repairs, provenance, and
+                  database backups.
                 </p>
               </div>
-              <span>
-                {bytes(audit.databaseBytes)} database ·{" "}
-                {bytes(audit.mediaBytes)} media
-              </span>
-            </section>
-          ) : (
-            <p className="muted">
-              Run an audit to check local files and indexes. Opening this view
-              does not contact any AI provider.
-            </p>
-          )}
-          <section className="archive-section embedding-guard">
-            <div>
-              <h3>Embedding compatibility guard</h3>
-              <p>
-                Index width: {status?.embedding.dimensions ?? "not built"} ·
-                model: {status?.embedding.model ?? "Loading…"}
-              </p>
-              {verified && <p role="status">{verified}</p>}
+              <Button
+                icon={HeartPulse}
+                disabled={!!busy}
+                onClick={() => void scan()}
+              >
+                {busy === "audit" ? "Auditing…" : "Run audit"}
+              </Button>
             </div>
-            <Button
-              size="sm"
-              disabled={!!busy}
-              onClick={() =>
-                void run("verify", async () => {
-                  const v = await api.archiveVerifyEmbedding();
-                  setVerified(
-                    `Verified ${v.dimensions} dimensions · ${when(v.checkedAt)}`,
-                  );
-                })
-              }
-            >
-              Verify model dimensions
-            </Button>
-          </section>
-          {audit &&
-            [...new Set(audit.issues.map((i) => i.category))].map(
-              (category) => (
-                <section
-                  className="archive-section health-category"
-                  key={category}
-                >
-                  <h3>{category}</h3>
-                  {audit.issues
-                    .filter((i) => i.category === category)
-                    .map((i) => (
-                      <div
-                        className={`health-issue severity-${i.severity}`}
-                        key={i.id}
-                      >
-                        <div>
-                          <strong>
-                            {i.title}
-                            <span className="health-count">
-                              {number(i.count)}
-                            </span>
-                          </strong>
-                          <p>{i.description}</p>
-                        </div>
-                        <div className="health-issue-actions">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              setIssue(i);
-                              setReviewQuery("");
-                            }}
-                          >
-                            Review
-                          </Button>
-                          {i.repair && (
+            {audit ? (
+              <section
+                className={`archive-audit-summary ${audit.errors ? "has-errors" : ""}`}
+              >
+                <div>
+                  <strong>
+                    {audit.errors || audit.warnings
+                      ? "The archive needs attention"
+                      : "Archive checks are healthy"}
+                  </strong>
+                  <p>
+                    {audit.errors} errors · {audit.warnings} warnings · scanned{" "}
+                    {when(audit.generatedAt)}
+                  </p>
+                </div>
+                <span>
+                  {bytes(audit.databaseBytes)} database ·{" "}
+                  {bytes(audit.mediaBytes)} media
+                </span>
+              </section>
+            ) : (
+              <p className="muted">
+                Run an audit to check local files and indexes. Opening this view
+                does not contact any AI provider.
+              </p>
+            )}
+            <section className="archive-section embedding-guard">
+              <div>
+                <h3>Embedding compatibility guard</h3>
+                <p>
+                  Index width: {status?.embedding.dimensions ?? "not built"} ·
+                  model: {status?.embedding.model ?? "Loading…"}
+                </p>
+                {verified && <p role="status">{verified}</p>}
+              </div>
+              <Button
+                size="sm"
+                disabled={!!busy}
+                onClick={() =>
+                  void run("verify", async () => {
+                    const v = await api.archiveVerifyEmbedding();
+                    setVerified(
+                      `Verified ${v.dimensions} dimensions · ${when(v.checkedAt)}`,
+                    );
+                  })
+                }
+              >
+                Verify model dimensions
+              </Button>
+            </section>
+            {audit &&
+              [...new Set(audit.issues.map((i) => i.category))].map(
+                (category) => (
+                  <section
+                    className="archive-section health-category"
+                    key={category}
+                  >
+                    <h3>{category}</h3>
+                    {audit.issues
+                      .filter((i) => i.category === category)
+                      .map((i) => (
+                        <div
+                          className={`health-issue severity-${i.severity}`}
+                          key={i.id}
+                        >
+                          <div>
+                            <strong>
+                              {i.title}
+                              <span className="health-count">
+                                {number(i.count)}
+                              </span>
+                            </strong>
+                            <p>{i.description}</p>
+                          </div>
+                          <div className="health-issue-actions">
                             <Button
                               size="sm"
-                              disabled={
-                                !!busy ||
-                                (i.repair.startsWith("embed")
-                                  ? indexing
-                                  : repairing)
-                              }
-                              onClick={() => void repair(i.repair!)}
+                              variant="ghost"
+                              onClick={() => {
+                                setIssue(i);
+                                setReviewQuery("");
+                              }}
                             >
-                              {labels[i.repair]}
+                              Review
                             </Button>
-                          )}
+                            {i.repair && (
+                              <Button
+                                size="sm"
+                                disabled={
+                                  !!busy ||
+                                  (i.repair.startsWith("embed")
+                                    ? indexing
+                                    : repairing)
+                                }
+                                onClick={() => void repair(i.repair!)}
+                              >
+                                {labels[i.repair]}
+                              </Button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                </section>
-              ),
-            )}
-          <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />
-          <section className="archive-section">
-            <h3>
-              <DatabaseBackup size={16} /> Backup and restore
-            </h3>
-            <div className="archive-backups">
-              <div>
-                <h4>Create database backup</h4>
-                <p>
-                  Includes recordings’ database records, notes, chats, indexes,
-                  and provider configuration (including saved keys). External
-                  media and model files stay in their folders.
-                </p>
-                <div className="path-picker">
-                  <input
-                    aria-label="Backup destination folder"
-                    placeholder="Backup destination folder"
-                    value={folder}
-                    onChange={(e) => setFolder(e.target.value)}
-                  />
-                  <Button
-                    size="sm"
-                    icon={FolderOpen}
-                    onClick={() =>
-                      void api
-                        .pickFolder()
-                        .then((p) => p && setFolder(p))
-                        .catch(toast.error)
-                    }
-                  >
-                    Browse
-                  </Button>
-                </div>
-                <Button
-                  disabled={!!busy || !folder.trim()}
-                  onClick={() =>
-                    void run("backup", async () => {
-                      const result = await api.archiveCreateBackup(folder);
-                      setBackupResult(result);
-                      toast.success("Backup created");
-                    })
-                  }
-                >
-                  {busy === "backup" ? "Creating backup…" : "Create backup"}
-                </Button>
-                {backupResult && (
-                  <p role="status">
-                    {backupResult.path} · {bytes(backupResult.bytes)}{" "}
+                      ))}
+                  </section>
+                ),
+              )}
+            <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />
+            <section className="archive-section">
+              <h3>
+                <DatabaseBackup size={16} /> Backup and restore
+              </h3>
+              <div className="archive-backups">
+                <div>
+                  <h4>Create database backup</h4>
+                  <p>
+                    Includes recordings’ database records, notes, chats,
+                    indexes, and provider configuration (including saved keys).
+                    External media and model files stay in their folders.
+                  </p>
+                  <div className="path-picker">
+                    <input
+                      aria-label="Backup destination folder"
+                      placeholder="Backup destination folder"
+                      value={folder}
+                      onChange={(e) => setFolder(e.target.value)}
+                    />
                     <Button
                       size="sm"
-                      variant="ghost"
+                      icon={FolderOpen}
                       onClick={() =>
-                        void api.reveal(backupResult.path).catch(toast.error)
+                        void api
+                          .pickFolder()
+                          .then((p) => p && setFolder(p))
+                          .catch(toast.error)
                       }
                     >
-                      Show in folder
+                      Browse
                     </Button>
-                  </p>
-                )}
-              </div>
-              <div>
-                <h4>Restore from backup</h4>
-                <p>
-                  Validate and stage a Concord Next backup. It is applied after
-                  restart, with the current database saved as a recoverable copy
-                  first.
-                </p>
-                <div className="path-picker">
-                  <input
-                    aria-label="Backup file to restore"
-                    placeholder="Path to .sqlite backup"
-                    value={restore}
-                    onChange={(e) => setRestore(e.target.value)}
-                  />
+                  </div>
                   <Button
-                    size="sm"
-                    icon={FolderOpen}
+                    disabled={!!busy || !folder.trim()}
                     onClick={() =>
-                      void api
-                        .pickFiles({
-                          title: "Choose Concord Next backup",
-                          name: "SQLite backup",
-                          extensions: ["sqlite", "db"],
-                          multiple: false,
-                        })
-                        .then((p) => p[0] && setRestore(p[0]))
-                        .catch(toast.error)
+                      void run("backup", async () => {
+                        const result = await api.archiveCreateBackup(folder);
+                        setBackupResult(result);
+                        toast.success("Backup created");
+                      })
                     }
                   >
-                    Browse
+                    {busy === "backup" ? "Creating backup…" : "Create backup"}
                   </Button>
+                  {backupResult && (
+                    <p role="status">
+                      {backupResult.path} · {bytes(backupResult.bytes)}{" "}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          void api.reveal(backupResult.path).catch(toast.error)
+                        }
+                      >
+                        Show in folder
+                      </Button>
+                    </p>
+                  )}
                 </div>
-                <Button
-                  disabled={!!busy || !restore.trim()}
-                  onClick={() =>
-                    void run("validate", async () =>
-                      setValidation(await api.archiveValidateBackup(restore)),
-                    )
-                  }
-                >
-                  Validate and restore…
-                </Button>
-                {status?.restorePending && (
-                  <p role="status">
-                    Restore staged. Restart Concord to apply it.{" "}
+                <div>
+                  <h4>Restore from backup</h4>
+                  <p>
+                    Validate and stage a Concord Next backup. It is applied
+                    after restart, with the current database saved as a
+                    recoverable copy first.
+                  </p>
+                  <div className="path-picker">
+                    <input
+                      aria-label="Backup file to restore"
+                      placeholder="Path to .sqlite backup"
+                      value={restore}
+                      onChange={(e) => setRestore(e.target.value)}
+                    />
                     <Button
                       size="sm"
-                      variant="ghost"
+                      icon={FolderOpen}
                       onClick={() =>
-                        void run("cancel-restore", async () => {
-                          await api.archiveCancelRestore();
-                          await reload();
-                        })
+                        void api
+                          .pickFiles({
+                            title: "Choose Concord Next backup",
+                            name: "SQLite backup",
+                            extensions: ["sqlite", "db"],
+                            multiple: false,
+                          })
+                          .then((p) => p[0] && setRestore(p[0]))
+                          .catch(toast.error)
                       }
                     >
-                      Cancel staged restore
+                      Browse
                     </Button>
-                  </p>
-                )}
+                  </div>
+                  <Button
+                    disabled={!!busy || !restore.trim()}
+                    onClick={() =>
+                      void run("validate", async () =>
+                        setValidation(await api.archiveValidateBackup(restore)),
+                      )
+                    }
+                  >
+                    Validate and restore…
+                  </Button>
+                  {status?.restorePending && (
+                    <p role="status">
+                      Restore staged. Restart Concord to apply it.{" "}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          void run("cancel-restore", async () => {
+                            await api.archiveCancelRestore();
+                            await reload();
+                          })
+                        }
+                      >
+                        Cancel staged restore
+                      </Button>
+                    </p>
+                  )}
+                </div>
               </div>
-            </div>
-          </section>
-        </>
-      )}
-      {tab === "activity" && (
-        <>
-          {activities}
-          <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />
-        </>
-      )}
-      {tab === "terminal" && (
-        <>
-          <Terminal />
-          <details className="health-console">
-            <summary>Runtime diagnostics · Concord Next {version}</summary>
-            <pre>
-              {runtime
-                ? [
-                    `Device: ${runtime.device}${runtime.gpu ? ` · ${runtime.gpu}` : ""}`,
-                    `Speech models: ${runtime.modelsReady ? "available" : "missing"}`,
-                    `Voice matching: ${runtime.voiceMatchingReady ? "available" : "missing"}`,
-                    `Model: ${runtime.model}`,
-                    `Models folder: ${runtime.models}`,
-                    `Voice runtime: ${runtime.python}`,
-                  ].join("\n")
-                : "Checking runtime…"}
-            </pre>
-            <Button size="sm" onClick={onCheck}>
-              Check runtime
-            </Button>
-          </details>
-        </>
-      )}
+            </section>
+          </>
+        )}
+        {tab === "activity" && (
+          <>
+            {activities}
+            <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />
+          </>
+        )}
+        {tab === "terminal" && (
+          <>
+            <Terminal />
+            <details className="health-console">
+              <summary>Runtime diagnostics · Concord Next {version}</summary>
+              <pre>
+                {runtime
+                  ? [
+                      `Device: ${runtime.device}${runtime.gpu ? ` · ${runtime.gpu}` : ""}`,
+                      `Speech models: ${runtime.modelsReady ? "available" : "missing"}`,
+                      `Voice matching: ${runtime.voiceMatchingReady ? "available" : "missing"}`,
+                      `Model: ${runtime.model}`,
+                      `Models folder: ${runtime.models}`,
+                      `Voice runtime: ${runtime.python}`,
+                    ].join("\n")
+                  : "Checking runtime…"}
+              </pre>
+              <Button size="sm" onClick={onCheck}>
+                Check runtime
+              </Button>
+            </details>
+          </>
+        )}
+      </div>
       <Dialog
         open={!!issue}
         onOpenChange={(open) => !open && setIssue(undefined)}

@@ -121,6 +121,8 @@ export type Job = {
 };
 export type Runtime = {
   ready: boolean;
+  runtimeReady?: boolean;
+  runtimeError?: string | null;
   device: string;
   gpu?: string;
   modelsReady: boolean;

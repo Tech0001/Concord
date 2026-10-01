@@ -75,25 +75,42 @@ impl Runtime {
                 .unwrap_or_else(|| db::legacy_root().join("models/nemo")),
         }
     }
+    fn isolate(&self, command: &mut Command) {
+        // The AppImage's WebKit/GStreamer libraries must not shadow ggml or the
+        // host GPU driver when probing or launching the independent speech runtime.
+        #[cfg(target_os = "linux")]
+        if let Some(folder) = self.binary.parent() {
+            command.env("LD_LIBRARY_PATH", folder);
+        }
+        isolate_python(command);
+    }
     pub fn status(&self) -> Value {
-        let doctor = Command::new(&self.binary)
-            .args(["doctor", "--json"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok())
-            .unwrap_or(Value::Null);
-        let gpu = doctor["devices"]
-            .as_array()
-            .and_then(|ds| ds.iter().find(|d| d["type"] == "gpu"));
-        let device = if gpu.is_some_and(|g| g["name"].as_str().unwrap_or("").starts_with("Vulkan"))
-        {
-            "vulkan:0"
-        } else {
-            "cpu"
+        let mut command = Command::new(&self.binary);
+        self.isolate(&mut command);
+        command.args(["doctor", "--json"]);
+        let (doctor, error) = match command.output() {
+            Ok(output) => match serde_json::from_slice::<Value>(&output.stdout) {
+                // Doctor exits 1 when GPU support is compiled but no GPU exists.
+                // Its valid CPU device remains usable on lower-spec machines.
+                Ok(doctor) => (doctor, None),
+                Err(_) => (Value::Null, Some(format!("Speech runtime check failed: {}", String::from_utf8_lossy(&output.stderr).chars().take(1500).collect::<String>()))),
+            },
+            Err(e) => (Value::Null, Some(format!("Cannot start the speech runtime: {e}"))),
         };
+        self.status_from_doctor(&doctor, error)
+    }
+    fn status_from_doctor(&self, doctor: &Value, error: Option<String>) -> Value {
+        let devices = doctor["devices"].as_array();
+        let gpu = devices.and_then(|ds| ds.iter().find(|d| {
+            ["gpu", "integrated-gpu"].contains(&d["type"].as_str().unwrap_or(""))
+                && d["name"].as_str().unwrap_or("").starts_with("Vulkan")
+        }));
+        let device = gpu.map(|g| format!("vulkan:{}", g["name"].as_str().unwrap().trim_start_matches("Vulkan"))).unwrap_or_else(|| "cpu".into());
+        let cpu = devices.is_some_and(|ds| ds.iter().any(|d| d["type"] == "cpu"));
+        let runtime_ready = doctor["features"]["asr"]==true && doctor["features"]["diarization"]==true && (cpu || gpu.is_some());
+        let error = error.or_else(|| (!runtime_ready).then(|| "Speech runtime could not load its transcription, diarization, or compute backends.".to_owned()));
         let models = self.models.join(ASR).is_file() && self.models.join(DIAR).is_file();
-        json!({"ready":doctor["features"]["asr"]==true&&doctor["features"]["diarization"]==true&&models&&self.python.is_file(),
+        json!({"ready":runtime_ready&&models&&self.python.is_file(),"runtimeReady":runtime_ready,"runtimeError":error,
           "device":device,"gpu":gpu.and_then(|g|g["description"].as_str()),"modelsReady":models,"voiceMatchingReady":self.python.is_file(),
           "binary":self.binary,"python":self.python,"models":self.models,"model":MODEL})
     }
@@ -331,7 +348,7 @@ fn process(
         let raw = work.join("transcript.json");
         let diar = work.join("diar.json");
         let mut cmd = Command::new(&runtime.python);
-        isolate_python(&mut cmd);
+        runtime.isolate(&mut cmd);
         cmd.arg(&runtime.script)
             .arg(&audio)
             .arg("--output-json")
@@ -472,6 +489,30 @@ mod tests {
         let result = command.output().expect("python3 is required for speech runtime tests");
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "stdlib available");
+    }
+    #[test]
+    fn cpu_only_machine_remains_ready_without_a_gpu() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [ASR, DIAR, "python"] { fs::write(dir.path().join(name), b"fixture").unwrap(); }
+        let runtime = Runtime { binary: dir.path().join("nemo-speech"), script: dir.path().join("coordinator.py"), python: dir.path().join("python"), models: dir.path().to_owned() };
+        let doctor = json!({"features":{"asr":true,"diarization":true},"driver_runtime_compatible":false,"devices":[{"type":"cpu","name":"CPU"}]});
+        let status = runtime.status_from_doctor(&doctor,None);
+        assert_eq!(status["ready"],true);assert_eq!(status["device"],"cpu");
+        let bad = runtime.status_from_doctor(&json!({"features":{"asr":true,"diarization":true},"devices":[]}),None);
+        assert_eq!(bad["ready"],false);assert!(bad["runtimeError"].is_string());
+        let gpu = runtime.status_from_doctor(&json!({"features":{"asr":true,"diarization":true},"devices":[{"type":"gpu","name":"Vulkan0","description":"Test GPU"}]}),None);
+        assert_eq!(gpu["device"],"vulkan:0");assert_eq!(gpu["gpu"],"Test GPU");
+    }
+    #[test]
+    #[cfg(target_os="linux")]
+    fn speech_process_uses_private_libraries_instead_of_appimage_helpers() {
+        let runtime=Runtime::resolve(None);
+        let mut command=Command::new("python3");
+        command.env("LD_LIBRARY_PATH","/missing/appimage/usr/lib").env("PYTHONHOME","/missing/appimage/usr");
+        runtime.isolate(&mut command);
+        command.args(["-c","import os, encodings; print(os.environ['LD_LIBRARY_PATH'])"]);
+        let output=command.output().unwrap();assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(),runtime.binary.parent().unwrap().to_string_lossy());
     }
     #[test]
     #[ignore = "requires installed speech models and CONCORD_TEST_AUDIO"]

@@ -3,10 +3,30 @@
   max-width: 96vw;
   height: min(960px, 94dvh);
 }
+.dialog-body:has(> .archive-workspace) {
+  overflow: hidden;
+  min-height: 0;
+}
 .archive-workspace {
   display: grid;
-  gap: 18px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
   min-width: 0;
+  height: 100%;
+  min-height: 0;
+}
+.archive-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 4px;
+}
+.archive-scroll > * {
+  flex-shrink: 0;
 }
 .archive-tabs,
 .archive-intro,
@@ -20,11 +40,8 @@
   flex-wrap: wrap;
 }
 .archive-tabs {
-  position: sticky;
-  top: 0;
-  background: var(--popover);
-  z-index: 2;
   padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
 .archive-intro p,
 .archive-section p,

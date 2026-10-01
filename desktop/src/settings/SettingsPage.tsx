@@ -136,14 +136,15 @@ export function SettingsPage() {
         <div className="settings-facts">
           <span className="settings-fact">
             <Cpu size={15} aria-hidden />
-            {runtime?.gpu || "CPU processing"}
+            {!runtime ? "Checking compute devices…" : runtime.runtimeReady === false ? "Compute device check failed" : device === "cpu" || runtime.device === "cpu" ? "Selected processing: CPU" : `Selected processing: GPU · ${runtime.gpu || "Vulkan"}`}
           </span>
+          {fact(runtime?.runtimeReady ?? runtime?.ready, `Speech runtime ${(runtime?.runtimeReady ?? runtime?.ready) ? "ready" : "unavailable"}`)}
           {fact(runtime?.modelsReady, `Speech models ${runtime?.modelsReady ? "available" : "missing"}`)}
           {fact(runtime?.voiceMatchingReady, `Voice matching ${runtime?.voiceMatchingReady ? "available" : "missing"}`)}
         </div>
         {runtime && !runtime.ready && (
           <p className="settings-note">
-            This preview reuses the speech models and voice environment from the Nemotron Concord build. Finish its speech setup, then check again.
+            {runtime.runtimeError || (!runtime.modelsReady ? "Speech models are missing. This preview uses the models installed by the Nemotron Concord build." : !runtime.voiceMatchingReady ? "The speaker matching environment is missing. Complete voice setup in the Nemotron Concord build." : "Speech setup needs attention. Check the runtime diagnostics in Status & Health.")}
           </p>
         )}
         <div>
