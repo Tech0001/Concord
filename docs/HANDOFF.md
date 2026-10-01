@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.25.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.25.1**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,24 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Dropdowns inside dialogs (0.25.1)
+
+The source-type dropdown contained both options, but its portal inherited the general menu
+z-index 70, below the dialog overlay (80) and content (81). The native regression reproduced
+this before the fix: the YouTube option existed, but hit-testing its center returned `overlay`.
+The shared `.select-content` now uses z-index 85, above dialogs and below notifications.
+This also fixes the Category dropdown and other Select controls hosted in dialogs.
+
+Extended `desktop/scripts/native-folder-smoke.js` to open each dropdown, verify the option is
+actually unobscured using `elementFromPoint`, and select Local → YouTube → Local and
+Personal → Work → Personal. The complete native folder/removal flow then passed, with original
+file hashes preserved. Scratch root: `/tmp/concord-folder-native-6gbm70bq` (460×353 native window).
+56 interface tests and the frontend/debug build passed. No backend or schema changes.
+Logs: `/tmp/concord-0251-{dropdown-before,native-build,native-test,ts,package}.log`.
+Backup before updating: `/home/pc/.local/share/concord-next/backups/before-0.25.1-20261001-142936.db`.
+Installed and byte-verified the 0.25.1 AppImage at `~/.local/opt/concord-next/Concord-Next.AppImage`.
+The current user window stays open; close and reopen to load the fix.
 
 ## Local folder scanning and record-only removal (0.25.0)
 

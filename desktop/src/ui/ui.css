@@ -264,6 +264,8 @@
   color: var(--muted-foreground);
 }
 .select-content {
+  /* Select portals must sit above dialog overlays (80) and content (81). */
+  z-index: 85;
   min-width: var(--radix-select-trigger-width);
   max-height: var(--radix-select-content-available-height);
   transform-origin: var(--radix-select-content-transform-origin);
