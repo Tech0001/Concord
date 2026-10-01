@@ -37,6 +37,15 @@ pub fn migrate(db: &Connection) -> Result<()> {
     }
     Ok(())
 }
+pub fn jobs(db: &Connection) -> Result<Vec<serde_json::Value>> {
+    let mut jobs = crate::db::rows(
+        db,
+        "SELECT * FROM maintenance_jobs ORDER BY created_at DESC,rowid DESC LIMIT 40",
+        [],
+    )?;
+    jobs.extend(crate::ai::summary::jobs(db)?);
+    Ok(jobs)
+}
 pub fn stamp(path: &Path) -> Result<(u64, u64)> {
     let m = path.metadata()?;
     anyhow::ensure!(m.is_file(), "Expected a file");

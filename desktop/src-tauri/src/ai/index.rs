@@ -65,6 +65,9 @@ pub fn chunks(db: &Connection, kind: &str, id: &str) -> Result<Vec<Chunk>> {
         "note"=>db::rows(db,"SELECT title||char(10)||body||char(10)||coalesce((SELECT group_concat(quote,char(10)) FROM note_anchors WHERE note_id=n.id),quote) AS text FROM notes n WHERE id=?1",[id])?,
         _=>anyhow::bail!("Unknown source type"),
     };
+    pack(pieces)
+}
+pub(crate) fn pack(pieces: Vec<Value>) -> Result<Vec<Chunk>> {
     let mut out = Vec::new();
     let mut current = Chunk {
         text: String::new(),

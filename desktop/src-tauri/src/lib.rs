@@ -101,7 +101,10 @@ async fn pipeline_save_config(state:State<'_,AppState>,config:pipeline::Config)-
 #[tauri::command]
 async fn archive_status(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||health::report::snapshot(&root)).await}
 #[tauri::command]
-async fn archive_jobs(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||{let db=db::open(&root)?;Ok(serde_json::json!({"jobs":db::rows(&db,"SELECT * FROM maintenance_jobs ORDER BY created_at DESC,rowid DESC LIMIT 40",[])?,"aiJobs":db::rows(&db,"SELECT * FROM ai_jobs ORDER BY created_at DESC,rowid DESC LIMIT 20",[])?}))}).await}
+async fn archive_jobs(state: State<'_, AppState>) -> Result<Value, String> {
+    let root = state.root.clone();
+    work(move||{let db=db::open(&root)?;Ok(serde_json::json!({"jobs":health::jobs(&db)?,"aiJobs":db::rows(&db,"SELECT * FROM ai_jobs ORDER BY created_at DESC,rowid DESC LIMIT 20",[])?}))}).await
+}
 #[tauri::command]
 async fn archive_audit(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||health::report::audit(&root)).await}
 #[tauri::command]
@@ -159,7 +162,20 @@ async fn ai_star_message(state:State<'_,AppState>,id:String,starred:bool)->Resul
 #[tauri::command]
 async fn ai_suggest_tags(state:State<'_,AppState>,text:String)->Result<Vec<String>,String>{let root=state.root.clone();work(move||ai::chat::suggest_tags(&root,&text)).await}
 #[tauri::command]
-async fn ai_summary(state:State<'_,AppState>,id:String,generate:bool)->Result<Value,String>{let root=state.root.clone();work(move||ai::chat::summary(&root,&id,generate)).await}
+async fn ai_summary_state(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    let root = state.root.clone();
+    work(move || ai::summary::state(&root, &id)).await
+}
+#[tauri::command]
+async fn ai_summary_start(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    let root = state.root.clone();
+    let control = state.ai.clone();
+    work(move || ai::summary::start(root, control, id)).await
+}
+#[tauri::command]
+fn ai_summary_cancel(state: State<'_, AppState>, id: String) {
+    ai::summary::cancel(&state.ai, &id);
+}
 #[tauri::command]
 async fn overview(state: State<'_, AppState>) -> Result<Value, String> {
     let root = state.root.clone();
@@ -529,6 +545,7 @@ pub fn run() {
         db.execute("UPDATE maintenance_jobs SET status='interrupted',message='Concord closed before the repair finished. Run it again to resume.' WHERE status='running'",[])?;
         runtime_log::push("info",concat!("Concord Next ",env!("CARGO_PKG_VERSION")," started"));
         db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'", [])?;
+        ai::summary::recover(&db)?;
         ai::builtin::initialize(app.path().resource_dir()?);
         pipeline::download::initialize(app.path().resource_dir()?);
         db.execute("UPDATE ai_jobs SET status='interrupted',message='Concord closed before indexing finished. Update index to resume.' WHERE status='running'",[])?;
@@ -562,7 +579,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![youtube_status,youtube_save_key,youtube_search,youtube_queue,tools_state,tools_extract,tools_cancel_extract,recorder_inputs,recorder_start,recorder_stop,recorder_save,recorder_discard,recorder_preview,recording_file_info,recording_file_action,set_recording_title,speech_setup_status,speech_setup_start,speech_setup_cancel,pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_category,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![youtube_status,youtube_save_key,youtube_search,youtube_queue,tools_state,tools_extract,tools_cancel_extract,recorder_inputs,recorder_start,recorder_stop,recorder_save,recorder_discard,recorder_preview,recording_file_info,recording_file_action,set_recording_title,speech_setup_status,speech_setup_start,speech_setup_cancel,pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary_state,ai_summary_start,ai_summary_cancel,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_category,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
-      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.recorder.closing.store(true,Ordering::SeqCst);tools::recorder::stop(&state.recorder);state.extraction.cancel.store(true,Ordering::SeqCst);state.export.cancel.store(true,Ordering::SeqCst);state.pipeline.shutdown();state.speech_setup.process.cancel();state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
+      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.recorder.closing.store(true,Ordering::SeqCst);tools::recorder::stop(&state.recorder);state.extraction.cancel.store(true,Ordering::SeqCst);state.export.cancel.store(true,Ordering::SeqCst);state.pipeline.shutdown();state.speech_setup.process.cancel();state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for task in state.ai.summaries.lock().unwrap().values(){task.cancel.store(true,Ordering::SeqCst);}for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
 }

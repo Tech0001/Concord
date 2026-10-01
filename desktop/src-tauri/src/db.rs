@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 10 {
+    if version >= 11 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -116,7 +116,8 @@ fn migrate(db: &mut Connection) -> Result<()> {
     if version < 8 { crate::pipeline::migrate(&tx)?; }
     if version < 9 {crate::pipeline::migrate_sources(&tx)?;}
     crate::search_index::migrate(&tx)?;
-    tx.execute_batch("PRAGMA user_version=10")?;
+    crate::ai::summary::migrate(&tx)?;
+    tx.execute_batch("PRAGMA user_version=11")?;
     tx.commit()?;
     Ok(())
 }
@@ -633,7 +634,11 @@ mod tests {
         assert_eq!(row["review_state"], "unreviewed");
         assert_eq!(row["position"], 0.0);
         assert!(row["opened_at"].is_null());
-        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 10);
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            11
+        );
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
     }

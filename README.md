@@ -18,7 +18,8 @@ transcript folder and can run alongside it. Full Electron parity is still in pro
 - Speaker profiles, multiple fingerprints per person, naming/merging/noise review,
   matching, and an unidentified-voices queue.
 - Word/phrase search with grouped, highlighted passages, plus a separate AI page for local semantic search and optional chat.
-  Embedding and chat providers have independent models and credentials.
+  Embedding and chat providers have independent models and credentials. Recording summaries
+  have background progress and cancellation, preserving the previous summary until success.
 - Research notes with multiple passages, tags, typed connections, and four map layouts.
 - Markdown document folders, live sync, local images/links, categories, and research anchors.
 - YouTube subscriptions and local source folders, download setup, persistent processing

@@ -1,5 +1,8 @@
 export type Coverage = { covered: number; total: number };
 export type MaintenanceJob = {
+  media_id?: string;
+  title?: string;
+  model?: string;
   scope?: string;
   id: string;
   action: string;

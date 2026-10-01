@@ -92,7 +92,10 @@ function Jobs({
   const toast = useToast();
   const [expanded, setExpanded] = useState(false);
   const all = [
-    ...jobs.map((j) => ({ ...j, type: "repair" })),
+    ...jobs.map((j) => ({
+      ...j,
+      type: j.action === "summary" ? "summary" : "repair",
+    })),
     ...aiJobs.map((j) => ({ ...j, type: "index" })),
   ].sort((a, b) => b.created_at.localeCompare(a.created_at));
   const running = all.filter((j) => j.status === "running"),
@@ -101,9 +104,11 @@ function Jobs({
     <li key={j.id}>
       <header>
         <strong>
-          {j.type === "index"
-            ? "Semantic search index"
-            : labels[j.action] || j.action}
+          {j.type === "summary"
+            ? `Recording summary · ${j.title}`
+            : j.type === "index"
+              ? "Semantic search index"
+              : labels[j.action] || j.action}
         </strong>
         <span className={`job-status status-${j.status}`}>
           {j.status === "complete" ? "Completed" : j.status}
@@ -119,9 +124,11 @@ function Jobs({
           icon={Square}
           onClick={() =>
             void (
-              j.type === "index"
-                ? api.aiCancelIndex()
-                : api.archiveCancelRepair()
+              j.type === "summary"
+                ? api.aiCancelSummary(j.media_id!)
+                : j.type === "index"
+                  ? api.aiCancelIndex()
+                  : api.archiveCancelRepair()
             )
               .then(onChange)
               .catch(toast.error)
@@ -136,19 +143,25 @@ function Jobs({
           disabled={all.some((other) => other.status === "running")}
           onClick={() =>
             void (
-              j.type === "index"
-                ? j.scope === "document"
-                  ? api.archiveRepair("embed-documents")
-                  : j.scope === "recording"
-                    ? api.archiveRepair("embed-recordings")
-                    : api.aiIndex()
-                : api.archiveRepair(j.action)
+              j.type === "summary"
+                ? api.aiStartSummary(j.media_id!)
+                : j.type === "index"
+                  ? j.scope === "document"
+                    ? api.archiveRepair("embed-documents")
+                    : j.scope === "recording"
+                      ? api.archiveRepair("embed-recordings")
+                      : api.aiIndex()
+                  : api.archiveRepair(j.action)
             )
               .then(onChange)
               .catch(toast.error)
           }
         >
-          {j.status === "failed" ? "Retry unfinished items" : "Resume"}
+          {j.type === "summary"
+            ? "Generate again"
+            : j.status === "failed"
+              ? "Retry unfinished items"
+              : "Resume"}
         </Button>
       )}
       {j.failed && j.details && j.details !== "[]" ? (
@@ -178,7 +191,7 @@ function Jobs({
       {running.length ? (
         <ul>{running.map(row)}</ul>
       ) : (
-        <p className="muted">No background indexing or repair running.</p>
+        <p className="muted">No background AI or repair jobs running.</p>
       )}
       {!!finished.length && (
         <>
@@ -292,7 +305,10 @@ export function ArchiveWorkspace({
     }
     setIssue(undefined);
   };
-  const linked = (page: "ai" | "speakers" | "documents" | "pipeline", text: string) => (
+  const linked = (
+    page: "ai" | "speakers" | "documents" | "pipeline",
+    text: string,
+  ) => (
     <Button
       size="sm"
       onClick={() => {
@@ -303,7 +319,9 @@ export function ArchiveWorkspace({
       {text}
     </Button>
   );
-  const repairing = jobs.jobs.some((j) => j.status === "running"),
+  const repairing = jobs.jobs.some(
+      (j) => j.status === "running" && j.action !== "summary",
+    ),
     indexing = jobs.aiJobs.some((j) => j.status === "running");
   return (
     <div className="archive-workspace">
@@ -343,8 +361,13 @@ export function ArchiveWorkspace({
                 {number(Math.round(status.archive.hours))} h archived.
               </p>
               <span>
-                {status.pipeline?.active ? "Pipeline processing" : status.pipeline?.running ? "Pipeline ready" : "Pipeline paused"} · {runtime?.ready ? "Speech ready" : "Speech setup needed"} · Chat{" "}
-                {status.chat.configured ? "configured" : "not configured"}
+                {status.pipeline?.active
+                  ? "Pipeline processing"
+                  : status.pipeline?.running
+                    ? "Pipeline ready"
+                    : "Pipeline paused"}{" "}
+                · {runtime?.ready ? "Speech ready" : "Speech setup needed"} ·
+                Chat {status.chat.configured ? "configured" : "not configured"}
               </span>
             </div>
             <div className="archive-totals">
@@ -354,7 +377,10 @@ export function ArchiveWorkspace({
                 ["Pending", number(status.archive.pending)],
                 ["Failed", number(status.archive.failed)],
                 ["Speakers", number(status.speakers.total)],
-                ["Daily downloads", `${number(status.pipeline?.dailyDownloads ?? 0)} / ${number(status.pipeline?.dailyLimit ?? 200)}`],
+                [
+                  "Daily downloads",
+                  `${number(status.pipeline?.dailyDownloads ?? 0)} / ${number(status.pipeline?.dailyLimit ?? 200)}`,
+                ],
               ].map(([label, value]) => (
                 <div key={label}>
                   <span>{label}</span>
@@ -363,7 +389,15 @@ export function ArchiveWorkspace({
               ))}
             </div>
             <div className="pipeline-summary">
-              <span>{number((status.pipeline?.queued ?? 0) + (status.pipeline?.active ?? 0))} recordings queued · {number(status.pipeline?.retry ?? 0)} waiting to retry · {number(status.pipeline?.failed ?? 0)} processing failures</span>
+              <span>
+                {number(
+                  (status.pipeline?.queued ?? 0) +
+                    (status.pipeline?.active ?? 0),
+                )}{" "}
+                recordings queued · {number(status.pipeline?.retry ?? 0)}{" "}
+                waiting to retry · {number(status.pipeline?.failed ?? 0)}{" "}
+                processing failures
+              </span>
               {linked("pipeline", "Open Pipeline")}
             </div>
             <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />

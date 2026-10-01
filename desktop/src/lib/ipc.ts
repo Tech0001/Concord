@@ -4,7 +4,7 @@ import type { FileAction, RecordingFileInfo } from "../library/RecordingFileDial
 import type { SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
 import type { DocumentsState, DocumentSync } from "../documents/types.ts";
 import type { ArchiveStatus, Audit, BackupValidation, LogEntry, MaintenanceJob } from "../health/types.ts";
-import type { AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, Summary } from "../ai/types.ts";
+import type { AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, SummaryState } from "../ai/types.ts";
 import { invoke, isTauri, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
@@ -146,7 +146,9 @@ export const api = {
   aiSend: (request: { conversationId: string; text: string; useLibrary: boolean; semantic: boolean; filter: SearchFilter }) => call<ChatDetail>("ai_send", { request }),
   aiCancelChat: (id: string) => call<void>("ai_cancel_chat", { id }),
   aiStarMessage: (id: string, starred: boolean) => call<void>("ai_star_message", { id, starred }),
-  aiSummary: (id: string, generate = false) => call<Summary | null>("ai_summary", { id, generate }),
+  aiSummaryState: (id:string) => call<SummaryState>("ai_summary_state",{id}),
+  aiStartSummary: (id:string) => call<string>("ai_summary_start",{id}),
+  aiCancelSummary: (id:string) => call<void>("ai_summary_cancel",{id}),
   onAiDelta: (handler: (delta: { id: string; text: string }) => void) => transport.listen("ai-chat-delta", handler),
   available: () => transport.available(),
   version: () => transport.version(),

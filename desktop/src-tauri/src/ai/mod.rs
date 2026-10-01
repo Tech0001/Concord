@@ -2,6 +2,7 @@ pub mod builtin;
 pub mod chat;
 pub mod config;
 pub mod index;
+pub mod summary;
 use anyhow::Result;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -12,6 +13,7 @@ pub struct Control {
     pub indexing: AtomicBool,
     pub cancel_index: AtomicBool,
     pub chats: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub summaries: Mutex<HashMap<String, summary::Task>>,
 }
 pub fn migrate(db: &Connection) -> Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS ai_indexes(signature TEXT PRIMARY KEY,model TEXT NOT NULL,dimensions INTEGER NOT NULL);

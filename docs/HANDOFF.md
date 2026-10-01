@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.16.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.17.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,38 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Cancellable recording summaries (0.17.0 installed)
+
+Summary generation now runs as a durable background job rather than a request owned by
+one open player pane. Progress survives page navigation, duplicate starts reuse the existing
+job, and one recording summary runs at a time. Stop works in the player and Status & Health,
+including before the first token. Failed, cancelled or interrupted attempts retain the previous
+summary; replacement and completion are published in one transaction only after checking that
+the transcript and speaker names have not changed. Restart marks active jobs interrupted and
+requires an explicit retry rather than silently sending text again. Provider settings are
+snapshotted at start. Remote providers receive transcript text only on explicit generation.
+
+Summary input now carries resolved speaker names and timestamps. Long recordings use section
+summaries and bounded hierarchical reduction. Verbose intermediate output is split, never
+silently truncated; non-shrinking output or excessive reduction rounds fail with a useful
+message. Status & Health distinguishes summary requests from embedding and repair jobs.
+
+Schema 11 adds summary job history and is accepted by backup/restore. Validation: 102 Rust
+and 43 TS tests, Clippy, frontend build. Tests cover multi-stage generation, speaker names,
+broken streams, deduplication, Stop before first token, Unicode reduction bounds, preservation
+of prior content and restart recovery. Actual WebKitGTK passed navigation/re-entry, duplicate
+requests, cancellation through Status & Health, successful replacement and saving as a note:
+`/tmp/concord-health-native-nc0wm0ge/native-test-result.json`. Reproduce with
+`desktop/scripts/native-summary-test.py` after a native-review debug build. All requests used
+a synthetic loopback provider; no archive transcript was sent to a remote provider.
+
+Remaining: player pop-out/gap skipping, live recorder transcription preview, ChatGPT sign-in,
+optional post-transcription AI actions, richer Markdown, final parity/installation checks and
+platform expansion. Watchers and Compare remain intentionally absent.
+
+0.17.0 is installed beside Electron; schema 11 contains the same 2,020 recordings. Backup:
+`~/.local/share/concord-next/backups/before-0.17.0-20261001-010204.db`.
 
 ## Manual YouTube discovery (0.16.0 installed)
 

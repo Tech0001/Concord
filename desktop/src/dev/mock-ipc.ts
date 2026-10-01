@@ -87,7 +87,9 @@ const handlers: Record<string, (a: any) => unknown> = {
   runtime_logs: ({after}) => after ? [] : [{id:1,timestamp:Date.now(),level:"info",message:"Concord Next started"},{id:2,timestamp:Date.now(),level:"info",message:"Archive audit completed: 0 errors, 2 warnings"}],
   ai_config: () => ({ embedding: { enabled: true, kind: "builtin", model: "Qwen3-Embedding-0.6B-Q8_0", baseUrl: "http://127.0.0.1", hasKey: false, local: true }, chat: { enabled: false, kind: "local", model: "", baseUrl: "http://127.0.0.1:11434/v1", hasKey: false, local: true } }),
   ai_status: () => ({ modelReady: true, indexed: 0, total: fx.mediaList.length, chunks: 0, dimensions: null, job: null }),
-  ai_summary: () => null,
+  ai_summary_state: () => ({summary:null,job:null}),
+  ai_summary_start: () => "mock-summary",
+  ai_summary_cancel: () => undefined,
   search_filters: () => ({ channels: [], speakers: [], tags: [] }),
   research_search: ({ query }) => fx.searchHits(query).slice(0, 100).map((h: any) => ({ ...h, kind: "recording", score: 1 })),
   overview: () => ({

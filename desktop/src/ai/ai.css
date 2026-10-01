@@ -318,3 +318,8 @@
   font-size: 12px;
   margin-top: 16px;
 }
+
+.summary-job { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-2); background: var(--card); }
+.summary-job progress { width: 100%; accent-color: var(--primary); }
+.summary-job .btn { justify-self: start; }
+.summary-job p { margin: 0; }

@@ -91,3 +91,6 @@ export type Summary = {
 };
 export const chatReady = (p?: Provider) =>
   !!p?.enabled && !!p.model && (p.kind !== "openrouter" || p.hasKey);
+
+export type SummaryJob = {id:string;media_id:string;model:string;status:string;message:string;done:number;total:number;created_at:string};
+export type SummaryState = {summary:Summary|null;job:SummaryJob|null};

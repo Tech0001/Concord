@@ -416,6 +416,109 @@ fn builtin_cpu_model_returns_real_retrieval_vectors() {
 }
 
 #[test]
+fn summary_jobs_keep_speakers_and_replace_content_only_after_completion() {
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    let fake = Fake::new();
+    fake.config(root.path(), "chat", "tiny-chat", "");
+    let db = db::open(root.path()).unwrap();
+    db.execute("INSERT INTO ai_summaries(media_id,content,model,digest) VALUES('prayer','Previous summary','old','old')",[]).unwrap();
+    // Enough text to require section summaries followed by a reduction request.
+    db.execute(
+        "UPDATE segments SET text=?1 WHERE media_id='prayer'",
+        ["Faith and prayer. ".repeat(800)],
+    )
+    .unwrap();
+    let control = Arc::new(Control::default());
+    let job = super::summary::start(root.path().into(), control.clone(), "prayer".into()).unwrap();
+    let until = Instant::now();
+    while !control.summaries.lock().unwrap().is_empty() {
+        assert!(until.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let state = super::summary::state(root.path(), "prayer").unwrap();
+    assert_eq!(state["job"]["id"], job);
+    assert_eq!(state["job"]["status"], "complete");
+    assert_eq!(state["job"]["done"], state["job"]["total"]);
+    assert_eq!(state["job"]["total"], 3);
+    assert_eq!(state["summary"]["model"], "tiny-chat");
+    let requests = fake.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].2["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .contains("Sarah:"));
+    drop(requests);
+    fake.config(root.path(), "chat", "broken-stream", "");
+    super::summary::start(root.path().into(), control.clone(), "prayer".into()).unwrap();
+    let until = Instant::now();
+    while !control.summaries.lock().unwrap().is_empty() {
+        assert!(until.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let failed = super::summary::state(root.path(), "prayer").unwrap();
+    assert_eq!(failed["job"]["status"], "failed");
+    assert_eq!(failed["summary"], state["summary"]);
+}
+#[test]
+fn summary_reentry_does_not_duplicate_requests_and_stop_keeps_the_previous_summary() {
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    let db = db::open(root.path()).unwrap();
+    db.execute("INSERT INTO ai_summaries(media_id,content,model,digest) VALUES('prayer','Keep this summary','old','old')",[]).unwrap();
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/v1", server.server_addr());
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let request = server
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        seen_tx.send(()).unwrap();
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+        let _ = request.respond(tiny_http::Response::from_string("data: [DONE]\n\n"));
+    });
+    config::save(
+        root.path(),
+        "chat",
+        Provider {
+            enabled: true,
+            kind: "local".into(),
+            base_url: url,
+            model: "slow".into(),
+            api_key: String::new(),
+        },
+        None,
+    )
+    .unwrap();
+    let control = Arc::new(Control::default());
+    let job = super::summary::start(root.path().into(), control.clone(), "prayer".into()).unwrap();
+    seen_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        super::summary::start(root.path().into(), control.clone(), "prayer".into()).unwrap(),
+        job
+    );
+    assert!(super::summary::start(root.path().into(), control.clone(), "car".into()).is_err());
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM summary_jobs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    super::summary::cancel(&control, "prayer");
+    let until = Instant::now();
+    while !control.summaries.lock().unwrap().is_empty() {
+        assert!(until.elapsed() < Duration::from_secs(2));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let state = super::summary::state(root.path(), "prayer").unwrap();
+    assert_eq!(state["job"]["status"], "cancelled");
+    assert_eq!(state["summary"]["content"], "Keep this summary");
+    release_tx.send(()).unwrap();
+    worker.join().unwrap();
+}
+#[test]
 fn stop_chat_interrupts_before_first_token() {
     let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}/v1", server.server_addr());

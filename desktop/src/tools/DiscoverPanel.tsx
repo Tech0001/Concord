@@ -213,8 +213,8 @@ export function DiscoverPanel() {
             </div>
             <small className="muted">
               Queries go to Google. Each Search or Load more requests one page.
-              Phrase filters run on the results already loaded. Queue downloads
-              respects Pipeline’s paused or running state.
+              Phrase filters run on the results already loaded. Queued recordings
+              follow Pipeline’s paused or running state.
             </small>
           </>
         )}
