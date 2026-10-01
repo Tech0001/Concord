@@ -40,6 +40,9 @@ test("rail states follow readiness, skips, and how far setup got", () => {
   assert.equal(stepState(s, "look", "ai"), "todo");
   s.speech.setup = { status: "failed", message: "Disk full", phase: "models", done: 1, total: 2 };
   assert.equal(stepState(s, "speech", "ai"), "failed");
+  s.speech.setup = { status: "cancelled", message: "Setup cancelled", phase: "models", done: 1, total: 2 };
+  assert.equal(stepState(s, "speech", "ai"), "todo");
+  assert.equal(stepSummary(s, "speech"), "Paused · resume to finish");
   s.sources.sources = 1;
   assert.equal(stepState(s, "recordings", "ai"), "done");
   s.progress.furthest = "ready";
@@ -86,7 +89,10 @@ test("the checklist counts what is done and what is still running", () => {
   ]);
   assert.equal(items.filter((i) => i.state === "done").length, 1);
   assert.equal(items[1].detail, "Installing · 64%");
-  s.speech.setup = { status: "interrupted", message: "", phase: "models", done: 64, total: 100 };
+  s.speech.setup = { status: "interrupted", message: "", phase: "models", done: 87e6, total: 950e6 };
+  assert.equal(checklist(s)[1].state, "todo");
+  assert.equal(checklist(s)[1].detail, "Paused at 87 of 950 MB · resume any time");
+  s.speech.setup = { status: "failed", message: "Disk full", phase: "models", done: 1, total: 2 };
   assert.equal(checklist(s)[1].state, "failed");
 });
 

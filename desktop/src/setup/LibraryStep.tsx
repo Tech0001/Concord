@@ -84,7 +84,9 @@ export function LibraryStep({ status, next }: StepProps) {
                 <Chip>{n(legacy.recordings)} recordings</Chip>
                 <Chip>{n(legacy.speakers)} speakers</Chip>
                 <Chip>{n(legacy.notes)} notes</Chip>
-                {legacy.speechModelsReusable && <Chip tone="success">Speech models can be reused</Chip>}
+                {legacy.speechModelsReusable && (
+                  <Chip tone="success">{legacy.reusableBytes >= 950e6 ? "Speech models can be reused" : "Some speech models can be reused"}</Chip>
+                )}
               </div>
               <div className="setup-actions">
                 <Button

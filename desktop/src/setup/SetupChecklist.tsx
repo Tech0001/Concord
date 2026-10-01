@@ -55,9 +55,9 @@ export function SetupChecklist({ variant, onNavigate }: { variant: "library" | "
               Details
             </Button>
           );
-        return item.state === "failed" ? (
+        return item.state === "failed" || ["interrupted", "cancelled"].includes(setup.speech.setup.status) ? (
           <Button size="sm" variant="primary" onClick={run(() => api.speechSetupStart())}>
-            {setup.speech.setup.status === "interrupted" ? "Resume" : "Try again"}
+            {item.state === "failed" ? "Try again" : "Resume"}
           </Button>
         ) : (
           <Button size="sm" onClick={() => setupStep("speech")}>

@@ -116,16 +116,19 @@ pub fn legacy_summary(folder: &Path) -> Result<Option<Value>> {
         Ok(old.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?)
     };
     let models = folder.join("models/nemo");
-    let reusable = speech_setup::ARTIFACTS
+    let reusable: u64 = speech_setup::ARTIFACTS
         .iter()
-        .all(|a| fs::metadata(models.join(a.name)).is_ok_and(|m| m.len() == a.bytes));
+        .filter(|a| has_model(&models, a))
+        .map(|a| a.bytes)
+        .sum();
     Ok(Some(json!({
         "path": path,
         "folder": folder,
         "recordings": count("video_queue")?,
         "speakers": count("speakers")?,
         "notes": count("transcript_clips")?,
-        "speechModelsReusable": reusable,
+        "speechModelsReusable": reusable > 0,
+        "reusableBytes": reusable,
     })))
 }
 
@@ -149,16 +152,34 @@ pub fn free_bytes(_path: &Path) -> Result<u64> {
     anyhow::bail!("Free space checks are not available on this system")
 }
 
+/// A quick size check; setup verifies checksums before using a model.
+fn has_model(dir: &Path, a: &speech_setup::Artifact) -> bool {
+    fs::metadata(dir.join(a.name)).is_ok_and(|m| m.len() == a.bytes)
+}
+/// For each speech model: already in this library, copied from the previous app, or downloaded.
+pub fn model_states(root: &Path, reuse: &Path) -> Vec<Value> {
+    let own = speech_setup::models(root);
+    speech_setup::ARTIFACTS
+        .iter()
+        .map(|a| {
+            let state = if has_model(&own, a) {
+                "installed"
+            } else if has_model(reuse, a) {
+                "reusable"
+            } else {
+                "download"
+            };
+            json!({"name": a.name, "bytes": a.bytes, "state": state})
+        })
+        .collect()
+}
 /// Disk space and download size still needed for speech: (disk, download).
 pub fn needed(root: &Path, reuse: &Path, runtime_installed: bool) -> (u64, u64) {
-    let has = |dir: &Path, a: &speech_setup::Artifact| {
-        fs::metadata(dir.join(a.name)).is_ok_and(|m| m.len() == a.bytes)
-    };
     let own = speech_setup::models(root);
     let (mut disk, mut download) = (0, 0);
-    for a in speech_setup::ARTIFACTS.iter().filter(|a| !has(&own, a)) {
+    for a in speech_setup::ARTIFACTS.iter().filter(|a| !has_model(&own, a)) {
         disk += a.bytes;
-        if !has(reuse, a) {
+        if !has_model(reuse, a) {
             download += a.bytes;
         }
     }
@@ -213,6 +234,7 @@ pub fn preflight(root: &Path, runtime: &speech::Runtime) -> Result<Value> {
         "neededBytes": disk,
         "downloadBytes": download,
         "modelBytes": speech_setup::MODEL_BYTES,
+        "models": model_states(root, &runtime.models),
         "runtimeBytes": RUNTIME_INSTALLED_BYTES,
         "ffmpeg": ffmpeg,
         "network": {"ok": network.is_ok(), "error": network.err()},
@@ -355,8 +377,15 @@ mod tests {
         assert_eq!(summary["notes"], 1);
         assert_eq!(summary["speechModelsReusable"], false);
         assert_eq!(summary["path"], json!(folder.join("pipeline.db")));
-        sparse_models(&folder.join("models/nemo"), 0);
-        assert_eq!(legacy_summary(&folder).unwrap().unwrap()["speechModelsReusable"], true);
+        // The previous app kept the two Nemotron models but not TitaNet.
+        let models = folder.join("models/nemo");
+        fs::create_dir_all(&models).unwrap();
+        for a in &speech_setup::ARTIFACTS[..2] {
+            fs::File::create(models.join(a.name)).unwrap().set_len(a.bytes).unwrap();
+        }
+        let partial = legacy_summary(&folder).unwrap().unwrap();
+        assert_eq!(partial["speechModelsReusable"], true);
+        assert_eq!(partial["reusableBytes"], speech_setup::ARTIFACTS[0].bytes + speech_setup::ARTIFACTS[1].bytes);
         let other = dir.path().join("other");
         fs::create_dir_all(&other).unwrap();
         rusqlite::Connection::open(other.join("pipeline.db")).unwrap().execute_batch("CREATE TABLE notes(id TEXT)").unwrap();
@@ -381,6 +410,21 @@ mod tests {
         sparse_models(&speech_setup::models(&root), 1);
         let first = speech_setup::ARTIFACTS[0].bytes;
         assert_eq!(needed(&root, &dir.path().join("none"), true), (first, first));
+    }
+
+    #[test]
+    fn each_model_is_marked_installed_reusable_or_to_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("next");
+        let legacy = dir.path().join("legacy");
+        sparse_models(&legacy, 1);
+        fs::create_dir_all(speech_setup::models(&root)).unwrap();
+        let first = &speech_setup::ARTIFACTS[0];
+        fs::File::create(speech_setup::models(&root).join(first.name)).unwrap().set_len(first.bytes).unwrap();
+        let states: Vec<_> = model_states(&root, &legacy).iter().map(|m| m["state"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(states, ["installed", "reusable", "reusable"]);
+        let states: Vec<_> = model_states(&root, &dir.path().join("none")).iter().map(|m| m["state"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(states, ["installed", "download", "download"]);
     }
 
     #[test]

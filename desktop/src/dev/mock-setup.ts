@@ -34,6 +34,7 @@ function initial(): SetupStatus {
           speakers: 46,
           notes: 312,
           speechModelsReusable: true,
+          reusableBytes: 848_560_480,
         };
       break;
     case "installing":
@@ -115,9 +116,14 @@ export const setupHandlers: Record<string, (a: any) => unknown> = {
   setup_preflight: () => ({
     freeBytes: preflight === "lowdisk" ? 3_100_000_000 : 186_400_000_000,
     freeError: null,
-    neededBytes: (s.legacy?.speechModelsReusable ? 0 : MODELS) + 4_400_000_000,
-    downloadBytes: s.legacy?.speechModelsReusable ? 0 : MODELS,
+    neededBytes: MODELS + 4_400_000_000,
+    downloadBytes: s.legacy ? 101_621_760 : MODELS,
     modelBytes: MODELS,
+    models: [
+      { name: "nemotron-3.5-asr-streaming-0.6b.q8_0.gguf", bytes: 741_548_352, state: s.legacy ? "reusable" : "download" },
+      { name: "Nemotron-3-Diarization.q8_0.gguf", bytes: 107_012_128, state: s.legacy ? "reusable" : "download" },
+      { name: "titanet-l.nemo", bytes: 101_621_760, state: "download" },
+    ],
     runtimeBytes: 2_200_000_000,
     ffmpeg: preflight !== "noffmpeg",
     network: preflight === "offline" ? { ok: false, error: "Can't reach huggingface.co. Check your connection." } : { ok: true, error: null },

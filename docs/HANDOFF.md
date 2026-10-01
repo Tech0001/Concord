@@ -10,6 +10,66 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
+## First-run setup (branch `feature/onboarding`, not yet merged or installed)
+
+Built by Claude on October 1, 2026 at the user's request, from the approved design in
+`docs/superpowers/briefs/2026-10-01-codex-onboarding.md`. It is on the `feature/onboarding` branch,
+in the worktree `/home/pc/Documents/GitHub/Concord-onboarding`, cut from `rewrite/rust-tauri` at
+`d60bc63`. It replaces the 0.21.1 Welcome screen (`library/Welcome.tsx` is deleted).
+
+- **Flow.** A fresh library opens `#/setup`, a full-window flow with a step rail. On windows narrower
+  than 960px the rail becomes a top bar with progress segments.
+  - Steps: Library (required) → Speech engine → Recordings → Search & AI → Look & feel → Ready.
+  - Progress is stored in the DB `settings` table: `onboarding.step`, `.furthest`, `.completed`,
+    `.skipped` and `.checklist_hidden`. Reopening mid-setup resumes there.
+  - Existing libraries never get setup forced on them. The automatic-open condition is in
+    `App.tsx`.
+- **Backend**, in `onboarding.rs` and `model_download.rs`:
+  - `setup_status` is the single readiness snapshot.
+  - `setup_save` stores progress.
+  - `setup_preflight` checks free space with statvfs, reaches HuggingFace/NGC/PyPI, finds ffmpeg,
+    and reports a per-model state of `installed`, `reusable` or `download`.
+  - `setup_probe_local` checks for Ollama and LM Studio.
+  - `speech_device`/`set_speech_device` make `pipeline.config.device` the only device setting. The
+    old localStorage `speech-device` is migrated once, then removed.
+  - `ai_builtin_status`/`ai_builtin_prepare(afterSpeech)`/`ai_builtin_cancel` download the search
+    model ahead of time.
+  - `import_and_queue` imports files and queues them for transcription.
+- **Model downloads resume.** They write `<model>.part` files and continue with an HTTP Range
+  request. A failed checksum deletes the part file. Speech setup status now carries
+  `phase`/`done`/`total`.
+- **Queued transcriptions wait for speech.** While speech isn't installed they stay queued with
+  `pipeline::WAITING_FOR_SPEECH` instead of failing.
+- **After setup:**
+  - A checklist sits on the Library (only once someone has been through setup) and in Status &
+    Health.
+  - The sidebar Status item shows install and download progress.
+  - Transcribe opens an install prompt when speech is missing.
+  - The AI page's Chat tab offers ways to connect.
+  - Search offers to turn on Smart search.
+  - Settings sections are linkable (`#/settings?section=…`), and so are Pipeline tabs
+    (`#/pipeline?tab=…`).
+  - Appearance gained a transcript text size.
+- **Measured runtime.** A lab install was python 113 MB, venv 2.1 GB, uv cache 2.0 GB. The UI
+  says "about 2.2 GB", and the preflight needs `RUNTIME_BYTES` (4.4 GB).
+- **The user's previous library** (`~/.local/share/concord`) has the two Nemotron models but no
+  TitaNet. Setup reuses the two and downloads only TitaNet (101.6 MB).
+- **Verification.**
+  - 141 Rust tests and 58 TS tests pass, and Clippy reports no warnings.
+  - Mock screens: `?mock&setup=fresh|legacy|installing|failed|checklist|connected`, plus
+    `preflight=lowdisk|offline|noffmpeg`.
+  - The real WebKitGTK window was exercised with the debug smoke runner
+    (`CONCORD_NEXT_TEST_SCRIPT`) on an empty `CONCORD_NEXT_DATA`. The run covered:
+    - setup opened on a fresh library;
+    - the previous library was detected read-only (2,020 recordings);
+    - the RTX 2080 Ti was detected;
+    - the preflight checks passed;
+    - a real Hugging Face download paused at 87 MB and resumed at 108 MB;
+    - the flow finished on the Library checklist;
+    - no layout overflowed.
+- **No third-party logos.** The user asked for no YouTube logo, so the YouTube source uses the
+  neutral `Rss` icon.
+
 ## Fresh-library onboarding (0.21.1 installed)
 
 The user tested a blank database and found that the welcome screen led with Electron import.

@@ -11,10 +11,10 @@ import { Bar, SetupFoot, SetupHead } from "./parts.tsx";
 import type { StepProps } from "./steps.ts";
 import type { Preflight } from "./types.ts";
 
-const MODELS: [string, string, number][] = [
-  ["Speech recognition", "Nemotron 3.5 ASR", 741_548_352],
-  ["Speaker separation", "Nemotron diarization", 107_012_128],
-  ["Voice matching", "TitaNet", 101_621_760],
+const MODELS: [string, string, string, number][] = [
+  ["Speech recognition", "Nemotron 3.5 ASR", "nemotron-3.5-asr-streaming-0.6b.q8_0.gguf", 741_548_352],
+  ["Speaker separation", "Nemotron diarization", "Nemotron-3-Diarization.q8_0.gguf", 107_012_128],
+  ["Voice matching", "TitaNet", "titanet-l.nemo", 101_621_760],
 ];
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(1)} MB`;
 
@@ -86,8 +86,18 @@ export function SpeechStep({ status, next, skip, back, detour }: StepProps) {
 
   const install = status.speech.setup;
   const state = speechState(status);
-  const paused = state === "failed" && install.status === "interrupted";
-  const reuse = !!status.legacy?.speechModelsReusable || (!!pre && pre.downloadBytes === 0);
+  const paused = state === "paused";
+  const modelState = (name: string) => pre?.models.find((m) => m.name === name)?.state ?? "download";
+  const reused = !!pre && pre.models.some((m) => m.state === "reusable");
+  const total = !pre
+    ? "About 950 MB of models, plus the runtime"
+    : pre.downloadBytes === 0
+      ? reused
+        ? "Runtime only. Models are reused from the previous Concord app."
+        : "Runtime only. The models are already installed."
+      : pre.downloadBytes < pre.modelBytes
+        ? `${mb(pre.downloadBytes)} of models, plus the runtime. The rest are reused from the previous Concord app.`
+        : `About ${formatBytes(pre.modelBytes)} of models, plus the runtime`;
   const lowDisk = !!pre && pre.freeBytes != null && pre.freeBytes < pre.neededBytes;
   const blocked = !pre || lowDisk || !pre.network.ok || !pre.ffmpeg;
   const start = async (thenContinue: boolean) => {
@@ -157,17 +167,17 @@ export function SpeechStep({ status, next, skip, back, detour }: StepProps) {
         <section className="setup-section">
           <span className="setup-label">What gets installed</span>
           <div className="setup-table">
-            {MODELS.map(([name, detail, bytes]) => (
+            {MODELS.map(([name, detail, file, bytes]) => (
               <div className="setup-row" key={name}>
                 <span>{name}</span>
                 <span>{detail}</span>
-                {reuse ? (
+                {modelState(file) === "download" ? (
+                  <span className="setup-size">{mb(bytes)}</span>
+                ) : (
                   <span className="setup-reused">
                     <Check size={14} aria-hidden />
-                    Already here
+                    {modelState(file) === "installed" ? "Installed" : "Already here"}
                   </span>
-                ) : (
-                  <span className="setup-size">{mb(bytes)}</span>
                 )}
               </div>
             ))}
@@ -178,11 +188,7 @@ export function SpeechStep({ status, next, skip, back, detour }: StepProps) {
             </div>
             <div className="setup-row is-total">
               <span>Download</span>
-              <span>
-                {reuse
-                  ? "Runtime only. Models are reused from the previous Concord app."
-                  : `About ${formatBytes(pre?.modelBytes ?? 950e6)} of models, plus the runtime`}
-              </span>
+              <span>{total}</span>
             </div>
           </div>
         </section>
@@ -206,15 +212,21 @@ export function SpeechStep({ status, next, skip, back, detour }: StepProps) {
               </Button>
             </div>
           </div>
-        ) : state === "failed" || install.status === "cancelled" ? (
-          <div className={cx("setup-callout", !paused && install.status !== "cancelled" && "is-bad")}>
-            <span className="setup-callout-icon">{paused || install.status === "cancelled" ? <Pause size={20} aria-hidden /> : <CircleAlert size={20} aria-hidden />}</span>
+        ) : state === "failed" || paused ? (
+          <div className={cx("setup-callout", !paused && "is-bad")}>
+            <span className="setup-callout-icon">{paused ? <Pause size={20} aria-hidden /> : <CircleAlert size={20} aria-hidden />}</span>
             <div className="setup-callout-body">
-              <span className="setup-callout-title">{paused || install.status === "cancelled" ? "Setup is paused" : "Setup didn't finish"}</span>
-              <span className="setup-callout-text">{install.message || "Start it again to continue."}</span>
+              <span className="setup-callout-title">{paused ? "Setup is paused" : "Setup didn't finish"}</span>
+              <span className="setup-callout-text">
+                {paused
+                  ? install.phase === "models" && install.done > 0
+                    ? `${Math.round(install.done / 1e6)} of ${formatBytes(install.total)} downloaded. Resume to continue where it stopped.`
+                    : "Resume to continue where it stopped."
+                  : install.message || "Try again to continue."}
+              </span>
               <div className="setup-actions">
-                <Button icon={paused || install.status === "cancelled" ? Play : RefreshCw} disabled={starting} onClick={() => void start(false)}>
-                  {paused || install.status === "cancelled" ? "Resume" : "Try again"}
+                <Button icon={paused ? Play : RefreshCw} disabled={starting} onClick={() => void start(false)}>
+                  {paused ? "Resume" : "Try again"}
                 </Button>
                 <Button variant="ghost" onClick={() => void showLog()}>
                   {log == null ? "Show log" : "Hide log"}
@@ -261,7 +273,7 @@ export function SpeechStep({ status, next, skip, back, detour }: StepProps) {
         primary={
           state === "running"
             ? { label: detour ? "Done" : "Continue", onClick: next }
-            : state === "failed" || install.status === "cancelled"
+            : state === "failed" || paused
               ? { label: detour ? "Done" : "Continue", onClick: next }
               : { label: "Install and continue", icon: Download, busy: starting, disabled: blocked, onClick: () => void start(true) }
         }

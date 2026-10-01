@@ -15,6 +15,7 @@ export type LegacyLibrary = {
   speakers: number;
   notes: number;
   speechModelsReusable: boolean;
+  reusableBytes: number;
 };
 export type SetupStatus = {
   progress: SetupProgress;
@@ -31,6 +32,7 @@ export type Preflight = {
   neededBytes: number;
   downloadBytes: number;
   modelBytes: number;
+  models: { name: string; bytes: number; state: "installed" | "reusable" | "download" }[];
   runtimeBytes: number;
   ffmpeg: boolean;
   network: { ok: boolean; error: string | null };

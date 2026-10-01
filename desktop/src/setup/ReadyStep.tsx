@@ -78,9 +78,9 @@ export function ReadyStep({ status, finish, go, look }: StepProps & { look: stri
                 <Button size="sm" icon={Pause} onClick={pause}>
                   Pause
                 </Button>
-              ) : row.step === "speech" && speech === "failed" ? (
+              ) : row.step === "speech" && (speech === "failed" || speech === "paused") ? (
                 <Button size="sm" icon={Play} onClick={resume}>
-                  Resume
+                  {speech === "failed" ? "Try again" : "Resume"}
                 </Button>
               ) : row.state === "skipped" || row.state === "todo" ? (
                 <Button size="sm" variant="ghost" onClick={() => go(row.step)}>

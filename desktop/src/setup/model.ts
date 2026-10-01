@@ -23,12 +23,14 @@ export function speechPercent(setup: SpeechInstall): number | null {
   return Math.min(99, Math.floor((setup.done / setup.total) * 100));
 }
 
-type Speech = "installed" | "running" | "failed" | "missing";
+type Speech = "installed" | "running" | "paused" | "failed" | "missing";
+/** Paused covers both Pause and Concord closing mid-install; both resume where they stopped. */
 export function speechState(s: SetupStatus): Speech {
   const status = s.speech.setup.status;
   if (status === "running") return "running";
   if (s.speech.installed) return "installed";
-  if (status === "failed" || status === "interrupted") return "failed";
+  if (status === "failed") return "failed";
+  if (status === "interrupted" || status === "cancelled") return "paused";
   return "missing";
 }
 const searchDownloading = (s: SetupStatus) => ["waiting", "running"].includes(s.search.download.status);
@@ -47,7 +49,7 @@ export function stepState(s: SetupStatus, step: SetupStep, current: SetupStep): 
       if (speech === "running") return "running";
       if (speech === "installed") return "done";
       if (speech === "failed") return "failed";
-      return skipped ? "skipped" : "todo";
+      return skipped && speech === "missing" ? "skipped" : "todo";
     }
     case "recordings":
       if (hasRecordings(s)) return "done";
@@ -68,7 +70,8 @@ export function speechSummary(s: SetupStatus): string {
     const pct = speechPercent(s.speech.setup);
     return pct == null ? "Setting up voice matching" : `Installing · ${pct}%`;
   }
-  if (speech === "failed") return s.speech.setup.status === "interrupted" ? "Stopped · resume to finish" : "Needs attention";
+  if (speech === "paused") return "Paused · resume to finish";
+  if (speech === "failed") return "Needs attention";
   return s.progress.skipped.includes("speech") ? "Skipped" : "Recommended";
 }
 
@@ -122,9 +125,16 @@ export function checklist(s: SetupStatus): ChecklistItem[] {
     {
       id: "speech",
       title: "Install the speech engine",
-      detail: speech === "missing" ? "Transcription on this computer · about 950 MB plus a 2.2 GB runtime" : speechSummary(s),
-      state: speech === "installed" ? "done" : speech,
-    } as ChecklistItem,
+      detail:
+        speech === "missing"
+          ? "Transcription on this computer · about 950 MB plus a 2.2 GB runtime"
+          : speech === "paused" && s.speech.setup.phase === "models" && s.speech.setup.done > 0
+            ? `Paused at ${Math.round(s.speech.setup.done / 1e6)} of ${formatBytes(s.speech.setup.total)} · resume any time`
+            : speech === "paused"
+              ? "Paused · resume any time"
+              : speechSummary(s),
+      state: speech === "installed" ? "done" : speech === "paused" || speech === "missing" ? "todo" : speech,
+    },
     {
       id: "recordings",
       title: "Add recordings",
