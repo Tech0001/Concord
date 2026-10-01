@@ -10,6 +10,58 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
+## Status at handoff back to Codex (September 30, 2026, evening)
+
+Claude built Delivery 1 and handed development back. Start here.
+
+**Shipped and installed:** Concord Next **0.2.0** at `~/.local/opt/concord-next/`. The real
+library migrated to `user_version` 2. Everything committed on `rewrite/rust-tauri`.
+
+**Committed after 0.2.0, not packaged yet:**
+- `2e33c7b`: a sidebar toggle beside the logo; the labelled sidebar opens as an overlay
+  drawer on windows narrower than 1200px. Requested by the user.
+- `49a149f`: the brief for parallel Delivery 6 work,
+  `docs/superpowers/briefs/2026-09-30-codex-delivery-6.md`. Now that Codex owns everything,
+  ignore its worktree and coordination rules; its scope and legacy notes still apply.
+- `docs/superpowers/specs/2026-09-30-speakers-design.md`: a **draft** Delivery 2 spec.
+  The user has not approved it.
+
+**Open bug, reported by the user and not investigated:** "the playback is wonky" in
+the installed 0.2.0 WebKitGTK window. Playback of the new player was never verified in the
+real window, only in headless Chromium.
+
+Unconfirmed hypotheses, to check with evidence before fixing:
+1. `player/useMedia.ts` pushes `currentTime` into the time store on every
+   `requestAnimationFrame`. `Timeline`'s `Playhead` then re-renders about 20 times a second
+   and moves via `left: %`, which forces layout and paint. That is expensive with
+   `WEBKIT_DISABLE_DMABUF_RENDERER=1` (software compositing on NVIDIA/Wayland, see
+   `main.rs`), and could starve GStreamer. The 0.1 player used native controls with
+   `timeupdate` (about 4 Hz).
+2. `player/Transcript.tsx` follow-along calls `scrollIntoView({ behavior: "smooth" })` on
+   every line change, with `content-visibility: auto` rows.
+3. `seek(t, true)` sets `currentTime` and calls `play()` immediately; WebKitGTK may stutter
+   if play is called mid-seek.
+
+Ask the user what "wonky" means (stutter, jumps, lag on seek, desync) and watch CPU for
+`WebKitWebProcess` while playing.
+
+**Also never verified in the real window:** export through the native save dialog, "Show
+in folder" (D-Bus FileManager1 with an xdg-open fallback, `system.rs`), and Copy
+(`lib/clipboard.ts`, with an `execCommand` fallback).
+
+**The final whole-branch code review** of 0.2.0 was started but its findings were not
+processed. The commit range is `f147a9b..b77bf90`.
+
+**Useful tooling:**
+- Mock host: `pnpm --dir desktop dev`, then open `http://127.0.0.1:1420/?mock`. Add
+  `&theme=lifeOS`, `&mode=light`, or `&gallery`.
+- Screenshot runner: `node desktop/scripts/screens.mjs <outdir> [filter]`, with env `SIZES`,
+  `MODES`, `EXTRA` (JSON shots with `after`/`probe` scripts), `BASE`, and `CDP_PORT`.
+  `PlayerPage` exposes `window.__concordTest` in dev for scripted range/find/export.
+- Real-window review builds: `pnpm --dir desktop tauri build --no-bundle --config
+  '{"identifier":"app.concord.next.review"}'`, run with `CONCORD_NEXT_DATA` pointing at a
+  `sqlite3 .backup` copy of the library.
+
 ## What the user wants
 
 Concord is a local spoken-word research archive: recordings, transcripts, speaker
