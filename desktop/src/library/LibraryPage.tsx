@@ -20,7 +20,7 @@ import { recordingMenu } from "./recordingMenu.ts";
 import { RecordingCard } from "./RecordingCard.tsx";
 import { RecordingRow } from "./RecordingRow.tsx";
 import { activeFilterCount, Toolbar } from "./Toolbar.tsx";
-import { Welcome } from "./Welcome.tsx";
+import { SetupChecklist } from "../setup/SetupChecklist.tsx";
 import "./library.css";
 
 let savedScroll = 0;
@@ -115,7 +115,8 @@ export function LibraryPage() {
       transcribeDisabled: jobs.some(j => j.media_id === m.id && ["running", "queued", "retry"].includes(j.status)),
     }), ...fileMenu(m, action => setFileAction({media:m,action})), {label:"Extract audio",icon:AudioLines,disabled:!m.path||m.status==="archived",onSelect:()=>{if(m.path)navigate({page:"tools",tab:"extract",source:m.path});}}];
 
-  if (overview?.media === 0 && !overview.libraryStarted) return <Welcome />;
+  // A new install opens setup instead; show nothing while it does.
+  if (overview?.media === 0 && !overview.libraryStarted) return null;
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const filtered = overview?.media !== 0 && (activeFilterCount(filter) > 0 || !!filter.query.trim() || !!filter.channel || !!category);
@@ -139,6 +140,7 @@ export function LibraryPage() {
           )
         }
       />
+      <SetupChecklist variant="library" />
       <SavedViews filter={filter} layout={view} onApply={saved => { lastCategory.current = saved.filter.category; setCategory(saved.filter.category); setFilter({ ...saved.filter, offset: 0 }); setView(saved.layout); window.scrollTo(0, 0); }}/>
       <Toolbar
         filter={filter}

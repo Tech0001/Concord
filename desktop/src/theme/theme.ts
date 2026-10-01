@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { readStored, writeStored } from "../lib/storage.ts";
-import { scopeTweakcn, themeNameFromPath } from "./scope.ts";
+import { scopeTweakcn, themeAccent, themeNameFromPath } from "./scope.ts";
 
 const files = import.meta.glob("./themes/*.css", {
   query: "?raw",
@@ -10,15 +10,18 @@ const files = import.meta.glob("./themes/*.css", {
 
 export type ThemeMode = "system" | "dark" | "light";
 export type ReadingFont = "serif" | "sans";
+export type ReadingSize = "s" | "m" | "l";
 export type Appearance = {
   theme: string;
   mode: ThemeMode;
   reading: ReadingFont;
+  size: ReadingSize;
 };
 export const DEFAULT_APPEARANCE: Appearance = {
   theme: "concord",
   mode: "dark",
   reading: "serif",
+  size: "m",
 };
 const KEY = "appearance-v1";
 
@@ -48,7 +51,28 @@ export function loadAppearance(): Appearance {
     theme: v.theme && THEMES.includes(v.theme) ? v.theme : DEFAULT_APPEARANCE.theme,
     mode: v.mode === "system" || v.mode === "light" || v.mode === "dark" ? v.mode : DEFAULT_APPEARANCE.mode,
     reading: v.reading === "sans" ? "sans" : "serif",
+    size: v.size === "s" || v.size === "l" ? v.size : "m",
   };
+}
+
+/** Each theme's accent color, for swatches. Concord's is its brand amber. */
+export const THEME_ACCENTS: Record<string, string> = {
+  concord: "#e0a24b",
+  ...Object.fromEntries(
+    Object.entries(files).flatMap(([path, raw]) => {
+      const name = themeNameFromPath(path);
+      const accent = themeAccent(raw);
+      return name && accent ? [[name, accent]] : [];
+    }),
+  ),
+};
+
+/** A theme's file name as people read it, such as "Last chat" for last-chat. */
+export function themeLabel(name: string): string {
+  if (name === "concord") return "Concord";
+  if (/[A-Z]/.test(name.slice(1))) return name;
+  const words = name.replace(/-/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 const appearanceListeners = new Set<() => void>();
@@ -86,6 +110,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
     stopFollowingSystem = () => query.removeEventListener("change", set);
   }
   root.dataset.reading = a.reading;
+  root.dataset.readingSize = a.size;
 }
 
 export function useAppearance(): [Appearance, (a: Appearance) => void] {

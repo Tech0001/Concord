@@ -123,6 +123,15 @@ pub fn save_config(root: &Path, value: &Config) -> Result<()> {
     crate::db::open(root)?.execute("INSERT INTO settings VALUES ('pipeline.config',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [serde_json::to_string(value)?])?;
     Ok(())
 }
+/// Import files and queue them for transcription. They wait in the queue until speech is ready.
+pub fn import_and_queue(root: &Path, control: &Control, paths: &[String], category: &str, device: &str) -> Result<usize> {
+    validate_device(device)?;
+    let ids = crate::db::import_media_ids(root, paths, category)?;
+    if !ids.is_empty() {
+        enqueue(root, control, &Batch { ids: ids.clone(), device: device.into(), ..Default::default() }, true)?;
+    }
+    Ok(ids.len())
+}
 /// The one stored speech device preference, used by the queue and by manual transcription.
 pub fn device(root: &Path) -> Result<String> {
     Ok(config(root)?.device)

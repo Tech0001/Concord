@@ -1,3 +1,4 @@
+import { SetupChecklist } from "../setup/SetupChecklist.tsx";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Activity,
@@ -352,6 +353,7 @@ export function ArchiveWorkspace({
         </Button>
       </div>
       <div className="archive-scroll" key={tab}>
+        {tab === "status" && <SetupChecklist variant="health" onNavigate={onClose} />}
         {tab === "status" && status && (
           <>
             <div className="archive-intro">

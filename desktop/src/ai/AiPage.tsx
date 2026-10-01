@@ -2,7 +2,6 @@ import { ChatGPTUsage } from "./ChatGPTSettings.tsx";
 import { useEffect, useRef, useState } from "react";
 import {
   Copy,
-  LockKeyhole,
   MessageCircle,
   Plus,
   Send,
@@ -31,6 +30,43 @@ import {
   type SearchFilter,
 } from "./types.ts";
 import "./ai.css";
+import "../setup/setup.css";
+import type { ChatChoice, LocalServer } from "../setup/types.ts";
+
+/** Chat isn't connected: offer the common ways to connect, each opening that part of setup. */
+function ConnectChat() {
+  const { navigate } = useApp();
+  const [servers, setServers] = useState<LocalServer[]>([]);
+  useEffect(() => {
+    api.setupProbeLocal().then(setServers).catch(() => setServers([]));
+  }, []);
+  const go = (chat: ChatChoice) => navigate({ page: "setup", step: "ai", returnTo: "ai", chat });
+  const server = servers[0];
+  return (
+    <Empty
+      icon={MessageCircle}
+      title="Ask questions about your archive"
+      text="Connect a chat provider to get answers quoted from your recordings, each linked to the moment it was said."
+      action={
+        <div className="setup-connect-options">
+          <Button onClick={() => go("chatgpt")}>
+            Sign in with ChatGPT<small>Uses your plan</small>
+          </Button>
+          <Button onClick={() => go("openrouter")}>
+            Use an OpenRouter key<small>Many models</small>
+          </Button>
+          <Button onClick={() => go("local")}>
+            Use a local server
+            {server ? <span className="setup-badge is-ok">{server.kind === "lmstudio" ? "LM Studio" : "Ollama"} found</span> : <small>Ollama or LM Studio</small>}
+          </Button>
+          <button type="button" className="text-link" onClick={() => navigate({ page: "settings", section: "ai" })}>
+            More options in Settings › AI
+          </button>
+        </div>
+      }
+    />
+  );
+}
 function Chat({ config }: { config: AiConfig }) {
   const { openNote, category } = useApp();
   const toast = useToast();
@@ -442,23 +478,18 @@ export function AiPage() {
         <button
           role="tab"
           aria-selected={tab === "chat"}
-          disabled={!ready}
-          title={!ready ? "Configure a chat provider in Settings" : undefined}
           onClick={() => setTab("chat")}
         >
-          {!ready && <LockKeyhole size={14} />} Chat
+          Chat
         </button>
       </div>
-      {!ready && (
+      {!ready && tab === "semantic" && (
         <p className="ai-setup-hint">
-          Semantic search works locally.{" "}
-          <button
-            className="text-link"
-            onClick={() => navigate({ page: "settings" })}
-          >
-            Set up a chat provider
+          Semantic search works on this computer.{" "}
+          <button className="text-link" onClick={() => setTab("chat")}>
+            Connect a chat provider
           </button>{" "}
-          to enable Chat.
+          to ask questions too.
         </p>
       )}
       {tab === "semantic" ? (
@@ -466,6 +497,8 @@ export function AiPage() {
           <IndexControl />
           <SearchPanel semantic />
         </>
+      ) : !ready ? (
+        config && <ConnectChat />
       ) : (
         config && <Chat config={config} />
       )}

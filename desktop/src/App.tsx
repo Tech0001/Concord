@@ -8,7 +8,7 @@ import type { Category, Job, Note, Overview } from "./lib/types.ts";
 import { api } from "./lib/ipc.ts";
 import { count } from "./lib/format.ts";
 import { useRoute } from "./lib/router.ts";
-import { useStoredState } from "./lib/storage.ts";
+import { readStored, useStoredState } from "./lib/storage.ts";
 import { useShortcuts } from "./lib/shortcuts.ts";
 import { PHONE, RAIL, useMediaQuery } from "./lib/media-query.ts";
 import { ToastProvider, useToast } from "./ui/Toasts.tsx";
@@ -31,6 +31,9 @@ import { DocumentsPage } from "./documents/DocumentsPage.tsx";
 import { NotesPage } from "./notes/NotesPage.tsx";
 import { MapPage } from "./map/MapPage.tsx";
 import { SettingsPage } from "./settings/SettingsPage.tsx";
+import { SetupPage } from "./setup/SetupPage.tsx";
+import { SpeechPrompt } from "./setup/SpeechPrompt.tsx";
+import type { SetupStatus } from "./setup/types.ts";
 
 export default function App() {
   return (
@@ -48,7 +51,11 @@ function Shell() {
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
   const [category, setCategory] = useStoredState<Category>("archive-category-v1", "", isCategory);
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [device, setDevice] = useStoredState<string>("speech-device", "auto", (v) => typeof v === "string");
+  const [device, setDeviceState] = useState("auto");
+  const [setup, setSetup] = useState<SetupStatus>();
+  const setupRef = useRef<SetupStatus>(undefined);
+  setupRef.current = setup;
+  const [speechPrompt, setSpeechPrompt] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
@@ -90,6 +97,73 @@ function Shell() {
     };
   }, [available, refresh, toast]);
 
+  // The speech device lives in the backend. Carry over a choice saved by older builds once.
+  useEffect(() => {
+    if (!available) return;
+    void (async () => {
+      try {
+        let value = await api.speechDevice();
+        const old = readStored<string | null>("speech-device", null, (v) => typeof v === "string");
+        if (old && old !== value && value === "auto") {
+          await api.setSpeechDevice(old);
+          value = old;
+        }
+        localStorage.removeItem("speech-device");
+        setDeviceState(value);
+      } catch (e) {
+        toast.error(e);
+      }
+    })();
+  }, [available, toast]);
+  const setDevice = useCallback(
+    (value: string) => {
+      setDeviceState(value);
+      api.setSpeechDevice(value).then(() => api.setupStatus().then(setSetup)).catch(toast.error);
+    },
+    [toast],
+  );
+
+  // Setup readiness: quick while something downloads or setup is open, slow otherwise.
+  const onSetup = route.page === "setup";
+  const refreshSetup = useCallback(async () => {
+    try {
+      const next = await api.setupStatus();
+      setSetup((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next));
+    } catch (e) {
+      toast.error(e);
+    }
+  }, [toast]);
+  useEffect(() => {
+    if (!available) return;
+    let alive = true;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const next = await api.setupStatus();
+        if (!alive) return;
+        setSetup((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next));
+        const busy = next.speech.setup.status === "running" || ["waiting", "running"].includes(next.search.download.status);
+        timer = window.setTimeout(poll, busy || onSetup ? 1000 : 15000);
+      } catch {
+        if (alive) timer = window.setTimeout(poll, 15000);
+      }
+    };
+    void poll();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [available, onSetup, revision]);
+
+  // Open setup on a fresh install, or where it was left if Concord closed partway through.
+  const checkedSetup = useRef(false);
+  useEffect(() => {
+    if (!setup || checkedSetup.current) return;
+    checkedSetup.current = true;
+    const p = setup.progress;
+    if (!onSetup && !p.completed && (!setup.library.started || p.furthest !== "library")) navigate({ page: "setup" }, { replace: true });
+  }, [setup, onSetup, navigate]);
+
   useShortcuts([{ key: "k", mod: true, global: true, run: () => setPaletteOpen((v) => !v) }]);
 
   const pageKey =
@@ -101,9 +175,14 @@ function Shell() {
   const activeJob = jobs.find((j) => j.status === "running");
   const transcribe = useCallback(
     async (id: string) => {
+      const ready = setupRef.current?.speech;
+      if (ready && !ready.installed && ready.setup.status !== "running") {
+        setSpeechPrompt(id);
+        return;
+      }
       try {
         await api.transcribe(id, device);
-        toast.info("Recording added to the processing queue", {
+        toast.info(ready && !ready.installed ? "Queued. It starts when the speech engine finishes installing." : "Recording added to the processing queue", {
           label: "Status & Health",
           run: () => setActivityOpen(true),
         });
@@ -131,13 +210,15 @@ function Shell() {
     async (path?: string) => {
       try {
         const chosen = path || (await api.pickDatabase())[0];
-        if (!chosen) return;
+        if (!chosen) return false;
         const result = await api.importLegacy(chosen);
         setOverview(result);
         refresh();
         toast.success(`Imported ${count(result.media, "recording")} and ${count(result.speakers, "saved voice")}`);
+        return true;
       } catch (e) {
         toast.error(e);
+        return false;
       }
     },
     [refresh, toast],
@@ -165,6 +246,8 @@ function Shell() {
       importLegacy,
       pageTitle,
       setPageTitle,
+      setup,
+      refreshSetup,
     }),
     [
       category,
@@ -183,6 +266,8 @@ function Shell() {
       addRecordings,
       importLegacy,
       pageTitle,
+      setup,
+      refreshSetup,
     ],
   );
 
@@ -195,6 +280,16 @@ function Shell() {
           text="Run it with pnpm --dir desktop desktop, or add ?mock to preview with sample data."
         />
       </div>
+    );
+
+  const prompts = speechPrompt && <SpeechPrompt mediaId={speechPrompt} onClose={() => setSpeechPrompt(null)} />;
+  if (route.page === "setup")
+    return (
+      <AppContext.Provider value={context}>
+        <SetupPage route={route} />
+        <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} onChanged={() => api.jobs().then(setJobs).catch(toast.error)} />
+        {prompts}
+      </AppContext.Provider>
     );
 
   let page: React.ReactNode;
@@ -224,10 +319,10 @@ function Shell() {
       page = <ToolsPage tab={route.tab} source={route.source}/>;
       break;
     case "pipeline":
-      page = <PipelinePage />;
+      page = <PipelinePage tab={route.tab} />;
       break;
     case "settings":
-      page = <SettingsPage />;
+      page = <SettingsPage section={route.section} />;
       break;
     default:
       page = <LibraryPage />;
@@ -251,6 +346,7 @@ function Shell() {
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onAdd={() => void addRecordings()} />
       <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} onChanged={() => api.jobs().then(setJobs).catch(toast.error)} />
       {note && <NoteEditor note={note} onClose={() => setNote(null)} />}
+      {prompts}
     </AppContext.Provider>
   );
 }

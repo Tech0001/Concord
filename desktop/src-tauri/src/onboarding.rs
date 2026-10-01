@@ -34,14 +34,19 @@ fn setting(db: &Connection, key: &str) -> Result<Option<String>> {
 }
 pub fn progress(root: &Path) -> Result<Value> {
     let db = db::open(root)?;
-    let step = setting(&db, "onboarding.step")?
-        .filter(|s| STEPS.contains(&s.as_str()))
-        .unwrap_or_else(|| STEPS[0].into());
+    let known = |key| -> Result<String> {
+        Ok(setting(&db, key)?
+            .filter(|s| STEPS.contains(&s.as_str()))
+            .unwrap_or_else(|| STEPS[0].into()))
+    };
+    let step = known("onboarding.step")?;
+    let furthest = known("onboarding.furthest")?;
     let skipped: Vec<String> = setting(&db, "onboarding.skipped")?
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     Ok(json!({
         "step": step,
+        "furthest": furthest,
         "completed": setting(&db, "onboarding.completed")?.as_deref() == Some("true"),
         "skipped": skipped,
         "checklistHidden": setting(&db, "onboarding.checklist_hidden")?.as_deref() == Some("true"),
@@ -54,6 +59,8 @@ pub fn save(root: &Path, patch: &Patch) -> Result<Value> {
         patch.skipped.as_ref().is_none_or(|s| s.iter().all(known)),
         "Unknown setup step"
     );
+    let furthest = progress(root)?["furthest"].as_str().unwrap_or_default().to_owned();
+    let index = |s: &str| STEPS.iter().position(|x| *x == s).unwrap_or(0);
     let mut db = db::open(root)?;
     let tx = db.transaction()?;
     let put = |key: &str, value: String| {
@@ -64,6 +71,9 @@ pub fn save(root: &Path, patch: &Patch) -> Result<Value> {
     };
     if let Some(step) = &patch.step {
         put("onboarding.step", step.clone())?;
+        if index(step) > index(&furthest) {
+            put("onboarding.furthest", step.clone())?;
+        }
     }
     if let Some(completed) = patch.completed {
         put("onboarding.completed", completed.to_string())?;
@@ -300,10 +310,12 @@ mod tests {
     fn progress_starts_at_the_library_and_saves_each_change() {
         let root = tempfile::tempdir().unwrap();
         let fresh = progress(root.path()).unwrap();
-        assert_eq!(fresh, json!({"step":"library","completed":false,"skipped":[],"checklistHidden":false}));
+        assert_eq!(fresh, json!({"step":"library","furthest":"library","completed":false,"skipped":[],"checklistHidden":false}));
         save(root.path(), &Patch { step: Some("speech".into()), skipped: Some(vec!["recordings".into()]), ..Default::default() }).unwrap();
         let saved = save(root.path(), &Patch { checklist_hidden: Some(true), ..Default::default() }).unwrap();
-        assert_eq!(saved, json!({"step":"speech","completed":false,"skipped":["recordings"],"checklistHidden":true}));
+        assert_eq!(saved, json!({"step":"speech","furthest":"speech","completed":false,"skipped":["recordings"],"checklistHidden":true}));
+        let back = save(root.path(), &Patch { step: Some("library".into()), ..Default::default() }).unwrap();
+        assert_eq!((back["step"].as_str(), back["furthest"].as_str()), (Some("library"), Some("speech")));
         assert!(save(root.path(), &Patch { step: Some("elsewhere".into()), ..Default::default() }).is_err());
         assert!(save(root.path(), &Patch { skipped: Some(vec!["nope".into()]), ..Default::default() }).is_err());
         let done = save(root.path(), &Patch { completed: Some(true), ..Default::default() }).unwrap();

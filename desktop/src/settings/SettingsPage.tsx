@@ -4,7 +4,8 @@ import { AudioLines, Check, CircleAlert, Cpu, FolderOpen, HardDrive, Info, Palet
 import { api } from "../lib/ipc.ts";
 import { count } from "../lib/format.ts";
 import type { Runtime } from "../lib/types.ts";
-import { THEMES, useAppearance, type ReadingFont, type ThemeMode } from "../theme/theme.ts";
+import { THEMES, themeLabel, useAppearance, type ReadingFont, type ReadingSize, type ThemeMode } from "../theme/theme.ts";
+import type { SettingsSection } from "../lib/router.ts";
 import { Button } from "../ui/Button.tsx";
 import { Chip } from "../ui/Chip.tsx";
 import { Segmented } from "../ui/Segmented.tsx";
@@ -16,16 +17,9 @@ import "./settings.css";
 import { SpeechSetup } from "./SpeechSetup.tsx";
 import { ProviderSettings } from "../ai/ProviderSettings.tsx";
 
-function themeLabel(name: string): string {
-  if (name === "concord") return "Concord (default)";
-  if (/[A-Z]/.test(name.slice(1))) return name;
-  const words = name.replace(/-/g, " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-function Section({ icon: Icon, title, children }: { icon: typeof Palette; title: string; children: React.ReactNode }) {
+function Section({ id, icon: Icon, title, children }: { id: SettingsSection; icon: typeof Palette; title: string; children: React.ReactNode }) {
   return (
-    <section className="settings-section">
+    <section className="settings-section" id={`settings-${id}`}>
       <header>
         <span className="settings-icon">
           <Icon size={17} aria-hidden />
@@ -49,7 +43,7 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
   );
 }
 
-export function SettingsPage() {
+export function SettingsPage({ section }: { section?: SettingsSection }) {
   const { overview, device, setDevice, importLegacy } = useApp();
   const toast = useToast();
   const [appearance, setAppearance] = useAppearance();
@@ -74,6 +68,16 @@ export function SettingsPage() {
       .catch(() => setVersion(""));
     // Checking once on open is enough; "Check again" re-runs it.
   }, []);
+  // Links such as #/settings?section=speech open at that section and briefly mark it.
+  useEffect(() => {
+    if (!section) return;
+    const el = document.getElementById(`settings-${section}`);
+    if (!el) return;
+    el.scrollIntoView({ block: "start" });
+    el.classList.add("is-linked");
+    const timer = setTimeout(() => el.classList.remove("is-linked"), 1600);
+    return () => clearTimeout(timer);
+  }, [section]);
   const fact = (ok: boolean | undefined, label: string) => (
     <span className="settings-fact">
       {ok ? <Check size={15} className="is-ok" aria-hidden /> : <CircleAlert size={15} className="is-warn" aria-hidden />}
@@ -83,13 +87,13 @@ export function SettingsPage() {
   return (
     <div className="settings-page">
       <PageHeader title="Settings" />
-      <Section icon={Palette} title="Appearance">
+      <Section id="appearance" icon={Palette} title="Appearance">
         <Row label="Theme" hint="Concord's own look, or one of your imported themes.">
           <Select
             label="Theme"
             value={appearance.theme}
             onChange={(theme) => setAppearance({ ...appearance, theme })}
-            options={THEMES.map((t) => ({ value: t, label: themeLabel(t) }))}
+            options={THEMES.map((t) => ({ value: t, label: t === "concord" ? "Concord (default)" : themeLabel(t) }))}
           />
         </Row>
         <Row label="Mode">
@@ -115,12 +119,28 @@ export function SettingsPage() {
             ]}
           />
         </Row>
+        <Row label="Transcript size">
+          <Segmented<ReadingSize>
+            label="Transcript size"
+            value={appearance.size}
+            onChange={(size) => setAppearance({ ...appearance, size })}
+            options={[
+              { value: "s", label: "Small" },
+              { value: "m", label: "Medium" },
+              { value: "l", label: "Large" },
+            ]}
+          />
+        </Row>
         <p className="settings-preview">“The words that matter, right where you left them.”</p>
       </Section>
 
-      <ProviderSettings />
-      <YouTubeSettings />
-      <Section icon={AudioLines} title="Speech">
+      <div id="settings-ai" className="settings-anchor">
+        <ProviderSettings />
+      </div>
+      <div id="settings-youtube" className="settings-anchor">
+        <YouTubeSettings />
+      </div>
+      <Section id="speech" icon={AudioLines} title="Speech">
         <Row label="Status">
           <Chip tone={runtime ? (runtime.ready ? "success" : "warn") : "neutral"}>{runtime ? (runtime.ready ? "Ready" : "Setup needed") : "Checking…"}</Chip>
         </Row>
@@ -158,7 +178,7 @@ export function SettingsPage() {
         </div>
       </Section>
 
-      <Section icon={HardDrive} title="Library">
+      <Section id="library" icon={HardDrive} title="Library">
         <Row label="Library folder" hint="Concord Next keeps its own database and new transcripts here. Imported recordings stay where they are.">
           <code className="settings-path">{overview?.dataRoot}</code>
         </Row>
@@ -175,7 +195,7 @@ export function SettingsPage() {
         </Row>
       </Section>
 
-      <Section icon={Info} title="About">
+      <Section id="about" icon={Info} title="About">
         <p className="settings-note">
           Concord Next{version && ` ${version}`}. Your library is stored on this computer. When you use a remote embedding or chat provider, the text needed for that request is sent to the provider you choose. Discover sends your online search query to Google.
         </p>

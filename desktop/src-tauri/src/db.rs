@@ -499,10 +499,14 @@ pub fn assign(root: &Path, media_id: &str, local_id: &str, name: &str) -> Result
 #[cfg(test)]
 pub fn import_files(root: &Path, paths: &[String]) -> Result<usize> { import_files_in_category(root,paths,"personal") }
 pub fn import_files_in_category(root: &Path, paths: &[String], category: &str) -> Result<usize> {
+    Ok(import_media_ids(root, paths, category)?.len())
+}
+/// Import media files and return the ids of the ones that were new.
+pub fn import_media_ids(root: &Path, paths: &[String], category: &str) -> Result<Vec<String>> {
     anyhow::ensure!(["personal", "work"].contains(&category), "Choose Personal or Work");
     let mut db = open(root)?;
     let tx = db.transaction()?;
-    let mut count = 0;
+    let mut ids = Vec::new();
     for path in paths {
         let path = Path::new(path).canonicalize()?;
         if !path.is_file() {
@@ -534,10 +538,10 @@ pub fn import_files_in_category(root: &Path, paths: &[String], category: &str) -
             "INSERT INTO media(id,title,path,date,category) VALUES (?1,?2,?3,date('now'),?4)",
             params![id, title, path.to_string_lossy(),category],
         )?;
-        count += 1;
+        ids.push(id);
     }
     tx.commit()?;
-    Ok(count)
+    Ok(ids)
 }
 
 #[cfg(test)]

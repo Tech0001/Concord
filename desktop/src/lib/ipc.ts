@@ -5,6 +5,7 @@ import type { FileAction, RecordingFileInfo } from "../library/RecordingFileDial
 import type { AutomaticAi, SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
 import type { DocumentsState, DocumentSync } from "../documents/types.ts";
 import type { ArchiveStatus, Audit, BackupValidation, LogEntry, MaintenanceJob } from "../health/types.ts";
+import type { SetupStatus, SetupProgress, Preflight, LocalServer, ModelDownload } from "../setup/types.ts";
 import type { ChatGPTStatus, AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, SummaryState } from "../ai/types.ts";
 import { invoke, isTauri, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -196,10 +197,20 @@ export const api = {
   rescanSpeakers: (id?: string) => call<MatchResult>("rescan_speakers", { id: id ?? null }),
   labelVoices: (label: LabelVoice) => call<MatchResult>("label_speakers", { label }),
   importMedia: (paths: string[], category = "personal") => call<number>("import_media", { paths, category }),
+  importAndQueue: (paths: string[], category: string, device: string) => call<number>("import_and_queue", { paths, category, device }),
   speechStatus: () => call<Runtime>("speech_status"),
   speechSetupStatus: () => call<import("./types.ts").SpeechSetupStatus>("speech_setup_status"),
   speechSetupStart: () => call<void>("speech_setup_start"),
   speechSetupCancel: () => call<void>("speech_setup_cancel"),
+  setupStatus: () => call<SetupStatus>("setup_status"),
+  setupSave: (patch: Partial<Omit<SetupProgress, "furthest">>) => call<SetupProgress>("setup_save", { patch }),
+  setupPreflight: () => call<Preflight>("setup_preflight"),
+  setupProbeLocal: () => call<LocalServer[]>("setup_probe_local"),
+  speechDevice: () => call<string>("speech_device"),
+  setSpeechDevice: (device: string) => call<void>("set_speech_device", { device }),
+  aiBuiltinStatus: () => call<ModelDownload>("ai_builtin_status"),
+  aiBuiltinPrepare: (afterSpeech: boolean) => call<void>("ai_builtin_prepare", { afterSpeech }),
+  aiBuiltinCancel: () => call<void>("ai_builtin_cancel"),
   transcribe: (id: string, device: string) => call<string>("transcribe", { id, device }),
   cancelTranscription: () => call<void>("cancel_transcription"),
   clearJobs: (id?: string) => call<number>("clear_jobs", { id: id ?? null }),

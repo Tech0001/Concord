@@ -12,3 +12,9 @@ export function themeNameFromPath(path: string): string | null {
   const match = /\/([^/]+)\.css$/.exec(path);
   return match && !match[1].startsWith("_") ? match[1] : null;
 }
+
+/** The light `--primary` of a tweakcn export, for showing the theme as a swatch. */
+export function themeAccent(raw: string): string | null {
+  const light = /:root\s*\{([^{}]*)\}/.exec(raw);
+  return light ? (/--primary:\s*([^;]+);/.exec(light[1])?.[1].trim() ?? null) : null;
+}

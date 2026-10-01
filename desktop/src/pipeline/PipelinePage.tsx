@@ -1,3 +1,4 @@
+import type { PipelineTab } from "../lib/router.ts";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowUpRight, Check, Clock, ListOrdered, LoaderCircle, Pause, Play, RefreshCw, Settings2, Square, Rss, X } from "lucide-react";
 import { api } from "../lib/ipc.ts";
@@ -17,13 +18,16 @@ import { Setup } from "./Setup.tsx";
 import "./pipeline.css";
 
 const labels: Record<string, string> = { running: "Processing", queued: "Queued", retry: "Waiting to retry", complete: "Done", failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted", waiting_live: "Waiting for live stream" };
-export function PipelinePage() {
+export function PipelinePage({ tab: linked }: { tab?: PipelineTab }) {
   const { navigate, refresh, device, setDevice } = useApp();
   const toast = useToast();
   const [state, setState] = useState<PipelineState>();
   const [automatic, setAutomatic] = useState<AutomaticAi>();
   const reloadAi = useCallback(async () => setAutomatic(await api.pipelineAiState()), []);
-  const [tab, setTab] = useState<"queue" | "batch" | "sources" | "setup">("queue");
+  const [tab, setTab] = useState<PipelineTab>(linked ?? "queue");
+  useEffect(() => {
+    if (linked) setTab(linked);
+  }, [linked]);
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState(false);
   const reload = useCallback(async () => setState(await api.pipelineState()), []);

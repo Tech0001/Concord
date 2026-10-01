@@ -70,6 +70,7 @@ export const PAGE_TITLES: Record<Page, string> = {
   settings: "Settings",
   pipeline: "Pipeline",
   tools: "Tools",
+  setup: "Setup",
 };
 
 /** The nav section a route belongs to (a recording belongs to the Library). */

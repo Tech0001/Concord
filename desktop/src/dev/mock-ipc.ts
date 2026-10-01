@@ -2,10 +2,10 @@
 import { api, setTransport, type Transport } from "../lib/ipc.ts";
 import type { LibraryFilter, Note, ReviewState } from "../lib/types.ts";
 import * as fx from "./fixtures.ts";
+import { setupHandlers, setupState } from "./mock-setup.ts";
 
 const delay = <T>(value: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(value), ms));
-const emptyLibrary = new URLSearchParams(location.search).has("empty-library");
-let libraryStarted = !emptyLibrary;
+const emptyLibrary = new URLSearchParams(location.search).has("empty-library") || !setupState.library.started || setupState.library.media === 0;
 const listeners = new Map<string, Set<(p: unknown) => void>>();
 const emit = (event: string, payload: unknown) => listeners.get(event)?.forEach((h) => h(payload));
 
@@ -102,16 +102,15 @@ const handlers: Record<string, (a: any) => unknown> = {
   archive_last_audit: mockAudit,
   archive_audit: mockAudit,
   runtime_logs: ({after}) => after ? [] : [{id:1,timestamp:Date.now(),level:"info",message:"Concord Next started"},{id:2,timestamp:Date.now(),level:"info",message:"Archive audit completed: 0 errors, 2 warnings"}],
-  ai_config: () => ({ embedding: { enabled: true, kind: "builtin", model: "Qwen3-Embedding-0.6B-Q8_0", baseUrl: "http://127.0.0.1", hasKey: false, local: true }, chat: { enabled: false, kind: "local", model: "", baseUrl: "http://127.0.0.1:11434/v1", hasKey: false, local: true } }),
   ai_status: () => ({ modelReady: true, indexed: 0, total: fx.mediaList.length, chunks: 0, dimensions: null, job: null }),
   ai_summary_state: () => ({summary:null,job:null}),
   ai_summary_start: () => "mock-summary",
   ai_summary_cancel: () => undefined,
   search_filters: () => ({ channels: [], speakers: [], tags: [] }),
   research_search: ({ query }) => fx.searchHits(query).slice(0, 100).map((h: any) => ({ ...h, kind: "recording", score: 1 })),
-  start_library: () => { libraryStarted = true; },
+  start_library: () => { setupState.library.started = true; },
   overview: () => ({
-    libraryStarted,
+    libraryStarted: setupState.library.started,
     media: emptyLibrary ? 0 : fx.mediaList.length,
     speakers: emptyLibrary ? 0 : fx.speakerList.length,
     notes: emptyLibrary ? 0 : fx.notesList.length,
@@ -173,19 +172,6 @@ const handlers: Record<string, (a: any) => unknown> = {
       message: "Transcript saved",
     },
   ],
-  speech_setup_status: () => ({status:"",message:"",details:""}),
-  speech_setup_start: () => undefined,
-  speech_setup_cancel: () => undefined,
-  speech_status: () => ({
-    ready: true,
-    device: "vulkan:0",
-    gpu: "NVIDIA GeForce RTX 2080 Ti",
-    modelsReady: true,
-    voiceMatchingReady: true,
-    model: "nemotron",
-    models: "",
-    python: "",
-  }),
   waveform: ({ id }) => fx.peaksFor(id),
   set_starred: ({ id, starred }) => {
     const m = find(id);
@@ -225,6 +211,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   export_transcript: ({ dest }) => dest,
   transcribe: () => "job",
   import_media: () => 0,
+  ...setupHandlers,
 };
 
 export function installMock(): void {

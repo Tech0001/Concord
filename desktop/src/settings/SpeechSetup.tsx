@@ -37,7 +37,7 @@ export function SpeechSetup({ managed, onComplete }: { managed: boolean; onCompl
   const running = starting || state?.status === "running";
   return <div className="speech-setup">
     <p>{managed ? "Speech is installed in Concord Next’s own folder." : "Prepare speech for this app without installing Electron or changing your system Python."} Transcription and diarization use your selected CPU or GPU. The portable voice matcher runs on CPU.</p>
-    <p className="muted">Setup downloads about 950 MB of models plus voice-matching dependencies. Allow several GB of free space. Verified models are reused when you retry. Your recordings stay on this computer.</p>
+    <p className="muted">Setup downloads about 950 MB of models, plus a voice-matching runtime that takes about 2.2 GB once installed. Allow about 5 GB of free space. Interrupted downloads resume where they stopped. Your recordings stay on this computer.</p>
     <div className="speech-setup-actions">
       <Button icon={running ? LoaderCircle : Download} disabled={running} onClick={() => void start()}>{running ? "Preparing speech…" : managed ? "Repair speech setup" : "Prepare speech"}</Button>
       {running && <Button variant="ghost" icon={Square} onClick={() => api.speechSetupCancel().catch(toast.error)}>Cancel setup</Button>}

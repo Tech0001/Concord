@@ -179,6 +179,27 @@
   font-size: var(--text-xs);
   color: var(--muted-foreground);
 }
+.activity-item.is-installing {
+  align-items: flex-start;
+  margin: 2px 0;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  background: color-mix(in oklab, var(--sidebar-primary) 8%, var(--sidebar));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--sidebar-primary) 26%, transparent);
+}
+.activity-item.is-installing > svg {
+  margin-top: 1px;
+}
+.activity-item.is-installing .activity-text {
+  flex: 1;
+  gap: 4px;
+}
+.activity-item.is-installing .activity-text b {
+  font-weight: 600;
+}
+.activity-item.is-installing .activity-text small {
+  font-size: var(--text-sm);
+}
 @media (pointer: coarse) {
   .nav-item {
     min-height: 44px;

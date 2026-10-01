@@ -5,6 +5,29 @@ import type { Route } from "../lib/router.ts";
 import { ANALYSIS, ARCHIVE, OPERATIONS, sectionOf, type NavItem } from "./nav.ts";
 import { Brand } from "./Brand.tsx";
 import { useApp } from "./AppContext.tsx";
+import { formatBytes, speechPercent } from "../setup/model.ts";
+import { Bar } from "../setup/parts.tsx";
+import type { SetupStatus } from "../setup/types.ts";
+
+/** Background setup work worth showing in the sidebar: the speech install, then the search model. */
+export function setupActivity(setup?: SetupStatus): { title: string; detail: string; pct: number | null } | null {
+  if (!setup) return null;
+  const speech = setup.speech.setup;
+  if (speech.status === "running") {
+    const pct = speechPercent(speech);
+    return {
+      title: "Installing speech",
+      detail: pct == null ? "Setting up voice matching" : `${Math.round(speech.done / 1e6)} of ${formatBytes(speech.total)} · ${pct}%`,
+      pct,
+    };
+  }
+  const search = setup.search.download;
+  if (search.status === "running") {
+    const pct = Math.floor((search.done / Math.max(1, search.total)) * 100);
+    return { title: "Downloading search model", detail: `${Math.round(search.done / 1e6)} of ${formatBytes(search.total)} · ${pct}%`, pct };
+  }
+  return null;
+}
 
 /**
  * "full" is the labelled sidebar, "rail" the icon strip, and "drawer" the labelled sidebar shown
@@ -13,7 +36,8 @@ import { useApp } from "./AppContext.tsx";
 export type SidebarMode = "full" | "rail" | "drawer";
 
 export function Sidebar({ mode, onToggle, onNavigate }: { mode: SidebarMode; onToggle: () => void; onNavigate?: () => void }) {
-  const { route, navigate, overview, activeJob, openActivity } = useApp();
+  const { route, navigate, overview, activeJob, openActivity, setup } = useApp();
+  const installing = activeJob ? null : setupActivity(setup);
   const rail = mode === "rail";
   const current = sectionOf(route.page);
   const go = (r: Route) => {
@@ -57,19 +81,25 @@ export function Sidebar({ mode, onToggle, onNavigate }: { mode: SidebarMode; onT
       <div className="sidebar-foot">
         <button
           type="button"
-          className={cx("nav-item activity-item", activeJob && "is-busy")}
+          className={cx("nav-item activity-item", (activeJob || installing) && "is-busy", installing && "is-installing")}
           onClick={() => {
             onNavigate?.();
             openActivity();
           }}
-          data-tip={rail ? (activeJob ? `Transcribing ${activeJob.title}` : "Status & Health") : undefined}
+          data-tip={rail ? (activeJob ? `Transcribing ${activeJob.title}` : installing ? `${installing.title} · ${installing.detail}` : "Status & Health") : undefined}
         >
-          {activeJob ? <LoaderCircle size={18} className="spin" aria-hidden /> : <Check size={18} aria-hidden />}
+          {activeJob || installing ? <LoaderCircle size={18} className="spin" aria-hidden /> : <Check size={18} aria-hidden />}
           <span className="nav-label activity-text">
             {activeJob ? (
               <>
                 <b>{activeJob.title}</b>
                 <small>{activeJob.message || "Processing"}</small>
+              </>
+            ) : installing ? (
+              <>
+                <b>{installing.title}</b>
+                <small>{installing.detail}</small>
+                <Bar pct={installing.pct} thin />
               </>
             ) : (
               "Status & Health"

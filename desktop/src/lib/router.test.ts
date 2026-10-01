@@ -23,3 +23,19 @@ test("unknown, empty and malformed routes fall back to the library", () => {
   assert.deepEqual(parseRoute("#/recording/abc?t=x"), { page: "recording", id: "abc" });
   assert.deepEqual(parseRoute("#/speakers"), { page: "speakers" });
 });
+
+test("setup keeps its step, where to return, and a preselected chat provider", () => {
+  const route: Route = { page: "setup", step: "ai", returnTo: "ai", chat: "openrouter" };
+  assert.equal(formatRoute(route), "#/setup?step=ai&return=ai&chat=openrouter");
+  assert.deepEqual(parseRoute(formatRoute(route)), route);
+  assert.deepEqual(parseRoute("#/setup"), { page: "setup" });
+  assert.deepEqual(parseRoute("#/setup?step=nowhere&return=recording&chat=fax"), { page: "setup" });
+});
+
+test("settings sections and pipeline tabs can be linked to", () => {
+  assert.deepEqual(parseRoute(formatRoute({ page: "settings", section: "speech" })), { page: "settings", section: "speech" });
+  assert.deepEqual(parseRoute("#/settings?section=elsewhere"), { page: "settings" });
+  assert.equal(formatRoute({ page: "settings" }), "#/settings");
+  assert.deepEqual(parseRoute(formatRoute({ page: "pipeline", tab: "sources" })), { page: "pipeline", tab: "sources" });
+  assert.deepEqual(parseRoute("#/pipeline"), { page: "pipeline" });
+});

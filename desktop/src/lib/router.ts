@@ -1,4 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
+import type { ChatChoice, SetupStep } from "../setup/types.ts";
+
+export const SETTINGS_SECTIONS = ["appearance", "ai", "youtube", "speech", "library", "about"] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+export const PIPELINE_TABS = ["queue", "batch", "sources", "setup"] as const;
+export type PipelineTab = (typeof PIPELINE_TABS)[number];
+const SETUP_STEPS: SetupStep[] = ["library", "speech", "recordings", "ai", "look", "ready"];
+/** Pages that setup can return to when it was opened from somewhere else. */
+const RETURNS = ["library", "ai", "search", "settings"] as const;
+const CHATS: ChatChoice[] = ["chatgpt", "openrouter", "local", "custom"];
+const pick = <T extends string>(list: readonly T[], value: string | null): T | undefined =>
+  value != null && (list as readonly string[]).includes(value) ? (value as T) : undefined;
+/** Drop undefined fields so parsed routes compare equal to the ones they came from. */
+const defined = <T extends object>(value: T): T =>
+  Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 
 export type Route =
   | { page: "library" }
@@ -8,9 +23,10 @@ export type Route =
   | { page: "speakers"; id?: string }
   | { page: "notes" }
   | { page: "map" }
-  | { page: "pipeline" }
+  | { page: "pipeline"; tab?: PipelineTab }
   | { page: "ai" }
-  | { page: "settings" }
+  | { page: "settings"; section?: SettingsSection }
+  | { page: "setup"; step?: SetupStep; returnTo?: (typeof RETURNS)[number]; chat?: ChatChoice }
   | { page: "tools"; tab?: "extract" | "record" | "discover"; source?: string };
 export type Page = Route["page"];
 
@@ -37,11 +53,20 @@ export function parseRoute(hash: string): Route {
       return tail ? { page: "documents", id: decodeURIComponent(tail) } : { page: "documents" };
     case "speakers":
       return tail ? { page: "speakers", id: decodeURIComponent(tail) } : { page: "speakers" };
+    case "settings":
+      return defined({ page: "settings", section: pick(SETTINGS_SECTIONS, params.get("section")) });
+    case "pipeline":
+      return defined({ page: "pipeline", tab: pick(PIPELINE_TABS, params.get("tab")) });
+    case "setup":
+      return defined({
+        page: "setup",
+        step: pick(SETUP_STEPS, params.get("step")),
+        returnTo: pick(RETURNS, params.get("return")),
+        chat: pick(CHATS, params.get("chat")),
+      });
     case "notes":
     case "map":
-    case "pipeline":
     case "ai":
-    case "settings":
       return { page: head };
     default:
       return { page: "library" };
@@ -61,6 +86,17 @@ export function formatRoute(route: Route): string {
       return route.id ? `#/speakers/${encodeURIComponent(route.id)}` : "#/speakers";
     case "documents":
       return route.id ? `#/documents/${encodeURIComponent(route.id)}` : "#/documents";
+    case "settings":
+      return route.section ? `#/settings?section=${route.section}` : "#/settings";
+    case "pipeline":
+      return route.tab ? `#/pipeline?tab=${route.tab}` : "#/pipeline";
+    case "setup": {
+      const params = new URLSearchParams();
+      if (route.step) params.set("step", route.step);
+      if (route.returnTo) params.set("return", route.returnTo);
+      if (route.chat) params.set("chat", route.chat);
+      return "#/setup" + (params.size ? `?${params}` : "");
+    }
     default:
       return `#/${route.page}`;
   }

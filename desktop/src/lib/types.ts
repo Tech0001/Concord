@@ -126,7 +126,7 @@ export type Job = {
   message: string;
   created_at?: string;
 };
-export type SpeechSetupStatus = { status: string; message: string; details: string };
+export type SpeechSetupStatus = { status: string; message: string; details: string; phase?: string; done?: number; total?: number };
 export type Runtime = {
   managed?: boolean;
   ready: boolean;

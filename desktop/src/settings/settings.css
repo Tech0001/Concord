@@ -106,3 +106,13 @@
 .speech-setup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .speech-setup-error { color: var(--destructive); }
 .speech-setup-log { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; max-height: 220px; overflow: auto; padding: 10px; background: var(--muted); }
+
+.settings-anchor,
+.settings-section {
+  scroll-margin-top: calc(var(--topbar-h) + 12px);
+}
+.settings-section.is-linked,
+.settings-anchor.is-linked > * {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 55%, transparent);
+  transition: box-shadow 600ms var(--ease);
+}

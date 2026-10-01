@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scopeTweakcn, themeNameFromPath } from "./scope.ts";
+import { themeAccent, scopeTweakcn, themeNameFromPath } from "./scope.ts";
 
 const sample = `@import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
@@ -25,4 +25,10 @@ test("theme names come from file names; underscore files are ignored", () => {
   assert.equal(themeNameFromPath("./themes/lifeOS.css"), "lifeOS");
   assert.equal(themeNameFromPath("./themes/altar-invert.css"), "altar-invert");
   assert.equal(themeNameFromPath("./themes/_draft.css"), null);
+});
+
+test("a theme's accent color comes from its light primary token", () => {
+  const raw = ":root {\n  --background: oklch(1 0 0);\n  --primary: oklch(0.62 0.18 348.1);\n}\n.dark {\n  --primary: #ffffff;\n}";
+  assert.equal(themeAccent(raw), "oklch(0.62 0.18 348.1)");
+  assert.equal(themeAccent(".dark { --primary: red; }"), null);
 });

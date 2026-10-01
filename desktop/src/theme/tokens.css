@@ -42,6 +42,18 @@
   --font-reading: var(--font-sans);
   --reading-size: 14.5px;
 }
+:root[data-reading-size="s"] {
+  --reading-size: 14px;
+}
+:root[data-reading-size="l"] {
+  --reading-size: 17.5px;
+}
+:root[data-reading="sans"][data-reading-size="s"] {
+  --reading-size: 13.5px;
+}
+:root[data-reading="sans"][data-reading-size="l"] {
+  --reading-size: 16.5px;
+}
 @media (pointer: coarse) {
   :root {
     --control-h: 44px;

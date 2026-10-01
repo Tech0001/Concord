@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import type { Route } from "../lib/router.ts";
 import type { Category, Job, Note, Overview } from "../lib/types.ts";
+import type { SetupStatus } from "../setup/types.ts";
 
 export type AppContextValue = {
   category: Category;
@@ -20,7 +21,11 @@ export type AppContextValue = {
   openPalette: () => void;
   openActivity: () => void;
   addRecordings: () => Promise<void>;
-  importLegacy: (path?: string) => Promise<void>;
+  /** Resolves true when a library was imported. */
+  importLegacy: (path?: string) => Promise<boolean>;
+  /** Readiness for setup, the Library checklist and the sidebar; polled while downloads run. */
+  setup?: SetupStatus;
+  refreshSetup: () => Promise<void>;
   /** Title shown in the top bar; pages like the player set it and clear it (null) on unmount. */
   pageTitle: string | null;
   setPageTitle: (title: string | null) => void;

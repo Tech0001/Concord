@@ -431,3 +431,15 @@ fn speech_device_lives_in_the_pipeline_config() {
     assert!(set_device(root, "gpu-please").is_err());
     assert_eq!(device(root).unwrap(), "cpu");
 }
+#[test]
+fn files_added_during_setup_are_queued_for_transcription() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let file = root.join("new.m4a");
+    std::fs::write(&file, b"fixture").unwrap();
+    let added = import_and_queue(root, &c, &[file.to_string_lossy().into_owned()], "work", "auto").unwrap();
+    assert_eq!(added, 1);
+    let queued = db::rows(&db::open(root).unwrap(), "SELECT m.category,j.status FROM jobs j JOIN media m ON m.id=j.media_id WHERE m.path LIKE '%new.m4a'", []).unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!((queued[0]["category"].as_str(), queued[0]["status"].as_str()), (Some("work"), Some("queued")));
+}
