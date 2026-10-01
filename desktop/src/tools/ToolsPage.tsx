@@ -1,0 +1,47 @@
+import { AudioLines, Mic } from "lucide-react";
+import { useApp } from "../shell/AppContext.tsx";
+import { PageHeader } from "../ui/PageHeader.tsx";
+import { Segmented } from "../ui/Segmented.tsx";
+import { useTools } from "./ToolsContext.tsx";
+import { ExtractPanel } from "./ExtractPanel.tsx";
+import { RecorderPanel } from "./RecorderPanel.tsx";
+
+export function ToolsPage({
+  tab = "extract",
+  source,
+}: {
+  tab?: "extract" | "record";
+  source?: string;
+}) {
+  const { navigate } = useApp();
+  const { state, error } = useTools();
+  return (
+    <div className="tools-page">
+      <PageHeader
+        title="Tools"
+        meta="Extract audio or capture a voice note for your archive."
+      />
+      <Segmented
+        label="Media tools"
+        value={tab}
+        onChange={(tab) => navigate({ page: "tools", tab })}
+        options={[
+          { value: "extract", label: "Extract audio", icon: AudioLines },
+          { value: "record", label: "Voice recorder", icon: Mic },
+        ]}
+      />
+      {error && (
+        <p role="alert" className="field-error">
+          {error}
+        </p>
+      )}
+      {!state ? (
+        <p className="muted">Loading tools…</p>
+      ) : tab === "extract" ? (
+        <ExtractPanel source={source} />
+      ) : (
+        <RecorderPanel />
+      )}
+    </div>
+  );
+}

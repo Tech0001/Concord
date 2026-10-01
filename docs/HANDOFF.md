@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.14.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.15.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,47 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Media tools and recoverable voice capture (0.15.0 installed)
+
+Tools is a single navigation destination, with Extract audio and Voice recorder tabs. Extract
+is also reachable from Library/player menus with the current file preselected. It accepts local
+media independently of the library, copies AAC into M4A when possible or encodes AAC/MP3, uses
+the first audio stream, reports progress/results, and supports cancellation. Native file/save
+pickers and Show in folder are wired. Outputs use a temporary file plus atomic no-replace
+publication: existing source/output files cannot be overwritten, even by a collision during
+encoding. The export mutex blocks recording file changes while extraction is active. No new
+external dependencies or schema change.
+
+Linux voice capture uses FFmpeg's PulseAudio input, including PipeWire's Pulse compatibility
+server. pactl lists microphones when installed; the system-default input remains selectable.
+Capture starts only on the explicit Record action. The Rust worker writes 16 kHz mono PCM
+straight to a private WAV, periodically refreshing/syncing the header. A global recording
+indicator returns to Tools from other pages. Stop retains a playable draft; Save adds it to
+Voice notes with title, original capture date and Personal/Work category. Save & transcribe
+uses the existing local pipeline. Discard is explicitly confirmed and cannot delete a saved
+library recording. Drafts survive restart. A per-session journal and WAV-header repair recover
+interrupted capture. Linux parent-death signaling kills the microphone process on abrupt exit;
+normal close stops capture, extraction and range export. The stopped audio remains recoverable.
+
+Validation: 92 Rust tests, 41 TS tests, Clippy and frontend build. Actual WebKitGTK extraction,
+background capture across page navigation, draft audio playback, Library save/playback and
+confirmed discard passed using synthetic inputs only:
+`/tmp/concord-health-native-bo5hmrrk/native-test-result.json`. No microphone was opened.
+A second real-app test used SIGKILL during capture, verified the capture child stopped, then
+restarted and played/saved recovered WAV audio:
+`/tmp/concord-health-native-k7cb_vrf/native-test-result.json`. Run native-tools-smoke.js with
+prepare-health-review.py, or recorder-recovery-test.py after a debug native-review build.
+Test-tone capture is debug-only and additionally requires CONCORD_NEXT_TEST_SCRIPT.
+Desktop/phone screenshots checked under /tmp/concord-tools-screens.
+
+Live ASR preview while recording is not ported yet; transcription is available after saving.
+Other remaining work: Discover, player pop-out/gap skipping, ChatGPT sign-in, AI progress and
+cancellation, richer Markdown, final parity/install checks and platform expansion. No changes
+to the real archive's media or transcript contents were made by these tests.
+
+0.15.0 is installed beside Electron; schema 10 is unchanged. Backup:
+`~/.local/share/concord-next/backups/before-0.15.0-20261001-002434.db`.
 
 ## Recording file actions and relinking (0.14.0 installed)
 

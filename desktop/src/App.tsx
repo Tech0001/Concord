@@ -1,3 +1,5 @@
+import { ToolsPage } from "./tools/ToolsPage.tsx";
+import { ToolsProvider } from "./tools/ToolsContext.tsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./shell/shell.css";
 import { Library } from "lucide-react";
@@ -32,7 +34,7 @@ import { SettingsPage } from "./settings/SettingsPage.tsx";
 export default function App() {
   return (
     <ToastProvider>
-      <Shell />
+      <ToolsProvider><Shell /></ToolsProvider>
     </ToastProvider>
   );
 }
@@ -216,6 +218,9 @@ function Shell() {
       break;
     case "map":
       page = <MapPage />;
+      break;
+    case "tools":
+      page = <ToolsPage tab={route.tab} source={route.source}/>;
       break;
     case "pipeline":
       page = <PipelinePage />;

@@ -1,3 +1,4 @@
+import type { ToolsState } from "../tools/types.ts";
 import type { FileAction, RecordingFileInfo } from "../library/RecordingFileDialog.tsx";
 import type { SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
 import type { DocumentsState, DocumentSync } from "../documents/types.ts";
@@ -76,6 +77,15 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const MEDIA_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "ogg", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 
 export const api = {
+  toolsState: () => call<ToolsState>("tools_state"),
+  toolsExtract: (source:string,destination:string,format:string) => call<void>("tools_extract",{source,destination,format}),
+  toolsCancelExtract: () => call<void>("tools_cancel_extract"),
+  recorderInputs: () => call<{inputs:{id:string;name:string}[];warning:string}>("recorder_inputs"),
+  recorderStart: (input:string,title:string,category:string) => call<string>("recorder_start",{input,title,category}),
+  recorderStop: () => call<void>("recorder_stop"),
+  recorderPreview: (id:string) => call<string>("recorder_preview",{id}),
+  recorderDiscard: (id:string) => call<void>("recorder_discard",{id}),
+  recorderSave: (id:string,title:string,category:string,transcribe:boolean,device:string) => call<{id:string;warning:string}>("recorder_save",{id,title,category,transcribe,device}),
   recordingFileInfo: (id:string) => call<RecordingFileInfo>("recording_file_info",{id}),
   recordingFileAction: (id:string,action:Exclude<FileAction,"title">,value:string) => call<RecordingFileInfo>("recording_file_action",{id,action,value}),
   setRecordingTitle: (id:string,title:string) => call<void>("set_recording_title",{id,title}),

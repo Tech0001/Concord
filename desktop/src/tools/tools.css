@@ -1,0 +1,138 @@
+.tools-page {
+  display: grid;
+  gap: 20px;
+  max-width: 1000px;
+  margin-inline: auto;
+}
+.tools-page > .segmented {
+  justify-self: start;
+}
+.tool-panel {
+  display: grid;
+  gap: 20px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  background: var(--card);
+  min-width: 0;
+}
+.tool-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.tool-heading > svg {
+  color: var(--primary);
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+.tool-heading h2,
+.tool-heading h3,
+.voice-drafts h2 {
+  margin: 0;
+  font-size: var(--text-xl);
+}
+.tool-heading p {
+  color: var(--muted-foreground);
+  margin: 5px 0 0;
+}
+.tool-panel small {
+  color: var(--muted-foreground);
+}
+.tool-path {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+.tool-path input,
+.tool-path > .select {
+  flex: 1;
+  min-width: 0;
+}
+.tool-panel .field input {
+  width: 100%;
+}
+.tool-two-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(120px, 1fr);
+  gap: 16px;
+}
+.tool-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.tool-actions > small {
+  margin-left: auto;
+}
+.tool-result {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+}
+.tool-result strong {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.tool-result .btn {
+  justify-self: start;
+}
+.tool-result progress {
+  width: 100%;
+  accent-color: var(--primary);
+}
+.tool-filename,
+.tool-result .field-error {
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.recorder-live {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.recorder-clock {
+  font-size: 32px;
+}
+.recorder-live meter {
+  width: 100%;
+  height: 12px;
+  accent-color: var(--primary);
+}
+.recording-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--destructive);
+}
+.recording-indicator {
+  color: var(--destructive);
+}
+.voice-drafts {
+  display: grid;
+  gap: 14px;
+}
+.voice-drafts > p {
+  margin: -5px 0 0;
+}
+.voice-draft audio {
+  width: 100%;
+}
+@media (max-width: 640px) {
+  .tool-panel {
+    padding: 16px;
+    gap: 16px;
+  }
+  .tool-two-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tool-actions > small {
+    width: 100%;
+    margin-left: 0;
+  }
+}

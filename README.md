@@ -23,6 +23,7 @@ transcript folder and can run alongside it. Full Electron parity is still in pro
 - Markdown document folders, live sync, local images/links, categories, and research anchors.
 - YouTube subscriptions and local source folders, download setup, persistent processing
   queues, delayed retries, and batch re-transcription that preserves existing transcripts.
+- Tools for standalone M4A/MP3 extraction and recoverable Linux voice recording.
 - Status, archive audits and repairs, backups/restore, activity history, and runtime logs.
 
 ## Install and prepare speech
@@ -99,14 +100,21 @@ Tauri IPC. A private loopback media server exposes only the opened recording thr
 unguessable session URL, supporting WebKitGTK seeking without a public listening port.
 Local semantic search uses a private app-managed llama.cpp service.
 
+Voice capture uses the selected Linux microphone through FFmpeg/PulseAudio (including
+PipeWire’s PulseAudio compatibility service). It starts only when you press Record and keeps
+running if you change pages. Captured audio and unsaved drafts live under `voice-recordings/`;
+interrupted captures are recovered on restart. Saving adds them to the Voice notes collection,
+with optional local transcription. `pactl` enables the microphone picker; the system default
+input can be used when the input list is unavailable.
+
 Native code: `desktop/src-tauri/`. Interface: `desktop/src/`. Electron reference:
 `client/`, `server/`, `electron/`. See [legacy build instructions](docs/legacy-build.md),
 [Nemotron notes](docs/nemo-native.md), and the [development handoff](docs/HANDOFF.md).
 
 ## Remaining work
 
-Remaining parity includes saved library views and file actions, recorder/Extract/Discover
-tools, player refinements, search refinements, account-login chat, and broad installation
+Remaining parity includes Discover, live transcription preview for voice recording, player
+refinements, account-login chat, AI job improvements, richer Markdown and broad installation
 validation. macOS follows Linux, then Windows. Watchers and the standalone Compare screen
 are intentionally omitted. Eleven-speaker recordings have been exercised; a recording with
 sixteen distinct speakers still needs validation.

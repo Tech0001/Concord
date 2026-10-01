@@ -10,7 +10,8 @@ export type Route =
   | { page: "map" }
   | { page: "pipeline" }
   | { page: "ai" }
-  | { page: "settings" };
+  | { page: "settings" }
+  | { page: "tools"; tab?: "extract" | "record"; source?: string };
 export type Page = Route["page"];
 
 export function parseRoute(hash: string): Route {
@@ -28,6 +29,8 @@ export function parseRoute(hash: string): Route {
       const at = Number(params.get("t"));
       return params.has("t") && Number.isFinite(at) && at >= 0 ? { page: "recording", id, at } : { page: "recording", id };
     }
+    case "tools":
+      return {page:"tools",tab:params.get("tab")==="record"?"record":"extract",source:params.get("source")??undefined};
     case "search":
       return { page: "search", q: params.get("q") ?? "" };
     case "documents":
@@ -49,6 +52,9 @@ export function formatRoute(route: Route): string {
   switch (route.page) {
     case "recording":
       return `#/recording/${encodeURIComponent(route.id)}${route.at != null ? `?t=${Math.round(route.at * 10) / 10}` : ""}`;
+    case "tools": {
+      const params=new URLSearchParams();if(route.tab)params.set("tab",route.tab);if(route.source)params.set("source",route.source);return "#/tools"+(params.size?"?"+params:"");
+    }
     case "search":
       return route.q ? `#/search?${new URLSearchParams({ q: route.q })}` : "#/search";
     case "speakers":

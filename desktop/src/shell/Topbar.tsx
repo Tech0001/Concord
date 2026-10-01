@@ -1,3 +1,4 @@
+import { ToolIndicator } from "../tools/ToolsContext.tsx";
 import { Plus, Search } from "lucide-react";
 import { PHONE, useMediaQuery } from "../lib/media-query.ts";
 import { Button, IconButton } from "../ui/Button.tsx";
@@ -21,6 +22,7 @@ export function Topbar({ onAdd }: { onAdd: () => void }) {
         <Brand compact />
         <h2 className="topbar-title">{title}</h2>
         {scoped && <Select size="sm" label="Archive category" value={category} onChange={setCategory} options={categories}/> }
+        <ToolIndicator/>
         <IconButton label="Search or jump to" icon={Search} onClick={openPalette} />
         {route.page === "library" && <IconButton label="Add recordings" icon={Plus} onClick={onAdd} />}
       </header>
@@ -33,6 +35,7 @@ export function Topbar({ onAdd }: { onAdd: () => void }) {
         <Kbd>Ctrl K</Kbd>
       </button>
       <div className="topbar-actions">
+        <ToolIndicator/>
         {scoped && <Segmented label="Archive category" value={category} onChange={setCategory} options={categories}/>}
         <Button variant="primary" icon={Plus} onClick={onAdd}>
           Add recordings

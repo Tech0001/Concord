@@ -187,7 +187,7 @@ fn renamed(source: &Path, stem: &str) -> Result<PathBuf> {
     Ok(source.with_file_name(name))
 }
 #[cfg(target_os = "linux")]
-fn rename_no_replace(source: &Path, target: &Path) -> Result<()> {
+pub(crate) fn rename_no_replace(source: &Path, target: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     let source = CString::new(source.as_os_str().as_bytes())?;
     let target = CString::new(target.as_os_str().as_bytes())?;
@@ -207,7 +207,7 @@ fn rename_no_replace(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 #[cfg(not(target_os = "linux"))]
-fn rename_no_replace(_source: &Path, _target: &Path) -> Result<()> {
+pub(crate) fn rename_no_replace(_source: &Path, _target: &Path) -> Result<()> {
     anyhow::bail!("File renaming is currently available on Linux")
 }
 #[cfg(target_os = "linux")]

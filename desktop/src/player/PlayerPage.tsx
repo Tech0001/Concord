@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { AlertCircle, Circle, CircleCheck, CircleDot, Copy, FolderOpen, Keyboard, LoaderCircle } from "lucide-react";
+import { AlertCircle, AudioLines, Circle, CircleCheck, CircleDot, Copy, FolderOpen, Keyboard, LoaderCircle } from "lucide-react";
 import { api } from "../lib/ipc.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { clampRange, findMatches, indexAt, linesIn, setIn, setOut, spanRange, speakerTurns, type Range } from "../lib/range.ts";
@@ -403,6 +403,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   const openFileAction = (action:FileAction) => { mediaElement?.pause(); setFileAction(action); };
   const menu: MenuEntry[] = [
     ...fileMenu(media, openFileAction),
+    {label:"Extract audio",icon:AudioLines,disabled:!media.path||media.status==="archived",onSelect:()=>{if(media.path){mediaElement?.pause();navigate({page:"tools",tab:"extract",source:media.path});}}},
     { kind: "label", label: "Review" },
     ...(Object.keys(REVIEW_LABELS) as ReviewState[]).map((s) => ({
       label: REVIEW_LABELS[s],

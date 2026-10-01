@@ -13,6 +13,7 @@ export function Select<T extends string>({
   label,
   size = "md",
   className,
+  disabled,
 }: {
   value: T;
   onChange: (v: T) => void;
@@ -20,9 +21,10 @@ export function Select<T extends string>({
   label: string;
   size?: "sm" | "md";
   className?: string;
+  disabled?: boolean;
 }) {
   return (
-    <S.Root value={value || EMPTY} onValueChange={(v) => onChange((v === EMPTY ? "" : v) as T)}>
+    <S.Root disabled={disabled} value={value || EMPTY} onValueChange={(v) => onChange((v === EMPTY ? "" : v) as T)}>
       <S.Trigger className={cx("select", `select-${size}`, className)} aria-label={label}>
         <S.Value />
         <S.Icon className="select-icon">

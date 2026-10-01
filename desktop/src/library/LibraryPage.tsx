@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Library } from "lucide-react";
+import { ArrowLeft, ArrowRight, AudioLines, Library } from "lucide-react";
 import { api } from "../lib/ipc.ts";
 import { count } from "../lib/format.ts";
 import { copyText } from "../lib/clipboard.ts";
@@ -113,7 +113,7 @@ export function LibraryPage() {
           .then(() => toast.success("File path copied"))
           .catch(toast.error),
       transcribeDisabled: jobs.some(j => j.media_id === m.id && ["running", "queued", "retry"].includes(j.status)),
-    }), ...fileMenu(m, action => setFileAction({media:m,action}))];
+    }), ...fileMenu(m, action => setFileAction({media:m,action})), {label:"Extract audio",icon:AudioLines,disabled:!m.path||m.status==="archived",onSelect:()=>{if(m.path)navigate({page:"tools",tab:"extract",source:m.path});}}];
 
   if (overview?.media === 0) return <Welcome />;
   const items = data?.items ?? [];
