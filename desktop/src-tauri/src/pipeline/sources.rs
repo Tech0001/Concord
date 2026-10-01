@@ -323,10 +323,13 @@ pub fn start_filtered(root: PathBuf, control: Arc<Control>, id: Option<String>, 
         !control.closing.load(Ordering::SeqCst),
         "Concord is closing"
     );
+    // Serialize check startup with filesystem changes and queue transitions.
+    let gate=control.gate.lock().map_err(|_|anyhow::anyhow!("Processing lock interrupted"))?;
     if control.checking.swap(true, Ordering::SeqCst) {
         anyhow::bail!("A source check is already running");
     }
     control.scanner.begin();
+    drop(gate);
     std::thread::spawn(move || {
         let result = (|| -> Result<()> {
             let sources = if let Some(id) = id {

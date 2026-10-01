@@ -14,6 +14,7 @@ import { Select } from "../ui/Select.tsx";
 import { useToast } from "../ui/Toasts.tsx";
 import { useApp } from "../shell/AppContext.tsx";
 import { DEFAULT_FILTER, normalizeFilter } from "./model.ts";
+import { RecordingFileDialog, fileMenu, type FileAction } from "./RecordingFileDialog.tsx";
 import { SavedViews } from "./SavedViews.tsx";
 import { recordingMenu } from "./recordingMenu.ts";
 import { RecordingCard } from "./RecordingCard.tsx";
@@ -40,6 +41,7 @@ export function LibraryPage() {
   }, [category, setFilter]);
   const [view, setView] = useStoredState<"grid" | "list">("library-view-v1", "grid", (v) => v === "grid" || v === "list");
   const [data, setData] = useState<Page>();
+  const [fileAction, setFileAction] = useState<{media:Media;action:FileAction}>();
   const [loading, setLoading] = useState(true);
   const restored = useRef(false);
 
@@ -98,7 +100,7 @@ export function LibraryPage() {
     }
   };
   const menuFor = (m: Media) => () =>
-    recordingMenu(m, {
+    [...recordingMenu(m, {
       open: (at) => navigate({ page: "recording", id: m.id, ...(at != null ? { at } : {}) }),
       transcribe: () => void transcribe(m.id),
       setStarred: () => void star(m),
@@ -111,7 +113,7 @@ export function LibraryPage() {
           .then(() => toast.success("File path copied"))
           .catch(toast.error),
       transcribeDisabled: jobs.some(j => j.media_id === m.id && ["running", "queued", "retry"].includes(j.status)),
-    });
+    }), ...fileMenu(m, action => setFileAction({media:m,action}))];
 
   if (overview?.media === 0) return <Welcome />;
   const items = data?.items ?? [];
@@ -122,6 +124,7 @@ export function LibraryPage() {
   const sortBy = (sort: LibrarySort) => update({ sort });
   return (
     <>
+      {fileAction && <RecordingFileDialog media={fileAction.media} action={fileAction.action} onClose={()=>setFileAction(undefined)} onSaved={refresh}/>}
       <PageHeader
         title="Library"
         meta={

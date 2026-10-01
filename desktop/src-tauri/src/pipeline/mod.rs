@@ -2,7 +2,7 @@
 pub mod download;
 mod queue;
 pub mod sources;
-mod subprocess;
+pub(crate) mod subprocess;
 #[cfg(test)]
 mod tests;
 mod worker;

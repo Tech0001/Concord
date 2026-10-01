@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.13.0**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.14.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,44 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Recording file actions and relinking (0.14.0 installed)
+
+Library and player menus now edit display titles, rename files, locate moved media and move
+media to the Linux desktop Trash. Filenames retain their extension; display titles are edited
+separately. UTF-8 filename bytes are bounded, separators/control/reserved characters rejected,
+and Linux renameat2(RENAME_NOREPLACE) prevents overwriting an existing destination. Shared
+physical paths are disclosed and updated together. Queued/active processing and ongoing source
+checks block file changes; scan startup shares the same lock and active exports also block
+file actions. File actions preserve transcripts, search passages, notes and speaker
+assignments. Trashed items stay in the archive as Media removed; audits exclude their deliberately
+unavailable media, and transcription is disabled until relinked.
+
+Filesystem rename/Trash is journaled in the settings table before execution. Restart recovery
+publishes completed operations or discards actions that never moved the source; ambiguous paths
+remain visible as an archive-health error with details in Terminal. Recovery never moves files.
+Trash uses the existing Gio/GLib stack, with no permanent-delete fallback. Relinking checks
+sampled file fingerprints when available and a compatible FFprobe duration, updates all shared
+paths, retains evidence and discards derived waveform/thumbnail caches. Copies are selected
+explicitly; without an old fingerprint, duration alone cannot prove identical content.
+
+Player file actions pause playback, reload the new source and restore its timestamp. Missing
+media has a direct Locate media file button. A new source now clears prior decoder errors even
+when the old media element has been removed, preventing a stuck error panel after relinking.
+
+88 Rust tests and 41 TS tests pass, plus Clippy/frontend build. Native WebKitGTK passed title and
+file renaming, shared-path updates, timestamp retention, actual Gio Trash and relinking/resumed
+playback: /tmp/concord-health-native-eht6fnk8/native-test-result.json. The fixture used only
+synthetic recordings and a private XDG Trash under ~/.cache/concord-file-review-7i_t0pru;
+no real archive media was renamed, trashed or relinked. Reproduce with prepare-file-review.py
+and native-file-smoke.js (set XDG_DATA_HOME from file-fixture.json). Unit tests also exercise
+restart recovery and collision/fingerprint/active-queue rejection. Desktop/phone dialogs checked.
+These native filesystem actions are Linux-only for now; macOS/Windows remain later targets.
+No schema migration. Remaining work includes recorder/Extract/Discover, player refinements,
+ChatGPT sign-in, AI job improvements, richer Markdown and final parity/installation checks.
+
+0.14.0 is installed and starts cleanly with schema 10 and the existing archive retained.
+Backup: `~/.local/share/concord-next/backups/before-0.14.0-20260930-235933.db`.
 
 ## Library views, categories and processing status (0.13.0 installed)
 

@@ -64,7 +64,7 @@ export function PlayerHeader({
           <Button
             variant={media.transcript ? "secondary" : "primary"}
             icon={Sparkles}
-            disabled={busy || queued || (!media.path && !media.url)}
+            disabled={busy || queued || media.status === "archived" || (!media.path && !media.url)}
             onClick={() => void transcribe(media.id)}
           >
             {busy ? "Processing…" : queued ? "Queued" : !media.path && media.url ? "Download & transcribe" : media.transcript ? "Re-transcribe" : "Transcribe"}

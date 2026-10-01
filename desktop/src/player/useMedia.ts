@@ -36,6 +36,10 @@ export function useMedia(el: HTMLMediaElement | null, time: TimeStore, fallbackD
 
   useEffect(() => setDuration((d) => d || fallbackDuration), [fallbackDuration]);
 
+  // A failed media element is removed from the stage. A newly located file must
+  // clear that error even before its replacement element has mounted.
+  useEffect(() => { setPlaying(false); setReady(false); setError(""); }, [src, time]);
+
   useEffect(() => {
     if (!el || !src) return;
     setPlaying(false);

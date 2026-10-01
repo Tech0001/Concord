@@ -1,6 +1,6 @@
 [package]
 name = "concord-next"
-version = "0.13.0"
+version = "0.14.0"
 description = "A local research archive for spoken-word media"
 authors = ["Concord contributors"]
 license = "MIT"
@@ -38,3 +38,6 @@ tempfile = "3"
 strip = true
 lto = "thin"
 codegen-units = 8
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = "0.18.4"

@@ -271,13 +271,13 @@ pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
     let cte = "WITH latest_job AS (
       SELECT media_id,status,row_number() OVER (PARTITION BY media_id ORDER BY rowid DESC) AS position FROM jobs
     ), library_media AS (
-      SELECT m.*, CASE j.status WHEN 'running' THEN 'processing' WHEN 'queued' THEN 'pending'
+      SELECT m.*, CASE WHEN m.status='archived' THEN 'archived' ELSE CASE j.status WHEN 'running' THEN 'processing' WHEN 'queued' THEN 'pending'
         WHEN 'retry' THEN 'pending' WHEN 'waiting_live' THEN 'live' WHEN 'failed' THEN 'failed'
         WHEN 'cancelled' THEN 'cancelled' ELSE CASE m.status
           WHEN 'live' THEN 'live' WHEN 'waiting_live' THEN 'live' WHEN 'failed' THEN 'failed'
           WHEN 'archived' THEN 'archived' WHEN 'pending' THEN 'pending' WHEN 'queued' THEN 'pending'
           WHEN 'cancelled' THEN 'cancelled' ELSE CASE WHEN m.transcript IS NOT NULL THEN 'complete' ELSE 'ready' END END
-        END AS processing_status FROM media m LEFT JOIN latest_job j ON j.media_id=m.id AND j.position=1
+        END END AS processing_status FROM media m LEFT JOIN latest_job j ON j.media_id=m.id AND j.position=1
     )";
     let filter = format!(
         "(?1 = '' OR m.title LIKE ?2 ESCAPE '\\' OR m.channel LIKE ?2 ESCAPE '\\' OR coalesce(m.path,'') LIKE ?2 ESCAPE '\\')

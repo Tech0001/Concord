@@ -184,6 +184,9 @@ pub fn audit(root: &Path) -> Result<Value> {
     let db = db::open(root)?;
     let media = rows(root)?;
     let mut issues = Vec::new();
+    if db.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key='pending-media-file-action')",[],|r|r.get::<_,bool>(0))? {
+        issue(&mut issues,"pending-file-action",("files","error"),"Interrupted recording file action","A rename or Trash action needs recovery. Restart Concord, then check Terminal for the affected paths if this remains.",vec![Item{id:"file-action".into(),title:"Recording file action".into(),kind:"file".into(),detail:"See Terminal for recovery paths".into()}],None);
+    }
     let config = ai::config::read(root)?;
     let signature = config.embedding.signature();
     let fts: HashSet<String> = {
@@ -219,7 +222,7 @@ pub fn audit(root: &Path) -> Result<Value> {
         let id = strv(m, "id");
         let path = Path::new(strv(m, "path"));
         let transcript = Path::new(strv(m, "transcript"));
-        if !path.as_os_str().is_empty() && !path.is_file() {
+        if m["status"] != "archived" && !path.as_os_str().is_empty() && !path.is_file() {
             missing_media.push(item(m, "recording", strv(m, "path")));
         }
         if m["status"] == "complete" && !transcript.is_file() {

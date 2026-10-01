@@ -1,3 +1,4 @@
+import type { FileAction, RecordingFileInfo } from "../library/RecordingFileDialog.tsx";
 import type { SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
 import type { DocumentsState, DocumentSync } from "../documents/types.ts";
 import type { ArchiveStatus, Audit, BackupValidation, LogEntry, MaintenanceJob } from "../health/types.ts";
@@ -75,6 +76,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const MEDIA_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "ogg", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 
 export const api = {
+  recordingFileInfo: (id:string) => call<RecordingFileInfo>("recording_file_info",{id}),
+  recordingFileAction: (id:string,action:Exclude<FileAction,"title">,value:string) => call<RecordingFileInfo>("recording_file_action",{id,action,value}),
+  setRecordingTitle: (id:string,title:string) => call<void>("set_recording_title",{id,title}),
+  pickRecordingFile: async () => (await transport.pickFiles({title:"Locate recording file",name:"Audio and video",extensions:MEDIA_EXTENSIONS,multiple:false}))[0] ?? null,
   setCategory: (id:string,category:"personal"|"work") => call<void>("set_category",{id,category}),
   pipelineSaveSource: (source: SourceInput) => call<string>("pipeline_save_source", { source }),
   pipelineRemoveSource: (id: string) => call<void>("pipeline_remove_source", { id }),

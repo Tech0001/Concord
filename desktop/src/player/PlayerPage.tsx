@@ -13,6 +13,7 @@ import { Empty } from "../ui/Empty.tsx";
 import type { MenuEntry } from "../ui/Menu.tsx";
 import { Segmented } from "../ui/Segmented.tsx";
 import { errorMessage, useToast } from "../ui/Toasts.tsx";
+import { RecordingFileDialog, fileMenu, type FileAction } from "../library/RecordingFileDialog.tsx";
 import { REVIEW_LABELS } from "../library/recordingMenu.ts";
 import { useApp } from "../shell/AppContext.tsx";
 import { clock } from "../lib/format.ts";
@@ -75,6 +76,9 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   const [starred, setStarred] = useState(false);
   const [review, setReview] = useState<ReviewState>("unreviewed");
   const [source, setSource] = useState("");
+  const [fileAction, setFileAction] = useState<FileAction>();
+  const [fileRevision, setFileRevision] = useState(0);
+  const resumeFile = useRef<{source:string;at:number} | null>(null);
   const [sourceError, setSourceError] = useState("");
   const [peaks, setPeaks] = useState<number[] | null>(null);
   const [follow, setFollow] = useState(true);
@@ -124,7 +128,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
     return () => {
       alive = false;
     };
-  }, [id]);
+  }, [id, fileRevision]);
   const kind = data?.media.kind;
   useEffect(() => {
     if (kind !== "audio") {
@@ -139,7 +143,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
     return () => {
       alive = false;
     };
-  }, [id, kind]);
+  }, [id, kind, fileRevision]);
   useEffect(() => {
     if (!data) return;
     setPageTitle(data.media.title);
@@ -151,6 +155,9 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   const requestedAt = useRef(at);
   useEffect(() => {
     if (!controls.ready || !data) return;
+    if (resumeFile.current && source && source !== resumeFile.current.source) {
+      controls.seek(resumeFile.current.at);resumeFile.current=null;
+    }
     if (started.current !== id) {
       started.current = id;
       requestedAt.current = at;
@@ -159,7 +166,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       requestedAt.current = at;
       if (at !== undefined) controls.seek(at);
     }
-  }, [controls, data, id, at]);
+  }, [controls, data, id, at, source]);
   const onSaveFail = useCallback((e: unknown) => toast.error(`Couldn't save your place in this recording: ${errorMessage(e)}`), [toast]);
   usePositionSaver(id, time, controls.playing, controls.ready, onSaveFail);
 
@@ -393,7 +400,9 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       toast.error(e);
     }
   };
+  const openFileAction = (action:FileAction) => { mediaElement?.pause(); setFileAction(action); };
   const menu: MenuEntry[] = [
+    ...fileMenu(media, openFileAction),
     { kind: "label", label: "Review" },
     ...(Object.keys(REVIEW_LABELS) as ReviewState[]).map((s) => ({
       label: REVIEW_LABELS[s],
@@ -506,11 +515,13 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   );
   return (
     <div className="player">
+      {fileAction && <RecordingFileDialog media={media} action={fileAction} onClose={()=>setFileAction(undefined)} onSaved={action=>{refresh();if(action!=="title"){resumeFile.current={source,at:time.get()};setFileRevision(v=>v+1);}}}/>}
       <PlayerHeader recording={data} starred={starred} onStar={() => void star()} menu={menu} />
       <SplitLayout>
         <section className="player-media" aria-label="Playback">
           <div className="player-sticky">
             <MediaStage media={media} source={source} sourceError={sourceError} controls={controls} mediaRef={attachMedia} />
+            {sourceError && <Button onClick={()=>openFileAction("relink")}>Locate media file</Button>}
             <Transport controls={controls} time={time} onShortcuts={() => setShortcutsOpen(true)} />
             <Timeline
               duration={controls.duration}

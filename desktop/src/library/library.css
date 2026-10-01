@@ -514,3 +514,8 @@
 .saved-views-list > div { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .saved-views-list > div > button:first-child { flex: 1; text-align: left; min-width: 0; overflow-wrap: anywhere; }
 .saved-views-list small { display: block; color: var(--muted-foreground); }
+
+.recording-file-form { display: grid; gap: 16px; }
+.recording-file-form p { margin: 0; line-height: 1.6; }
+.recording-file-path { padding: 10px; border: 1px solid var(--border); border-radius: var(--r-2); overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--text-sm); }
+.recording-file-form small { color: var(--muted-foreground); }
