@@ -10,12 +10,16 @@ export function MediaStage({
   sourceError,
   controls,
   mediaRef,
+  detached,
+  onReturn,
 }: {
   media: Media;
   source: string;
   sourceError: string;
   controls: MediaControls;
   mediaRef: Ref<HTMLMediaElement>;
+  detached?: boolean;
+  onReturn?: () => void;
 }) {
   const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => {
@@ -46,7 +50,7 @@ export function MediaStage({
       </div>
     );
   return (
-    <div className="media-stage is-video">
+    <div className={`media-stage is-video${detached ? " is-detached" : ""}`}>
       <video
         ref={mediaRef as Ref<HTMLVideoElement>}
         src={source || undefined}
@@ -60,7 +64,8 @@ export function MediaStage({
           else void el.requestFullscreen?.();
         }}
       />
-      {!controls.playing && source && (
+      {detached && <div className="detached-placeholder"><p>Video is in its own window.</p><button type="button" className="btn btn-secondary btn-sm" onClick={onReturn}>Return video here</button></div>}
+      {!detached && !controls.playing && source && (
         <button type="button" className="video-play" aria-label="Play" onClick={() => controls.play()}>
           <Play size={22} fill="currentColor" />
         </button>

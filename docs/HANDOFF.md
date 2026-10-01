@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.17.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.18.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,48 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Native pop-out video and transcript-gap skipping (0.18.0 installed)
+
+Video can move into a separate resizable Tauri window, with its own seek bar, transport,
+volume/speed controls and Return action. The original decoder pauses; main-window transport,
+timestamp clicks, transcript following and selected-range previews control the pop-out.
+It keeps playing while browsing other pages. Starting another recording pauses it first.
+Returning restores position, volume, speed, mute and playing/paused state. The window close
+path requests a final decoder snapshot, with a two-second close deadline if the webview stops
+responding. Closing Concord's main window exits the whole app rather than leaving audio behind.
+There is one pop-out at a time. Always-on-top is requested; desktop-compositor behavior varies.
+
+Playback's loopback registry now has independent main, pop-out and recorder-preview slots.
+Changing the main recording revokes only its own prior URL. Closing a pop-out revokes that slot.
+Each URL still grants one exact file, with random tokens; no directory serving. File rename/
+Trash/relink is blocked while a pop-out is open, preventing its source changing under playback.
+
+The optional, initially-off Skip transcript gaps control restores Electron's gap-skipping idea
+with a precise label. It skips gaps over 1.25 seconds, which can contain untranscribed speech;
+it is not acoustic silence detection. Overlapping speaker intervals are merged before looking
+for a gap. Pop-outs keep skipping while the main window browses elsewhere. Range previews
+suspend gap skipping, and leaving a range preview stops that preview instead of continuing it
+without its boundaries.
+
+Validation: 104 Rust tests, 44 TS tests, Clippy and frontend build. Playback HTTP tests cover
+independent registration and revocation. Existing player regressions pass for resume, timestamp
+seeking, text ranges, range stop/loop, manual scrolling and saved position. Actual two-window
+WebKitGTK tests pass opening/pausing, main transport and timestamp seeking, range playback
+through a gap, gap skipping across navigation, source changes, another recording taking over,
+returning and paused return, plus file-action guards:
+`/tmp/concord-health-native-_lzdy82c/native-test-result.json`. Reproduce with
+`desktop/scripts/native-popout-test.py`; media/audio are synthetic and no archive files are
+changed. Compact/phone layouts checked in `/tmp/concord-player-018-screens`.
+
+Remaining: live recorder transcription preview, ChatGPT sign-in, optional post-transcription
+AI actions, Markdown edge cases, final parity/installation checks and platform expansion.
+Watchers and Compare remain intentionally absent. The existing Markdown renderer matches the
+Electron feature set; tables/footnotes/embedded HTML were also absent there, so richer syntax is
+an enhancement rather than an Electron parity requirement.
+
+0.18.0 is installed beside Electron; schema 11 remains unchanged. Backup:
+`~/.local/share/concord-next/backups/before-0.18.0-20261001-012627.db`.
 
 ## Cancellable recording summaries (0.17.0 installed)
 

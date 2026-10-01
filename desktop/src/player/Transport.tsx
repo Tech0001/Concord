@@ -15,16 +15,16 @@ function Clock({ time, duration }: { time: TimeStore; duration: number }) {
   );
 }
 
-export function Transport({ controls, time, onShortcuts }: { controls: MediaControls; time: TimeStore; onShortcuts: () => void }) {
+export function Transport({ controls, time, onShortcuts }: { controls: MediaControls; time: TimeStore; onShortcuts?: () => void }) {
   const phone = useMediaQuery(PHONE);
   const rateLabel = `${controls.rate}×`;
   return (
     <div className="transport">
-      <button type="button" className="transport-play" aria-label={controls.playing ? "Pause" : "Play"} onClick={() => controls.toggle()}>
+      <button type="button" className="transport-play" disabled={!controls.ready} aria-label={controls.playing ? "Pause" : "Play"} onClick={() => controls.toggle()}>
         {controls.playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
       </button>
-      <IconButton label="Back 10 seconds" icon={RotateCcw} onClick={() => controls.skip(-10)} />
-      <IconButton label="Forward 10 seconds" icon={RotateCw} onClick={() => controls.skip(10)} />
+      <IconButton label="Back 10 seconds" icon={RotateCcw} disabled={!controls.ready} onClick={() => controls.skip(-10)} />
+      <IconButton label="Forward 10 seconds" icon={RotateCw} disabled={!controls.ready} onClick={() => controls.skip(10)} />
       <Clock time={time} duration={controls.duration} />
       <span className="transport-spacer" />
       <Menu
@@ -49,7 +49,7 @@ export function Transport({ controls, time, onShortcuts }: { controls: MediaCont
           onChange={(e) => controls.setVolume(Number(e.target.value))}
         />
       )}
-      {!phone && <IconButton label="Keyboard shortcuts" icon={Keyboard} onClick={onShortcuts} />}
+      {!phone && onShortcuts && <IconButton label="Keyboard shortcuts" icon={Keyboard} onClick={onShortcuts} />}
     </div>
   );
 }

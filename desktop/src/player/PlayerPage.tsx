@@ -1,5 +1,8 @@
+import { usePopoutControls } from "./usePopoutControls.ts";
+import { useStoredState } from "../lib/storage.ts";
+import { nextAfterGap, speechIntervals } from "./gaps.ts";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { AlertCircle, AudioLines, Circle, CircleCheck, CircleDot, Copy, FolderOpen, Keyboard, LoaderCircle } from "lucide-react";
+import { AlertCircle, AudioLines, Circle, CircleCheck, CircleDot, Copy, FolderOpen, Keyboard, LoaderCircle, PictureInPicture2, FastForward } from "lucide-react";
 import { api } from "../lib/ipc.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { clampRange, findMatches, indexAt, linesIn, setIn, setOut, spanRange, speakerTurns, type Range } from "../lib/range.ts";
@@ -150,7 +153,10 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
     return () => setPageTitle(null);
   }, [data, setPageTitle]);
 
-  const controls = useMedia(mediaElement, time, data?.media.duration ?? 0, source);
+  const localControls = useMedia(mediaElement, time, data?.media.duration ?? 0, source);
+  const [skipGaps, setSkipGaps] = useStoredState("player-skip-gaps-v1", false, value => typeof value === "boolean");
+  const detached = usePopoutControls(id, localControls, mediaElement, time, skipGaps && !playingRange);
+  const controls = detached.controls;
   const started = useRef("");
   const requestedAt = useRef(at);
   useEffect(() => {
@@ -161,16 +167,36 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
     if (started.current !== id) {
       started.current = id;
       requestedAt.current = at;
-      controls.seek(at ?? (data.media.position > 5 ? data.media.position : 0));
+      if (!detached.active || at !== undefined) controls.seek(at ?? (data.media.position > 5 ? data.media.position : 0));
     } else if (at !== requestedAt.current) {
       requestedAt.current = at;
       if (at !== undefined) controls.seek(at);
     }
-  }, [controls, data, id, at, source]);
+  }, [controls, data, id, at, source, detached.active]);
   const onSaveFail = useCallback((e: unknown) => toast.error(`Couldn't save your place in this recording: ${errorMessage(e)}`), [toast]);
   usePositionSaver(id, time, controls.playing, controls.ready, onSaveFail);
 
   const lines = useMemo(() => data?.segments ?? [], [data]);
+  const intervals = useMemo(() => speechIntervals(lines), [lines]);
+  useEffect(() => {
+    if (detached.active || !skipGaps || !controls.playing || playingRange || !intervals.length) return;
+    let lastTarget = -1, lastJump = 0;
+    const check = () => {
+      const target = nextAfterGap(intervals, time.get());
+      if (target === null || (target === lastTarget && performance.now() - lastJump < 1000)) return;
+      lastTarget = target; lastJump = performance.now(); controls.seek(target);
+    };
+    check();return time.subscribe(check);
+  }, [skipGaps, controls, playingRange, intervals, time, detached.active]);
+  useEffect(() => {
+    if (detached.active && controls.ready) detached.setGaps(skipGaps && !playingRange);
+  }, [detached.active, controls.ready, detached.setGaps, skipGaps, playingRange]);
+  const rangeExit = useRef({ active: detached.active, playingRange, controls, setGaps: detached.setGaps, skipGaps });
+  rangeExit.current = { active: detached.active, playingRange, controls, setGaps: detached.setGaps, skipGaps };
+  useEffect(() => () => {
+    const last = rangeExit.current;
+    if (last.active && last.playingRange) { last.controls.pause(); last.setGaps(last.skipGaps); }
+  }, []);
   const voices = useMemo(() => (data ? buildVoices(data.assignments, data.segments) : new Map<string, Voice>()), [data]);
   const people = useMemo(() => groupVoices(voices), [voices]);
   const turns = useMemo<LaneTurn[]>(
@@ -310,6 +336,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
     seekLine(i, false);
   };
   const toggleFullscreen = () => {
+    if (detached.active) { void api.popoutFocus().catch(toast.error); return; }
     const el = mediaRef.current;
     if (!el || kind !== "video") return;
     if (document.fullscreenElement) void document.exitFullscreen();
@@ -400,7 +427,7 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       toast.error(e);
     }
   };
-  const openFileAction = (action:FileAction) => { mediaElement?.pause(); setFileAction(action); };
+  const openFileAction = (action:FileAction) => { controls.pause(); setFileAction(action); };
   const menu: MenuEntry[] = [
     ...fileMenu(media, openFileAction),
     {label:"Extract audio",icon:AudioLines,disabled:!media.path||media.status==="archived",onSelect:()=>{if(media.path){mediaElement?.pause();navigate({page:"tools",tab:"extract",source:media.path});}}},
@@ -521,9 +548,13 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       <SplitLayout>
         <section className="player-media" aria-label="Playback">
           <div className="player-sticky">
-            <MediaStage media={media} source={source} sourceError={sourceError} controls={controls} mediaRef={attachMedia} />
+            <MediaStage media={media} source={source} sourceError={sourceError} controls={controls} mediaRef={attachMedia} detached={detached.active} onReturn={() => void api.popoutClose(true).catch(toast.error)} />
             {sourceError && <Button onClick={()=>openFileAction("relink")}>Locate media file</Button>}
             <Transport controls={controls} time={time} onShortcuts={() => setShortcutsOpen(true)} />
+            <div className="player-options">
+              {media.kind === "video" && <Button size="sm" icon={PictureInPicture2} disabled={detached.opening || !controls.ready} onClick={() => detached.active ? void api.popoutFocus().catch(toast.error) : void detached.open()}>{detached.opening ? "Opening video…" : detached.active ? "Show pop-out" : "Pop out video"}</Button>}
+              {!!lines.length && <Button size="sm" variant={skipGaps ? "secondary" : "ghost"} icon={FastForward} aria-pressed={skipGaps} title="Skip gaps longer than 1.25 seconds between transcript passages. This can skip untranscribed speech." onClick={() => setSkipGaps(value => !value)}>Skip transcript gaps</Button>}
+            </div>
             <Timeline
               duration={controls.duration}
               time={time}

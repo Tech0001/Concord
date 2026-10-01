@@ -1,3 +1,4 @@
+import { PopoutProvider } from "./player/PopoutContext.tsx";
 import { ToolsPage } from "./tools/ToolsPage.tsx";
 import { ToolsProvider } from "./tools/ToolsContext.tsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -34,7 +35,7 @@ import { SettingsPage } from "./settings/SettingsPage.tsx";
 export default function App() {
   return (
     <ToastProvider>
-      <ToolsProvider><Shell /></ToolsProvider>
+      <ToolsProvider><PopoutProvider><Shell /></PopoutProvider></ToolsProvider>
     </ToastProvider>
   );
 }

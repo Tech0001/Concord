@@ -1,3 +1,4 @@
+import type { PopoutSession, PlaybackPosition, PopoutCommand } from "../player/popout-types.ts";
 import type { YouTubeQuery, YouTubeHit, YouTubePage } from "../tools/discover-model.ts";
 import type { ToolsState } from "../tools/types.ts";
 import type { FileAction, RecordingFileInfo } from "../library/RecordingFileDialog.tsx";
@@ -78,6 +79,16 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const MEDIA_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "ogg", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 
 export const api = {
+  popoutState: () => call<PopoutSession | null>("popout_state"),
+  popoutOpen: (id:string,position:PlaybackPosition,skipGaps:boolean) => call<PopoutSession>("popout_open",{id,position,skipGaps}),
+  popoutUpdate: (token:string,position:PlaybackPosition) => call<void>("popout_update",{token,position}),
+  popoutCommand: (token:string,command:PopoutCommand) => call<void>("popout_command",{token,command}),
+  popoutClose: (resume:boolean) => call<void>("popout_close",{resume}),
+  popoutFocus: () => call<void>("popout_focus"),
+  onPopoutState: (handler:(session:PopoutSession)=>void) => transport.listen("concord-popout-state",handler),
+  onPopoutClosed: (handler:(session:PopoutSession)=>void) => transport.listen("concord-popout-closed",handler),
+  onPopoutReturn: (handler:(value:{token:string;resume:boolean})=>void) => transport.listen("concord-popout-return",handler),
+  onPopoutCommand: (handler:(value:{token:string;command:PopoutCommand})=>void) => transport.listen("concord-popout-command",handler),
   youtubeStatus: () => call<{hasKey:boolean}>("youtube_status"),
   youtubeSaveKey: (key:string) => call<{hasKey:boolean}>("youtube_save_key",{key}),
   youtubeSearch: (query:YouTubeQuery) => call<YouTubePage>("youtube_search",{query}),

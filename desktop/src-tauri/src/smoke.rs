@@ -3,7 +3,7 @@
 use tauri::{Listener, Manager};
 
 pub fn on_load(webview: &tauri::Webview, payload: &tauri::webview::PageLoadPayload<'_>) {
-    if payload.event() != tauri::webview::PageLoadEvent::Finished { return; }
+    if webview.label() != "main" || payload.event() != tauri::webview::PageLoadEvent::Finished { return; }
     let (Ok(script), Ok(root), Ok(id)) = (
         std::env::var("CONCORD_NEXT_TEST_SCRIPT"),
         std::env::var("CONCORD_NEXT_DATA"),

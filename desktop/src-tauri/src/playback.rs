@@ -13,7 +13,7 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 pub struct Playback {
     address: String,
     token: String,
-    files: Arc<Mutex<HashMap<String, PathBuf>>>,
+    files: Arc<Mutex<HashMap<String, (String, PathBuf)>>>,
 }
 impl Playback {
     pub fn start() -> Result<Self> {
@@ -36,11 +36,18 @@ impl Playback {
         })
     }
     pub fn register(&self, path: PathBuf) -> String {
+        self.register_for("main", path)
+    }
+    pub fn release(&self, owner: &str) {
+        self.files.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, (slot, _)| slot != owner);
+    }
+    pub fn register_for(&self, owner: &str, path: PathBuf) -> String {
         let route = format!("/{}/{}", self.token, uuid::Uuid::new_v4());
         let mut files = self.files.lock().unwrap_or_else(|e| e.into_inner());
-        // Only the currently open recording is accessible. No directory serving.
-        files.clear();
-        files.insert(route.clone(), path);
+        // One exact path per player, never directory access. Replacing one player
+        // must not invalidate a pop-out video or voice-note preview.
+        files.retain(|_, (slot, _)| slot != owner);
+        files.insert(route.clone(), (owner.to_owned(), path));
         format!("http://{}{route}", self.address)
     }
 }
@@ -75,7 +82,7 @@ fn byte_range(value: Option<&str>, length: u64) -> Result<(u64, u64, bool)> {
     Ok((start, end - start + 1, true))
 }
 
-fn serve(request: Request, files: &Mutex<HashMap<String, PathBuf>>) {
+fn serve(request: Request, files: &Mutex<HashMap<String, (String, PathBuf)>>) {
     if request.method() != &Method::Get && request.method() != &Method::Head {
         let _ = request.respond(Response::empty(StatusCode(405)));
         return;
@@ -84,7 +91,7 @@ fn serve(request: Request, files: &Mutex<HashMap<String, PathBuf>>) {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(request.url())
-        .cloned();
+        .map(|(_, path)| path.clone());
     let Some(path) = path else {
         let _ = request.respond(Response::empty(StatusCode(404)));
         return;
@@ -205,6 +212,23 @@ mod tests {
         assert!(response.ends_with("\r\n\r\n2345"));
         assert!(fetch("/etc/passwd", "GET", "").starts_with("HTTP/1.1 404"));
         assert!(fetch(&route, "HEAD", "").ends_with("\r\n\r\n"));
+    }
+    #[test]
+    fn replacing_a_main_recording_does_not_revoke_other_players() {
+        let server = Playback::start().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("media.wav");
+        std::fs::write(&path, b"test audio").unwrap();
+        let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        let main = server.register(path.clone());
+        let popup = server.register_for("popout", path.clone());
+        let voice = server.register_for("recorder", path.clone());
+        let replacement = server.register(path);
+        assert_eq!(client.get(main).send().unwrap().status().as_u16(), 404);
+        for url in [&popup, &voice, &replacement] { assert_eq!(client.get(url.as_str()).send().unwrap().text().unwrap(), "test audio"); }
+        server.release("popout");
+        assert_eq!(client.get(popup).send().unwrap().status().as_u16(), 404);
+        assert_eq!(client.get(replacement).send().unwrap().status().as_u16(), 200);
     }
     /// Uses the same GStreamer HTTP reader as WebKitGTK, with no sound or GUI.
     /// Run explicitly on Linux: cargo test gstreamer_seek_reads_past_four_megabytes -- --ignored

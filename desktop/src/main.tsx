@@ -25,7 +25,7 @@ async function boot() {
   injectThemes();
   applyAppearance(loadAppearance());
   const Root =
-    import.meta.env.DEV && params.has("gallery") ? (await import("./dev/Gallery.tsx")).default : (await import("./App.tsx")).default;
+    location.hash === "#/popout" ? (await import("./player/PopoutPage.tsx")).default : import.meta.env.DEV && params.has("gallery") ? (await import("./dev/Gallery.tsx")).default : (await import("./App.tsx")).default;
   createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <Root />
