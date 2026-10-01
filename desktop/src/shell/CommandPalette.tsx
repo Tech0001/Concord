@@ -7,7 +7,7 @@ import type { PaletteResults } from "../lib/types.ts";
 import { speakerColor } from "../lib/speakers.ts";
 import { useAppearance } from "../theme/theme.ts";
 import { useToast } from "../ui/Toasts.tsx";
-import { ANALYSIS, ARCHIVE } from "./nav.ts";
+import { ANALYSIS, ARCHIVE, OPERATIONS } from "./nav.ts";
 import { useApp } from "./AppContext.tsx";
 
 const EMPTY: PaletteResults = { recordings: [], speakers: [], notes: [], documents: [] };
@@ -44,7 +44,7 @@ export function CommandPalette({ open, onOpenChange, onAdd }: { open: boolean; o
     const list: { id: string; label: string; icon: LucideIcon; run: () => void }[] = [];
     if (query.trim()) list.push({ id: "search", label: `Search transcripts for “${query.trim()}”`, icon: Search, run: () => navigate({ page: "search", q: query.trim() }) });
     list.push({ id: "add", label: "Add recordings", icon: Plus, run: onAdd });
-    for (const n of [...ARCHIVE, ...ANALYSIS]) list.push({ id: `go-${n.page}`, label: `Go to ${n.label}`, icon: n.icon, run: () => navigate(n.route) });
+    for (const n of [...ARCHIVE, ...ANALYSIS, ...OPERATIONS]) list.push({ id: `go-${n.page}`, label: `Go to ${n.label}`, icon: n.icon, run: () => navigate(n.route) });
     list.push({ id: "settings", label: "Open Settings", icon: ArrowRight, run: () => navigate({ page: "settings" }) });
     list.push({
       id: "mode",

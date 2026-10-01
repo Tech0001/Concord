@@ -2,7 +2,7 @@ import * as D from "@radix-ui/react-dialog";
 import { Check, LoaderCircle, PanelLeftClose, PanelLeftOpen, Settings2 } from "lucide-react";
 import { cx } from "../lib/cx.ts";
 import type { Route } from "../lib/router.ts";
-import { ANALYSIS, ARCHIVE, sectionOf, type NavItem } from "./nav.ts";
+import { ANALYSIS, ARCHIVE, OPERATIONS, sectionOf, type NavItem } from "./nav.ts";
 import { Brand } from "./Brand.tsx";
 import { useApp } from "./AppContext.tsx";
 
@@ -51,6 +51,8 @@ export function Sidebar({ mode, onToggle, onNavigate }: { mode: SidebarMode; onT
         {ARCHIVE.map(item)}
         {rail ? <div className="nav-divider" /> : <div className="nav-group">Analysis</div>}
         {ANALYSIS.map(item)}
+        {rail ? <div className="nav-divider" /> : <div className="nav-group">Processing</div>}
+        {OPERATIONS.map(item)}
       </nav>
       <div className="sidebar-foot">
         <button

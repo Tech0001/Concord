@@ -8,6 +8,7 @@ export type Route =
   | { page: "speakers"; id?: string }
   | { page: "notes" }
   | { page: "map" }
+  | { page: "pipeline" }
   | { page: "ai" }
   | { page: "settings" };
 export type Page = Route["page"];
@@ -35,6 +36,7 @@ export function parseRoute(hash: string): Route {
       return tail ? { page: "speakers", id: decodeURIComponent(tail) } : { page: "speakers" };
     case "notes":
     case "map":
+    case "pipeline":
     case "ai":
     case "settings":
       return { page: head };

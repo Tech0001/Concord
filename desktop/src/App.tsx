@@ -17,6 +17,7 @@ import { Topbar } from "./shell/Topbar.tsx";
 import { CommandPalette } from "./shell/CommandPalette.tsx";
 import { ActivityPanel } from "./shell/ActivityPanel.tsx";
 import { NoteEditor } from "./notes/NoteEditor.tsx";
+import { PipelinePage } from "./pipeline/PipelinePage.tsx";
 import { LibraryPage } from "./library/LibraryPage.tsx";
 import { PlayerPage } from "./player/PlayerPage.tsx";
 import { AiPage } from "./ai/AiPage.tsx";
@@ -97,7 +98,7 @@ function Shell() {
     async (id: string) => {
       try {
         await api.transcribe(id, device);
-        toast.info("Transcription started", {
+        toast.info("Recording added to the processing queue", {
           label: "Status & Health",
           run: () => setActivityOpen(true),
         });
@@ -209,6 +210,9 @@ function Shell() {
       break;
     case "map":
       page = <MapPage />;
+      break;
+    case "pipeline":
+      page = <PipelinePage />;
       break;
     case "settings":
       page = <SettingsPage />;

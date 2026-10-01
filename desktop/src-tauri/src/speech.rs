@@ -143,6 +143,10 @@ pub struct Control {
     pid: AtomicI32,
 }
 impl Control {
+    pub(crate) fn begin(&self) {
+        self.busy.store(true, Ordering::SeqCst);
+        self.cancelled.store(false, Ordering::SeqCst);
+    }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
         #[cfg(unix)]
@@ -242,9 +246,7 @@ pub fn start(
     id: String,
     device: String,
 ) -> Result<String> {
-    if !["auto", "cpu", "vulkan:0"].contains(&device.as_str()) {
-        bail!("Unsupported device");
-    }
+    crate::pipeline::validate_device(&device)?;
     let item = db::media(&root, &id)?;
     let path = PathBuf::from(
         item["path"]
@@ -293,7 +295,7 @@ pub fn start(
     Ok(job)
 }
 
-fn process(
+pub(crate) fn process(
     root: &Path,
     runtime: &Runtime,
     control: &Control,
@@ -419,6 +421,8 @@ fn persist(root: &Path, id: &str, md: &Path, raw: &Value, diar: &Value) -> Resul
         values
     };
     let tx = db.transaction()?;
+    let manual=crate::speech_labels::read(&tx,id)?;
+    tx.execute("DELETE FROM speaker_training WHERE media_id=?1",[id])?;
     tx.execute("DELETE FROM segments WHERE media_id=?1", [id])?;
     tx.execute("DELETE FROM assignments WHERE media_id=?1", [id])?;
     for s in raw["segments"]
@@ -457,9 +461,12 @@ fn persist(root: &Path, id: &str, md: &Path, raw: &Value, diar: &Value) -> Resul
             .map(|(id, v)| (id, transcript::cosine(&centroid, v)))
             .filter(|(_, s)| s.is_finite() && *s >= 0.45)
             .max_by(|a, b| a.1.total_cmp(&b.1));
+        let preserved=crate::speech_labels::matching(&manual,local,&centroid,raw["segments"].as_array().unwrap());
+        let assigned=preserved.or_else(||best.map(|b|b.0.as_str()));
+        let confidence=if preserved.is_some(){None}else{best.map(|b|b.1)};
         let bytes: Vec<u8> = centroid.iter().flat_map(|x| x.to_le_bytes()).collect();
         tx.execute("INSERT INTO assignments(media_id,local_id,speaker_id,centroid,airtime,start,end,confidence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-          params![id,local,best.map(|b|b.0),bytes,profile["airtimeSeconds"].as_f64().unwrap_or(0.),profile["sampleStart"].as_f64(),profile["sampleEnd"].as_f64(),best.map(|b|b.1)])?;
+          params![id,local,assigned,bytes,profile["airtimeSeconds"].as_f64().unwrap_or(0.),profile["sampleStart"].as_f64(),profile["sampleEnd"].as_f64(),confidence])?;
     }
     tx.execute(
         "UPDATE media SET transcript=?1,words=?2,duration=?3,status='complete' WHERE id=?4",
@@ -478,6 +485,26 @@ fn persist(root: &Path, id: &str, md: &Path, raw: &Value, diar: &Value) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replacement_keeps_manual_labels_on_new_voice_numbers_and_rolls_back_on_error() {
+        let dir=tempfile::tempdir().unwrap();let root=dir.path();
+        let db=db::open(root).unwrap();
+        db.execute("INSERT INTO media(id,title,transcript,status) VALUES ('m','Meeting','old.md','complete')",[]).unwrap();
+        db.execute("INSERT INTO speakers(id,name) VALUES ('alice','Alice'),('bob','Bob')",[]).unwrap();
+        db.execute("INSERT INTO assignments(media_id,local_id,speaker_id) VALUES ('m','S0','alice'),('m','S1','alice'),('m','S2','bob')",[]).unwrap();
+        db.execute("INSERT INTO segments(media_id,start,end,speaker,text) VALUES ('m',0,5,'S0','Alice first'),('m',5,10,'S1','Alice second'),('m',10,20,'S2','Bob next')",[]).unwrap();
+        let md=root.join("new.md");fs::write(&md,"New transcript").unwrap();
+        let raw=json!({"word_count":4,"duration_seconds":20.,"segments":[{"speaker":"new_9","start":0.,"end":10.,"text":"Alice replacement"},{"speaker":"new_3","start":10.,"end":20.,"text":"Bob replacement"}]});
+        let bad=json!({"speakerProfiles":[{"localSpeaker":"new_9"}]});
+        assert!(persist(root,"m",&md,&raw,&bad).is_err());
+        assert_eq!(db::media(root,"m").unwrap()["transcript"],"old.md");
+        assert_eq!(db.query_row("SELECT count(*) FROM assignments",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+        let diar=json!({"speakerProfiles":[{"localSpeaker":"new_9","centroid":[1.,0.],"airtimeSeconds":10.},{"localSpeaker":"new_3","centroid":[0.,1.],"airtimeSeconds":10.}]});
+        persist(root,"m",&md,&raw,&diar).unwrap();
+        let rows=db::rows(&db,"SELECT local_id,speaker_id,confidence FROM assignments ORDER BY local_id",[]).unwrap();
+        assert_eq!(rows,json!([{"local_id":"new_3","speaker_id":"bob","confidence":null},{"local_id":"new_9","speaker_id":"alice","confidence":null}]).as_array().unwrap().to_vec());
+        assert_eq!(db::media(root,"m").unwrap()["transcript"],md.to_string_lossy().as_ref());
+    }
     #[test]
     #[cfg(unix)]
     fn speech_python_ignores_appimage_python_paths() {

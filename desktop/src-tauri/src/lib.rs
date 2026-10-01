@@ -1,6 +1,7 @@
 #[cfg(debug_assertions)]
 mod smoke;
 pub mod db;
+pub mod pipeline;
 pub mod documents;
 pub mod health;
 pub mod runtime_log;
@@ -13,6 +14,7 @@ pub mod system;
 pub mod waveform;
 pub mod playback;
 pub mod speech;
+mod speech_labels;
 pub mod thumbnail;
 pub mod transcript;
 use anyhow::{Context, Result};
@@ -25,12 +27,12 @@ use std::sync::atomic::Ordering;
 use tauri::{Emitter, Manager, State};
 
 pub struct AppState {
+    pipeline: Arc<pipeline::Control>,
     ai: Arc<ai::Control>,
     documents: Arc<documents::Control>,
     maintenance: Arc<health::Control>,
     root: PathBuf,
     runtime: speech::Runtime,
-    control: Arc<speech::Control>,
     thumbnail_generator: Arc<std::sync::Mutex<()>>,
     playback: Arc<playback::Playback>,
     export: Arc<export::ExportControl>,
@@ -43,6 +45,16 @@ async fn work<T: Send + 'static>(
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("{e:#}"))
 }
+#[tauri::command]
+async fn pipeline_state(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||pipeline::snapshot(&root)).await}
+#[tauri::command]
+async fn pipeline_candidates(state:State<'_,AppState>,batch:pipeline::Batch)->Result<Value,String>{let root=state.root.clone();work(move||pipeline::candidates(&root,&batch)).await}
+#[tauri::command]
+async fn pipeline_enqueue(state:State<'_,AppState>,batch:pipeline::Batch,start:bool)->Result<Value,String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||pipeline::enqueue(&root,&control,&batch,start)).await}
+#[tauri::command]
+async fn pipeline_action(state:State<'_,AppState>,action:String,id:Option<String>)->Result<(),String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||pipeline::action(&root,&control,&action,id.as_deref())).await}
+#[tauri::command]
+async fn pipeline_save_config(state:State<'_,AppState>,config:pipeline::Config)->Result<(),String>{let root=state.root.clone();work(move||pipeline::save_config(&root,&config)).await}
 #[tauri::command]
 async fn archive_status(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||health::report::snapshot(&root)).await}
 #[tauri::command]
@@ -245,16 +257,13 @@ async fn transcribe(
     id: String,
     device: String,
 ) -> Result<String, String> {
-    let (root, runtime, control) = (
-        state.root.clone(),
-        state.runtime.clone(),
-        state.control.clone(),
-    );
-    work(move || speech::start(root, runtime, control, id, device)).await
+    let root=state.root.clone();let control=state.pipeline.clone();
+    work(move || pipeline::enqueue_one(&root,&control,id,device)).await
 }
 #[tauri::command]
 fn cancel_transcription(state: State<'_, AppState>) {
-    state.control.cancel();
+    // The active item is cancelled persistently; the rest of the queue remains paused.
+    let _=pipeline::action(&state.root,&state.pipeline,"stop",None);
 }
 #[tauri::command]
 async fn jobs(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
@@ -262,7 +271,7 @@ async fn jobs(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     work(move || {
         db::rows(
             &db::open(&root)?,
-            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 30",
+            "SELECT * FROM jobs ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'retry' THEN 2 ELSE 3 END,created_at DESC LIMIT 100",
             [],
         )
     })
@@ -458,13 +467,17 @@ pub fn run() {
         if let Err(e)=documents::seed_legacy(&root){runtime_log::push("warn",&format!("Legacy document folders: {e:#}"));}
         let docs_control=Arc::new(documents::Control::default());
         documents::start(root.clone(),docs_control.clone());
+        let runtime=speech::Runtime::resolve(app.path().resource_dir().ok());
+        let pipeline=Arc::new(pipeline::Control::new(control.clone()));
+        pipeline::recover(&root)?;
+        pipeline::launch(root.clone(),runtime.clone(),pipeline.clone());
         app.manage(AppState {
+            pipeline,
             documents: docs_control,
             ai: Arc::new(ai::Control::default()),
             maintenance: Arc::new(health::Control::default()),
             root: root.clone(),
-            runtime: speech::Runtime::resolve(app.path().resource_dir().ok()),
-            control: control.clone(),
+            runtime,
             thumbnail_generator: Arc::new(std::sync::Mutex::new(())),
             playback: Arc::new(playback::Playback::start()?),
             export: Arc::new(export::ExportControl::default()),
@@ -475,7 +488,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
-      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
+      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.pipeline.shutdown();state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
 }

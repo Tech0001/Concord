@@ -1,5 +1,6 @@
 import {
   MessageCircle,
+  Workflow,
   FileText,
   Library,
   Network,
@@ -54,6 +55,8 @@ export const ANALYSIS: NavItem[] = [
   { page: "map", label: "Map", icon: Network, route: { page: "map" } },
 ];
 
+export const OPERATIONS: NavItem[] = [{ page: "pipeline", label: "Pipeline", icon: Workflow, route: { page: "pipeline" } }];
+
 export const PAGE_TITLES: Record<Page, string> = {
   library: "Library",
   recording: "Recording",
@@ -64,6 +67,7 @@ export const PAGE_TITLES: Record<Page, string> = {
   map: "Map",
   ai: "AI",
   settings: "Settings",
+  pipeline: "Pipeline",
 };
 
 /** The nav section a route belongs to (a recording belongs to the Library). */

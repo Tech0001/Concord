@@ -23,10 +23,11 @@ export function PlayerHeader({
   onStar: () => void;
   menu: MenuEntry[];
 }) {
-  const { navigate, back, transcribe, activeJob } = useApp();
+  const { navigate, back, transcribe, activeJob, jobs } = useApp();
   const media = recording.media;
   const { previous, next } = neighbors(media.id);
   const busy = activeJob?.media_id === media.id;
+  const queued = jobs.some(j => j.media_id === media.id && ["queued", "retry"].includes(j.status));
   return (
     <header className="player-header">
       <div className="player-nav">
@@ -63,10 +64,10 @@ export function PlayerHeader({
           <Button
             variant={media.transcript ? "secondary" : "primary"}
             icon={Sparkles}
-            disabled={!!activeJob || !media.path}
+            disabled={busy || queued || !media.path}
             onClick={() => void transcribe(media.id)}
           >
-            {busy ? "Transcribing…" : media.transcript ? "Re-transcribe" : "Transcribe"}
+            {busy ? "Transcribing…" : queued ? "Queued" : media.transcript ? "Re-transcribe" : "Transcribe"}
           </Button>
           <IconButton label={starred ? "Remove star" : "Star"} icon={Star} active={starred} className={starred ? "star-btn is-starred" : "star-btn"} onClick={onStar} />
           <MoreMenu title={media.title} entries={menu} />

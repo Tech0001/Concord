@@ -292,7 +292,7 @@ export function ArchiveWorkspace({
     }
     setIssue(undefined);
   };
-  const linked = (page: "ai" | "speakers" | "documents", text: string) => (
+  const linked = (page: "ai" | "speakers" | "documents" | "pipeline", text: string) => (
     <Button
       size="sm"
       onClick={() => {
@@ -343,7 +343,7 @@ export function ArchiveWorkspace({
                 {number(Math.round(status.archive.hours))} h archived.
               </p>
               <span>
-                {runtime?.ready ? "Speech ready" : "Speech setup needed"} · Chat{" "}
+                {status.pipeline?.active ? "Pipeline processing" : status.pipeline?.running ? "Pipeline ready" : "Pipeline paused"} · {runtime?.ready ? "Speech ready" : "Speech setup needed"} · Chat{" "}
                 {status.chat.configured ? "configured" : "not configured"}
               </span>
             </div>
@@ -360,6 +360,10 @@ export function ArchiveWorkspace({
                   <strong>{value}</strong>
                 </div>
               ))}
+            </div>
+            <div className="pipeline-summary">
+              <span>{number((status.pipeline?.queued ?? 0) + (status.pipeline?.active ?? 0))} recordings queued · {number(status.pipeline?.retry ?? 0)} waiting to retry · {number(status.pipeline?.failed ?? 0)} processing failures</span>
+              {linked("pipeline", "Open Pipeline")}
             </div>
             <Jobs {...jobs} onChange={() => void reload().catch(toast.error)} />
             <div className="archive-coverage-grid">

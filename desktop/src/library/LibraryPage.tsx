@@ -35,7 +35,7 @@ const isFilter = (v: unknown) => typeof v === "object" && v !== null && typeof (
 let savedScroll = 0;
 
 export function LibraryPage() {
-  const { overview, revision, navigate, transcribe, activeJob } = useApp();
+  const { overview, revision, navigate, transcribe, activeJob, jobs } = useApp();
   const toast = useToast();
   const phone = useMediaQuery(PHONE);
   const narrow = useMediaQuery(TABLET);
@@ -112,7 +112,7 @@ export function LibraryPage() {
         copyText(m.path)
           .then(() => toast.success("File path copied"))
           .catch(toast.error),
-      transcribeDisabled: !!activeJob,
+      transcribeDisabled: jobs.some(j => j.media_id === m.id && ["running", "queued", "retry"].includes(j.status)),
     });
 
   if (overview?.media === 0) return <Welcome />;

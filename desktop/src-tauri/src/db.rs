@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 7 {
+    if version >= 8 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -112,8 +112,9 @@ fn migrate(db: &mut Connection) -> Result<()> {
     if version < 4 { crate::research::migrate(&tx)?; }
     if version < 5 { crate::ai::migrate(&tx)?; }
     if version < 6 { crate::health::migrate(&tx)?; }
-    crate::documents::migrate(&tx)?;
-    tx.execute_batch("PRAGMA user_version=7")?;
+    if version < 7 { crate::documents::migrate(&tx)?; }
+    crate::pipeline::migrate(&tx)?;
+    tx.execute_batch("PRAGMA user_version=8")?;
     tx.commit()?;
     Ok(())
 }
@@ -539,12 +540,12 @@ mod tests {
     fn clearing_finished_activity_preserves_running_jobs_and_media() {
         let root = tempfile::tempdir().unwrap();
         let db = open(root.path()).unwrap();
-        db.execute_batch("INSERT INTO media(id,title) VALUES ('m','Meeting');
-          INSERT INTO jobs(id,media_id,title,status) VALUES ('done','m','Meeting','complete'),('fail','m','Meeting','failed'),('run','m','Meeting','running'),('queue','m','Meeting','queued');").unwrap();
+        db.execute_batch("INSERT INTO media(id,title) VALUES ('m','Meeting'),('m2','Second meeting');
+          INSERT INTO jobs(id,media_id,title,status) VALUES ('done','m','Meeting','complete'),('fail','m','Meeting','failed'),('run','m','Meeting','running'),('queue','m2','Second meeting','queued');").unwrap();
         assert_eq!(clear_jobs(root.path(),Some("run")).unwrap(),0);
         assert_eq!(clear_jobs(root.path(),None).unwrap(),2);
         assert_eq!(db.query_row("SELECT count(*) FROM jobs",[],|r|r.get::<_,i64>(0)).unwrap(),2);
-        assert_eq!(db.query_row("SELECT count(*) FROM media",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(db.query_row("SELECT count(*) FROM media",[],|r|r.get::<_,i64>(0)).unwrap(),2);
     }
     #[test]
     fn migration_is_isolated_and_searchable() {
@@ -612,7 +613,7 @@ mod tests {
         assert_eq!(row["review_state"], "unreviewed");
         assert_eq!(row["position"], 0.0);
         assert!(row["opened_at"].is_null());
-        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 7);
+        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 8);
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
     }

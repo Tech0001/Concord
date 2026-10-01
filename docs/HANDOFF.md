@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.8.0**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.9.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -10,7 +10,37 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
-## Docs folders and live sync (0.8.0 being packaged)
+## Durable processing queue and batch transcription (0.9.0 being packaged)
+
+Pipeline now has Queue, Transcribe recordings, and Setup. Select individual recordings,
+a collection, missing transcripts, or all matches. Batch enqueue is initially paused; Start
+runs one recording at a time. Pause finishes the active recording; Stop cancels it and pauses
+the rest. Cancel individual/pending items, retry failed items, and clear finished history.
+Settings save retry count/delay and processing device. Queues, delayed retries and run/pause
+state survive restart; interrupted attempts do not consume a retry. There is no automatic
+whole-archive enqueue or subscription download. Player/Library transcription joins this queue.
+Status & Health links to Pipeline and shows processing/queued/retry/failure counts.
+
+Schema 8 adds pipeline_work, tied to existing jobs with cascading history deletion and a
+unique active-job constraint per recording. Old transcripts remain published until success.
+Manual labels carry across changed diarization IDs using clear voice-fingerprint or timeline
+matches; ambiguous changes remain available for speaker review. Reused local voice numbers
+no longer reuse the old fingerprint training ledger. Failure rolls the transcript/label
+transaction back. Model numbering is never used as an identity match.
+
+68 Rust tests, 38 TypeScript tests, Clippy and frontend build pass. Native WebKitGTK fixture
+checks setup, batch filtering/selection, paused enqueue, real worker failure retaining old
+transcript/manual labels, pause/retry/cancel and history clearing. Reproduce with
+prepare-health-review.py + native-pipeline-smoke.js and CONCORD_NEMO_MODELS set to a missing
+scratch directory (intentional dependency failure). Result: /tmp/concord-health-native-ja3_fe7u.
+A real 25-second GPU transcription through the new worker passed in 23 seconds, published
+only inside a temporary library and released its processing lock. Desktop/phone layouts checked.
+
+0.8.0 remains installed while packaging. Next: sources/subscriptions, downloads and their
+setup/scheduling/daily limits, followed by remaining Electron parity. The full port remains
+in progress. Pipeline setup does not yet install the speech runtime independently of Electron.
+
+## Docs folders and live sync (0.8.0 installed)
 
 Restored the document folder tree beside the independently scrolling reader, multi-root
 add/rename/pause/remove controls, filtering across folders, stars and Personal/Work categories,
@@ -33,7 +63,9 @@ relative document links, star/category updates, selection-to-note, live file cha
 the reader, filters and folder removal retaining evidence. Fixture scripts:
 `prepare-documents-review.py`, `prepare-documents-review.py --watch <scratch>` (synthetic edit),
 and `native-documents-smoke.js`. 61 Rust tests and 38 TS tests, Clippy and frontend build pass.
-Desktop and phone reader screenshots checked. 0.7.0 remains installed until packaging completes.
+Desktop and phone reader screenshots checked. 0.8.0 is installed; live schema 7 retains all
+595 documents (300 Personal / 295 Work), five notes and six anchors. Backup:
+`~/.local/share/concord-next/backups/before-0.8.0-20260930-215326.db`.
 Next: Pipeline setup, subscriptions/downloads, durable queues and batch re-transcription,
 then remaining Electron parity (including tools and library/player improvements).
 

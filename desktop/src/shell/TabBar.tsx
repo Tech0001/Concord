@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Activity, MessageCircle, FileText, Library, MoreHorizontal, Network, NotebookPen, Search, Settings2, Users } from "lucide-react";
+import { Activity, Workflow, MessageCircle, FileText, Library, MoreHorizontal, Network, NotebookPen, Search, Settings2, Users } from "lucide-react";
 import { cx } from "../lib/cx.ts";
 import type { Route } from "../lib/router.ts";
 import { Sheet } from "../ui/Dialog.tsx";
@@ -17,7 +17,7 @@ export function TabBar() {
   const { route, navigate, openActivity } = useApp();
   const [more, setMore] = useState(false);
   const current = sectionOf(route.page);
-  const inMore = ["documents", "map", "ai", "settings"].includes(current);
+  const inMore = ["documents", "map", "ai", "pipeline", "settings"].includes(current);
   const go = (r: Route) => {
     setMore(false);
     navigate(r);
@@ -51,6 +51,7 @@ export function TabBar() {
             <Network size={17} aria-hidden /> Map
           </button>
           <button type="button" role="menuitem" className="menu-item" onClick={() => go({ page: "ai" })}><MessageCircle size={17} aria-hidden /> AI</button>
+          <button type="button" role="menuitem" className="menu-item" onClick={() => go({ page: "pipeline" })}><Workflow size={17} aria-hidden /> Pipeline</button>
           <button
             type="button"
             role="menuitem"
