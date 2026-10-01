@@ -95,7 +95,10 @@ pub fn legacy_summary(folder: &Path) -> Result<Option<Value>> {
     if !path.is_file() {
         return Ok(None);
     }
-    let old = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    // Immutable keeps SQLite from creating -wal/-shm files beside the previous app's library.
+    let mut uri = url::Url::from_file_path(&path).map_err(|_| anyhow::anyhow!("Invalid library path"))?;
+    uri.query_pairs_mut().append_pair("immutable", "1");
+    let old = Connection::open_with_flags(uri.as_str(), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI)?;
     let tables: i64 = old.query_row(
         "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('video_queue','speakers','transcript_segments_fts')",
         [],
@@ -274,8 +277,11 @@ pub fn status(
     let stats = db::stats(root)?;
     let db = db::open(root)?;
     let started = stats["libraryStarted"] == true;
-    let speech = speech_setup::status(root, setup);
-    let config = ai::config::read(root)?;
+    let speech = speech_setup::state(root, setup);
+    let config = ai::config::read(root).unwrap_or_else(|e| {
+        runtime_log::push("warn", &format!("AI settings could not be read: {e:#}"));
+        ai::config::Config::default()
+    });
     let chat = &config.chat;
     let connected = chat.enabled
         && !chat.model.is_empty()
@@ -438,6 +444,23 @@ mod tests {
         });
         let found = probe_local(&[("ollama", base.as_str()), ("lmstudio", "http://127.0.0.1:9/v1")]);
         assert_eq!(found, vec![json!({"kind":"ollama","baseUrl":base,"models":2})]);
+    }
+
+    #[test]
+    fn unreadable_ai_settings_do_not_hide_setup() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("next");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("ai-providers.json"), b"{ not json").unwrap();
+        let runtime = speech::Runtime {
+            binary: dir.path().join("nemo-speech"),
+            script: dir.path().join("transcribe.py"),
+            python: dir.path().join("venv/bin/python"),
+            models: dir.path().join("none"),
+        };
+        let value = status(&root, &runtime, &speech_setup::Control::default(), &dir.path().join("legacy")).unwrap();
+        assert_eq!(value["library"]["started"], false);
+        assert_eq!(value["chat"]["connected"], false);
     }
 
     #[test]

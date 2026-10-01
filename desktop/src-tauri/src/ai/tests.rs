@@ -692,3 +692,44 @@ fn disabling_automatic_actions_does_not_cancel_manual_jobs() {
     super::automation::save(root.path(),&control,false,false).unwrap();
     assert!(!control.cancel_index.load(Ordering::SeqCst));assert!(!manual_cancel.load(Ordering::SeqCst));
 }
+
+#[test]
+fn builtin_search_can_be_turned_off() {
+    let root = tempfile::tempdir().unwrap();
+    let mut off = super::builtin::default_provider();
+    off.enabled = false;
+    config::save(root.path(), "embedding", off, None).unwrap();
+    let saved = config::read(root.path()).unwrap().embedding;
+    assert_eq!((saved.kind.as_str(), saved.enabled), ("builtin", false));
+}
+#[test]
+fn trying_a_provider_tests_it_without_saving_anything() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::new();
+    let working = Provider {
+        account_id: String::new(),
+        enabled: true,
+        kind: "openrouter".into(),
+        base_url: "https://openrouter.ai/api/v1".into(),
+        model: "some/model".into(),
+        api_key: String::new(),
+    };
+    config::save(root.path(), "chat", working, Some("sk-or-keep".into())).unwrap();
+    let before = std::fs::read(root.path().join("ai-providers.json")).unwrap();
+    let local = Provider {
+        account_id: String::new(),
+        enabled: true,
+        kind: "local".into(),
+        base_url: fake.url.clone(),
+        model: String::new(),
+        api_key: String::new(),
+    };
+    let chat = config::try_provider(root.path(), "chat", local.clone(), None).unwrap();
+    assert_eq!(chat["model"], "tiny-chat");
+    assert_eq!(chat["models"].as_array().unwrap().len(), 2);
+    let search = config::try_provider(root.path(), "embedding", local.clone(), None).unwrap();
+    assert_eq!(search["model"], "tiny-embedding");
+    let down = Provider { base_url: "http://127.0.0.1:9/v1".into(), ..local };
+    assert!(config::try_provider(root.path(), "chat", down, None).is_err());
+    assert_eq!(std::fs::read(root.path().join("ai-providers.json")).unwrap(), before);
+}

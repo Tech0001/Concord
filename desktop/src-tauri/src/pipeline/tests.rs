@@ -443,3 +443,24 @@ fn files_added_during_setup_are_queued_for_transcription() {
     assert_eq!(queued.len(), 1);
     assert_eq!((queued[0]["category"].as_str(), queued[0]["status"].as_str()), (Some("work"), Some("queued")));
 }
+#[test]
+fn waiting_work_fails_with_the_reason_when_speech_setup_fails() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let id = enqueue_one(root, &c, "one".into(), "auto".into()).unwrap();
+    queue::wait_for_speech(root).unwrap();
+    queue::fail_waiting_for_speech(root, "Speech setup failed: disk full").unwrap();
+    let job = state(root, &id);
+    assert_eq!(job["status"], "failed");
+    assert_eq!(job["message"], "Speech setup failed: disk full");
+}
+#[test]
+fn the_device_saves_even_when_other_pipeline_settings_are_stale() {
+    let (dir, _) = fixture();
+    let root = dir.path();
+    let stale = Config { cookies_file: "/gone/cookies.txt".into(), ..Default::default() };
+    db::open(root).unwrap().execute("INSERT INTO settings VALUES ('pipeline.config',?1)", [serde_json::to_string(&stale).unwrap()]).unwrap();
+    set_device(root, "cpu").unwrap();
+    assert_eq!(device(root).unwrap(), "cpu");
+    assert_eq!(config(root).unwrap().cookies_file, "/gone/cookies.txt");
+}

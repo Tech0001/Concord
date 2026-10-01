@@ -136,7 +136,7 @@ export function SetupChecklist({ variant, onNavigate }: { variant: "library" | "
             Show checklist on Library
           </button>
           <span className="spacer" />
-          <Button size="sm" variant="ghost" onClick={() => open({ page: "setup", step: "speech" })}>
+          <Button size="sm" variant="ghost" onClick={() => open({ page: "setup", step: "speech", returnTo: "library" })}>
             Open setup
           </Button>
         </div>

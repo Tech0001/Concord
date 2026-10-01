@@ -153,6 +153,9 @@ export const api = {
   aiSuggestTags: (text: string) => call<string[]>("ai_suggest_tags", { text }),
   aiConfig: () => call<AiConfig>("ai_config"),
   aiSaveProvider: (task: "embedding" | "chat", provider: Provider, key: string | null) => call<AiConfig>("ai_save_provider", { task, provider, key }),
+  /** List models and run one test request without saving anything. */
+  aiTryProvider: (task: "embedding" | "chat", provider: Provider, key: string | null) =>
+    call<{ models: { id: string; name: string }[]; model: string; message?: string; error?: string }>("ai_try_provider", { task, provider, key }),
   aiModels: (task: "embedding" | "chat") => call<{ id: string; name: string }[]>("ai_models", { task }),
   aiCheck: (task: "embedding" | "chat") => call<{ message: string }>("ai_check", { task }),
   aiStatus: () => call<IndexStatus>("ai_status"),

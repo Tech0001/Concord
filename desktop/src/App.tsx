@@ -108,10 +108,11 @@ function Shell() {
           await api.setSpeechDevice(old);
           value = old;
         }
-        localStorage.removeItem("speech-device");
         setDeviceState(value);
       } catch (e) {
         toast.error(e);
+      } finally {
+        localStorage.removeItem("speech-device");
       }
     })();
   }, [available, toast]);

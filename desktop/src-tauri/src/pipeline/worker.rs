@@ -48,6 +48,10 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                     return Ok(());
                 }
                 if !runtime.for_root(&root).installed() {
+                    let setup = crate::speech_setup::saved(&root);
+                    if setup.status == "failed" {
+                        return queue::fail_waiting_for_speech(&root, &format!("Speech setup failed: {}", setup.message));
+                    }
                     return queue::wait_for_speech(&root);
                 }
                 let Some(row) = queue::claim(&root, queue::tick_time())? else {

@@ -136,9 +136,13 @@ pub fn import_and_queue(root: &Path, control: &Control, paths: &[String], catego
 pub fn device(root: &Path) -> Result<String> {
     Ok(config(root)?.device)
 }
+/// Changes only the device, so unrelated settings that have gone stale (a moved cookies
+/// file, for example) cannot block it.
 pub fn set_device(root: &Path, device: &str) -> Result<()> {
     validate_device(device)?;
-    save_config(root, &Config { device: device.into(), ..config(root)? })
+    let value = Config { device: device.into(), ..config(root)? };
+    crate::db::open(root)?.execute("INSERT INTO settings VALUES ('pipeline.config',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [serde_json::to_string(&value)?])?;
+    Ok(())
 }
 pub fn validate_device(device: &str) -> Result<()> {
     anyhow::ensure!(

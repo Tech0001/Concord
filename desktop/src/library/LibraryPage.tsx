@@ -115,8 +115,20 @@ export function LibraryPage() {
       transcribeDisabled: jobs.some(j => j.media_id === m.id && ["running", "queued", "retry"].includes(j.status)),
     }), ...fileMenu(m, action => setFileAction({media:m,action})), {label:"Extract audio",icon:AudioLines,disabled:!m.path||m.status==="archived",onSelect:()=>{if(m.path)navigate({page:"tools",tab:"extract",source:m.path});}}];
 
-  // A new install opens setup instead; show nothing while it does.
-  if (overview?.media === 0 && !overview.libraryStarted) return null;
+  // A new install opens setup by itself; this stays as a way in if it couldn't.
+  if (overview?.media === 0 && !overview.libraryStarted)
+    return (
+      <Empty
+        icon={Library}
+        title="Set up your library"
+        text="Start a new library or import one. It only takes a moment."
+        action={
+          <Button variant="primary" onClick={() => navigate({ page: "setup" })}>
+            Open setup
+          </Button>
+        }
+      />
+    );
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const filtered = overview?.media !== 0 && (activeFilterCount(filter) > 0 || !!filter.query.trim() || !!filter.channel || !!category);

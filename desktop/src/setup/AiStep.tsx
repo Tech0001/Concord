@@ -19,12 +19,6 @@ const CHATGPT_URL = "https://api.openai.com/v1";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1";
 const SERVER_NAME = { ollama: "Ollama", lmstudio: "LM Studio" };
 
-/** Embedding providers list chat models too; prefer one made for embeddings. */
-export function pickModel(task: Task, models: Model[]): string {
-  const embedding = models.find((m) => /embed/i.test(m.id));
-  return (task === "embedding" ? embedding ?? models[0] : models[0])?.id ?? "";
-}
-
 function Choice({ checked, label, hint, badge, ok, onClick }: { checked: boolean; label: string; hint: string; badge?: string; ok?: boolean; onClick: () => void }) {
   return (
     <button type="button" role="radio" aria-checked={checked} className="setup-choice" onClick={onClick}>
@@ -62,27 +56,29 @@ function Connect({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [connected, setConnected] = useState(same && current.enabled && !!current.model && (choice !== "chatgpt" || !!current.connected));
+  // A found local server is shown instead of an address field, so test that server.
+  const address = choice === "local" && server ? server.baseUrl : baseUrl.trim();
   const provider = (m: string, accountId = account): Provider => ({
     kind: choice,
-    baseUrl: choice === "chatgpt" ? CHATGPT_URL : choice === "openrouter" ? OPENROUTER_URL : baseUrl.trim(),
+    baseUrl: choice === "chatgpt" ? CHATGPT_URL : choice === "openrouter" ? OPENROUTER_URL : address,
     model: m,
     enabled: true,
     accountId,
     hasKey: false,
     local: choice === "local",
   });
-  const connect = async (accountId = account) => {
+  // Test first and save only after a test request succeeds, so a failed try never replaces a
+  // working provider or its key.
+  const connect = async (chosen = model, accountId = account) => {
     setBusy(true);
     setError("");
     try {
-      await api.aiSaveProvider(task, provider(model, accountId), key || null);
-      const list = await api.aiModels(task);
-      setModels(list);
-      const chosen = model && list.some((m) => m.id === model) ? model : pickModel(task, list);
-      if (!chosen) throw new Error("This provider didn't list any models. Check the address, then try again.");
-      setModel(chosen);
-      const saved = await api.aiSaveProvider(task, provider(chosen, accountId), null);
-      await api.aiCheck(task);
+      const tried = await api.aiTryProvider(task, provider(chosen, accountId), key || null);
+      setModels(tried.models);
+      setModel(tried.model);
+      if (tried.error) throw new Error(tried.error);
+      const saved = await api.aiSaveProvider(task, provider(tried.model, accountId), key || null);
+      setKey("");
       setConnected(true);
       onSaved(saved);
     } catch (e) {
@@ -92,13 +88,9 @@ function Connect({
       setBusy(false);
     }
   };
-  const changeModel = async (m: string) => {
+  const changeModel = (m: string) => {
     setModel(m);
-    try {
-      onSaved(await api.aiSaveProvider(task, provider(m), null));
-    } catch (e) {
-      toast.error(e);
-    }
+    void connect(m);
   };
   const test = (
     <Button icon={busy ? LoaderCircle : undefined} disabled={busy || (choice === "custom" && !baseUrl.trim())} onClick={() => void connect()}>
@@ -112,7 +104,7 @@ function Connect({
           accountId={account}
           onAccount={(id, ready) => {
             setAccount(id);
-            if (ready) void connect(id);
+            if (ready) void connect(model, id);
           }}
         />
       )}
@@ -169,18 +161,23 @@ function Connect({
           {error}
         </p>
       )}
-      {connected && (
+      {(connected || models.length > 0) && (
         <div className="setup-connect-row">
-          <span className="setup-ok">
-            <Check size={15} aria-hidden />
-            Connected
-          </span>
+          {connected ? (
+            <span className="setup-ok">
+              <Check size={15} aria-hidden />
+              Connected
+            </span>
+          ) : (
+            <span className="muted">Try another model</span>
+          )}
           <span className="spacer" />
           <Select
             size="sm"
             label="Model"
             value={model}
-            onChange={(m) => void changeModel(m)}
+            disabled={busy}
+            onChange={changeModel}
             options={(models.length ? models : [{ id: model, name: model }]).map((m) => ({ value: m.id, label: m.name || m.id }))}
           />
         </div>
@@ -197,6 +194,9 @@ export function AiStep({ status, next, skip, back, detour, chat: preselected }: 
   const [search, setSearch] = useState<SearchChoice>("builtin");
   const [chat, setChat] = useState<ChatChoice>("off");
   const [automatic, setAutomatic] = useState<AutomaticAi>();
+  // Only a search choice made on this visit starts the 639 MB download; opening this step just to
+  // connect chat must not.
+  const [searchTouched, setSearchTouched] = useState(false);
   useEffect(() => {
     api
       .aiConfig()
@@ -215,6 +215,7 @@ export function AiStep({ status, next, skip, back, detour, chat: preselected }: 
   };
   const pickSearch = async (choice: SearchChoice) => {
     setSearch(choice);
+    setSearchTouched(true);
     if (!config || (choice !== "builtin" && choice !== "off")) return;
     const provider: Provider =
       choice === "builtin"
@@ -247,7 +248,7 @@ export function AiStep({ status, next, skip, back, detour, chat: preselected }: 
   };
   const proceed = async () => {
     const download = status.search.download.status;
-    if (search === "builtin" && !status.search.modelReady && !["waiting", "running"].includes(download)) {
+    if ((!detour || searchTouched) && search === "builtin" && !status.search.modelReady && !["waiting", "running"].includes(download)) {
       try {
         await api.aiBuiltinPrepare(status.speech.setup.status === "running");
       } catch (e) {

@@ -63,19 +63,32 @@ pub fn download(
     check: &dyn Fn() -> Result<()>,
     progress: &mut dyn FnMut(u64) -> Result<()>,
 ) -> Result<()> {
-    let model = model_path(root);
-    if model.exists() {
-        return Ok(());
+    fetch_model(&model_path(root), &PINNED, check, progress)
+}
+/// One download at a time: setup's early download and an index job can both ask for the model.
+static DOWNLOAD: Mutex<()> = Mutex::new(());
+fn fetch_model(
+    model: &Path,
+    pinned: &Pinned,
+    check: &dyn Fn() -> Result<()>,
+    progress: &mut dyn FnMut(u64) -> Result<()>,
+) -> Result<()> {
+    let _turn = DOWNLOAD.lock().unwrap_or_else(|e| e.into_inner());
+    match fs::metadata(model) {
+        Ok(m) if m.len() == pinned.bytes => return Ok(()),
+        // A model of the wrong size can never verify; replace it.
+        Ok(_) => fs::remove_file(model)?,
+        Err(_) => {}
     }
-    fs::create_dir_all(model.parent().unwrap())?;
+    fs::create_dir_all(model.parent().context("Invalid model path")?)?;
     let partial = model.with_extension("download");
-    model_download::fetch(&PINNED, &partial, check, progress)
+    model_download::fetch(pinned, &partial, check, progress)
         .context("Cannot download semantic-search model; check your connection and retry")?;
-    if let Err(e) = model_download::verify(&partial, &PINNED) {
+    if let Err(e) = model_download::verify(&partial, pinned) {
         let _ = fs::remove_file(&partial);
         return Err(e.context("The semantic-search model failed verification"));
     }
-    fs::rename(&partial, &model)?;
+    fs::rename(&partial, model)?;
     Ok(())
 }
 
@@ -171,7 +184,7 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
     }
     *server = None;
     let model = model_path(root);
-    if !model.exists() {
+    if !ready(root) {
         progress("Downloading local semantic-search model (639 MB)")?;
         download(root, &|| Ok(()), &mut |bytes| {
             progress(&format!("Downloading local model · {} of 639 MB", bytes / 1_000_000))
@@ -287,6 +300,62 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
 #[cfg(test)]
 mod prepare_tests {
     use super::*;
+    use sha2::{Digest, Sha256};
+
+    const BODY: &[u8] = b"embedding model bytes";
+    /// Serve the model slowly, counting requests, until it has been idle for a second.
+    fn serve() -> (String, std::thread::JoinHandle<usize>) {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model", server.server_addr());
+        let task = std::thread::spawn(move || {
+            let mut served = 0;
+            while let Ok(Some(req)) = server.recv_timeout(Duration::from_secs(1)) {
+                served += 1;
+                std::thread::sleep(Duration::from_millis(150));
+                let _ = req.respond(tiny_http::Response::from_data(BODY.to_vec()));
+            }
+            served
+        });
+        (url, task)
+    }
+    fn pin(url: String) -> Pinned<'static> {
+        Pinned {
+            url: Box::leak(url.into_boxed_str()),
+            bytes: BODY.len() as u64,
+            hash: Box::leak(format!("{:x}", Sha256::digest(BODY)).into_boxed_str()),
+        }
+    }
+
+    #[test]
+    fn two_downloads_of_the_same_model_take_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("models/embedding/model.gguf");
+        let (url, server) = serve();
+        let pinned = pin(url);
+        let threads: Vec<_> = (0..2)
+            .map(|_| {
+                let (model, pinned) = (model.clone(), Pinned { ..pinned });
+                std::thread::spawn(move || fetch_model(&model, &pinned, &|| Ok(()), &mut |_| Ok(())))
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap().unwrap();
+        }
+        assert_eq!(fs::read(&model).unwrap(), BODY);
+        assert_eq!(server.join().unwrap(), 1, "the second download waited and reused the first");
+    }
+
+    #[test]
+    fn a_model_of_the_wrong_size_is_downloaded_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("models/embedding/model.gguf");
+        fs::create_dir_all(model.parent().unwrap()).unwrap();
+        fs::write(&model, b"left over from an older, broken download").unwrap();
+        let (url, server) = serve();
+        fetch_model(&model, &pin(url), &|| Ok(()), &mut |_| Ok(())).unwrap();
+        assert_eq!(server.join().unwrap(), 1);
+        assert_eq!(fs::read(&model).unwrap(), BODY);
+    }
 
     #[test]
     fn a_downloaded_model_reports_complete_without_a_request() {

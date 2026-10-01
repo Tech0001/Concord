@@ -83,7 +83,10 @@ pub fn save(root: &Path, task: &str, mut provider: Provider, key: Option<String>
             task == "embedding",
             "Built-in model only supports embeddings"
         );
+        // Keep the caller's choice so built-in search can be switched off.
+        let enabled = provider.enabled;
         provider = super::builtin::default_provider();
+        provider.enabled = enabled;
     }
     if provider.kind == "chatgpt" {ensure!(task == "chat", "ChatGPT sign-in is only available for chat, summaries and tags");}
     let _guard = CONFIG_LOCK.lock().unwrap();
@@ -124,6 +127,64 @@ pub fn save(root: &Path, task: &str, mut provider: Provider, key: Option<String>
     )?;
     drop(_guard);
     view(root)
+}
+/// A model suited to the task: embedding providers often list chat models too, and the other way around.
+pub fn pick_model(task: &str, models: &[Value]) -> Option<String> {
+    let id = |m: &Value| m["id"].as_str().unwrap_or_default().to_owned();
+    let embedding = |m: &&Value| m["id"].as_str().unwrap_or_default().to_lowercase().contains("embed");
+    let preferred = if task == "embedding" {
+        models.iter().find(embedding)
+    } else {
+        models.iter().find(|m| !embedding(m))
+    };
+    preferred.or(models.first()).map(id)
+}
+/// List a provider's models and make one test request, without saving anything. A missing key
+/// reuses the saved one only for the same provider and address. A failed test request still
+/// returns the model list (with `error`), so another model can be chosen.
+pub fn try_provider(root: &Path, task: &str, mut provider: Provider, key: Option<String>) -> Result<Value> {
+    ensure!(["embedding", "chat"].contains(&task), "Unknown AI task");
+    let saved = read(root)?;
+    let old = if task == "embedding" { &saved.embedding } else { &saved.chat };
+    provider.base_url = provider.base_url.trim().trim_end_matches('/').to_owned();
+    provider.api_key = key.unwrap_or_else(|| {
+        if old.kind == provider.kind && old.base_url == provider.base_url {
+            old.api_key.clone()
+        } else {
+            String::new()
+        }
+    });
+    provider.enabled = true;
+    provider.validate(false)?;
+    let models = if provider.kind == "chatgpt" {
+        super::chatgpt::models(root, &provider.account_id)?
+    } else {
+        provider.models(task)?
+    };
+    let model = Some(provider.model.trim().to_owned())
+        .filter(|m| models.iter().any(|x| x["id"] == m.as_str()))
+        .or_else(|| pick_model(task, &models))
+        .context("This provider didn't list any models. Check the address, then try again.")?;
+    provider.model = model.clone();
+    let check = || -> Result<String> {
+        if task == "embedding" {
+            let width = provider.embed(&provider.client()?, &["Concord connection check".into()])?[0].len();
+            Ok(format!("Embedding model ready · {width} dimensions"))
+        } else {
+            let text = super::chat::complete(
+                root,
+                &provider,
+                &[json!({"role":"user","content":"Reply with OK."})],
+                &std::sync::atomic::AtomicBool::new(false),
+                |_| {},
+            )?;
+            Ok(format!("Chat model ready · {}", text.chars().take(80).collect::<String>()))
+        }
+    };
+    Ok(match check() {
+        Ok(message) => json!({"models": models, "model": model, "message": message}),
+        Err(e) => json!({"models": models, "model": model, "error": format!("{e:#}")}),
+    })
 }
 pub fn private_write(root: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     fs::create_dir_all(root)?;

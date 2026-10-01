@@ -76,6 +76,14 @@ pub fn fetch(
                     .get(header::CONTENT_RANGE)
                     .and_then(|v| v.to_str().ok())
                     .is_some_and(|v| v.starts_with(&format!("bytes {offset}-")));
+            // A partial the server cannot continue would fail the same way every time; start over.
+            if offset > 0
+                && !resumed
+                && [StatusCode::PARTIAL_CONTENT, StatusCode::RANGE_NOT_SATISFIABLE].contains(&response.status())
+            {
+                let _ = fs::remove_file(partial);
+                anyhow::bail!("The download server couldn't continue the earlier download. Try again to start it over.");
+            }
             let mut response = if resumed {
                 response
             } else {
@@ -109,7 +117,15 @@ pub fn fetch(
                 }
             }
             file.sync_all()?;
-            progress(bytes)
+            progress(bytes)?;
+            // Keep a short file: the next attempt continues it instead of starting over.
+            ensure!(
+                bytes == pinned.bytes,
+                "The download ended early at {} of {} MB. Try again to continue it.",
+                bytes / 1_000_000,
+                pinned.bytes / 1_000_000
+            );
+            Ok(())
         })
 }
 
@@ -229,6 +245,46 @@ mod tests {
         fs::write(&partial, BODY).unwrap();
         fetch(&pinned("http://127.0.0.1:9/never"), &partial, &|| Ok(()), &mut |_| Ok(())).unwrap();
         assert_eq!(fs::read(&partial).unwrap(), BODY);
+    }
+
+    /// Answer once with a fixed status, body and optional Content-Range.
+    fn reply(status: u16, body: &'static [u8], range: Option<&'static str>) -> String {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model", server.server_addr());
+        std::thread::spawn(move || {
+            if let Ok(Some(req)) = server.recv_timeout(Duration::from_secs(10)) {
+                let mut response = tiny_http::Response::from_data(body.to_vec()).with_status_code(status);
+                if let Some(range) = range {
+                    response = response.with_header(tiny_http::Header::from_bytes("Content-Range", range).unwrap());
+                }
+                let _ = req.respond(response);
+            }
+        });
+        url
+    }
+
+    #[test]
+    fn a_download_that_ends_early_is_kept_for_the_next_attempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let partial = dir.path().join("model.part");
+        let url = reply(200, &BODY[..9], None);
+        let short = fetch(&pinned(&url), &partial, &|| Ok(()), &mut |_| Ok(()));
+        assert!(short.unwrap_err().to_string().contains("ended early"));
+        assert_eq!(fs::read(&partial).unwrap(), &BODY[..9]);
+    }
+
+    #[test]
+    fn a_range_the_server_cannot_continue_starts_over_next_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let partial = dir.path().join("model.part");
+        fs::write(&partial, &BODY[..6]).unwrap();
+        let url = reply(416, b"", None);
+        assert!(fetch(&pinned(&url), &partial, &|| Ok(()), &mut |_| Ok(())).is_err());
+        assert!(!partial.exists());
+        fs::write(&partial, &BODY[..6]).unwrap();
+        let url = reply(206, &BODY[2..], Some("bytes 2-17/18"));
+        assert!(fetch(&pinned(&url), &partial, &|| Ok(()), &mut |_| Ok(())).is_err());
+        assert!(!partial.exists());
     }
 
     #[test]

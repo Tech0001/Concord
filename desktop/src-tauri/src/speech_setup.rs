@@ -89,6 +89,26 @@ fn publish(root: &Path, environment: &Path) -> Result<()> {
     fs::rename(temp, root.join("speech/active"))?;
     Ok(())
 }
+/// The last status written to disk, without the setup log.
+pub fn saved(root: &Path) -> Status {
+    fs::read(status_path(root))
+        .ok()
+        .and_then(|v| serde_json::from_slice(&v).ok())
+        .unwrap_or_default()
+}
+/// Current status without the setup log, for frequent polling.
+pub fn state(root: &Path, control: &Control) -> Status {
+    let mut state = control.state.lock().unwrap().clone();
+    if state.status.is_empty() {
+        state = saved(root);
+        if state.status == "running" {
+            state.status = "interrupted".into();
+            state.message =
+                "Setup stopped before it finished. Start it again to resume where it left off.".into();
+        }
+    }
+    state
+}
 pub fn status(root: &Path, control: &Control) -> Status {
     let mut state = control.state.lock().unwrap().clone();
     if state.status.is_empty() {

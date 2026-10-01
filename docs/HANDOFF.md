@@ -69,6 +69,21 @@ in the worktree `/home/pc/Documents/GitHub/Concord-onboarding`, cut from `rewrit
     - no layout overflowed.
 - **No third-party logos.** The user asked for no YouTube logo, so the YouTube source uses the
   neutral `Rss` icon.
+- **Fixes from the final review:**
+  - Built-in model downloads take turns behind a lock, and a model of the wrong size is
+    downloaded again.
+  - A download that ends early keeps its partial file. A range the server can't continue starts
+    over.
+  - "Off" now persists for built-in search.
+  - The setup AI step tests a provider with `ai_try_provider`, which saves nothing, and saves only
+    after a test passes. Keys survive a failed test.
+  - A found local server is the address that gets tested.
+  - Connecting chat from the AI page doesn't start the search download.
+  - Opening setup from Status & Health no longer counts as first run.
+  - Waiting jobs fail with the reason when speech setup fails.
+  - The device saves without validating unrelated pipeline settings.
+  - Unreadable AI settings no longer hide setup.
+  - The previous library is opened with `immutable=1`, so no `-wal`/`-shm` files appear beside it.
 
 ## Fresh-library onboarding (0.21.1 installed)
 

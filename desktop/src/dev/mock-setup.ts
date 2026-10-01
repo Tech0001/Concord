@@ -174,6 +174,12 @@ export const setupHandlers: Record<string, (a: any) => unknown> = {
     else s.chat = { kind: provider.kind, enabled: provider.enabled, model: provider.model, connected: provider.enabled && !!provider.model };
     return setupHandlers.ai_config({});
   },
+  ai_try_provider: ({ task, provider }) => {
+    if (params.has("bad-key")) throw Error("The provider rejected the API key. Check it and try again.");
+    const models = task === "chat" ? chatModels : [{ id: "nomic-embed-text", name: "nomic-embed-text" }];
+    const model = models.some((m) => m.id === provider.model) ? provider.model : models[0].id;
+    return { models, model, message: "Ready" };
+  },
   ai_models: ({ task }) => (task === "chat" ? chatModels : [{ id: "nomic-embed-text", name: "nomic-embed-text" }]),
   ai_check: ({ task }) => {
     if (params.has("bad-key")) throw Error("The provider rejected the API key. Check it and try again.");

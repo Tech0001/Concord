@@ -328,6 +328,16 @@ pub(super) fn wait_for_speech(root: &Path) -> Result<()> {
     )?;
     Ok(())
 }
+/// Speech setup failed, so work waiting for it fails with the reason instead of waiting forever.
+pub(super) fn fail_waiting_for_speech(root: &Path, message: &str) -> Result<()> {
+    let mut db = db::open(root)?;
+    let tx = db.transaction()?;
+    let waiting = "SELECT id FROM jobs WHERE status='queued' AND message=?1 AND id IN (SELECT id FROM pipeline_work)";
+    tx.execute(&format!("UPDATE pipeline_work SET finished_at=datetime('now') WHERE id IN ({waiting})"), [WAITING_FOR_SPEECH])?;
+    tx.execute(&format!("UPDATE jobs SET status='failed',message=?2 WHERE id IN ({waiting})"), params![WAITING_FOR_SPEECH, message])?;
+    tx.commit()?;
+    Ok(())
+}
 pub(super) fn tick_time() -> i64 {
     now()
 }
