@@ -1,3 +1,4 @@
+import { ArchiveWorkspace } from "../health/ArchiveWorkspace.tsx";
 import { useEffect, useState } from "react";
 import { Activity, LoaderCircle, RefreshCw, Square, X } from "lucide-react";
 import { IndexControl } from "../ai/IndexControl.tsx";
@@ -156,72 +157,48 @@ export function ActivityPanel({
       open={open}
       onOpenChange={onOpenChange}
       title="Status & Health"
-      variant="side"
+      size="lg"
     >
-      <div className="health-heading">
-        <Chip tone={health?.ready ? "success" : "warn"}>
-          {health
-            ? health.ready
-              ? "Speech ready"
-              : "Speech setup needed"
-            : "Checking speech…"}
-        </Chip>
-        <Button
-          size="sm"
-          icon={RefreshCw}
-          disabled={checking}
-          onClick={() => void check()}
-        >
-          Check health
-        </Button>
-      </div>
-      {health && (
-        <details className="health-console">
-          <summary>Diagnostics</summary>
-          <pre>
-            {[
-              `Concord Next ${version}`,
-              `Device: ${health.device}${health.gpu ? ` · ${health.gpu}` : ""}`,
-              `Speech models: ${health.modelsReady ? "available" : "missing"}`,
-              `Voice matching: ${health.voiceMatchingReady ? "available" : "missing"}`,
-              `Model: ${health.model}`,
-              `Models folder: ${health.models}`,
-              `Voice runtime: ${health.python}`,
-            ].join("\n")}
-          </pre>
-        </details>
-      )}
-      {open && <IndexControl />}
-
-      {active.length ? (
-        <ul className="job-list">{active.map(row)}</ul>
-      ) : (
-        <Empty
-          icon={Activity}
-          title="Nothing running"
-          text="Finished attempts are listed in recent activity below."
-        />
-      )}
-      {!!finished.length && (
-        <details className="job-history">
-          <summary>
-            Recent activity · {finished.length} finished attempts
-          </summary>
-          <p className="muted">
-            These are past attempts, saved between launches. Retrying creates a
-            new attempt.
-          </p>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => void clear()}
-          >
-            Clear finished
-          </Button>
-          <ul className="job-list">{finished.map(row)}</ul>
-        </details>
-      )}
+      <ArchiveWorkspace
+        onClose={() => onOpenChange(false)}
+        runtime={health}
+        version={version}
+        onCheck={() => void check()}
+        activities={
+          <>
+            {open && <IndexControl />}
+            {active.length ? (
+              <ul className="job-list">{active.map(row)}</ul>
+            ) : (
+              <Empty
+                icon={Activity}
+                title="Nothing running"
+                text="Finished attempts are listed in recent activity below."
+              />
+            )}
+            {!!finished.length && (
+              <details className="job-history">
+                <summary>
+                  Recent activity · {finished.length} finished attempts
+                </summary>
+                <p className="muted">
+                  These are past attempts, saved between launches. Retrying
+                  creates a new attempt.
+                </p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => void clear()}
+                >
+                  Clear finished
+                </Button>
+                <ul className="job-list">{finished.map(row)}</ul>
+              </details>
+            )}
+          </>
+        }
+      />
     </Dialog>
   );
 }

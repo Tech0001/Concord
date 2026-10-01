@@ -1,0 +1,358 @@
+.dialog:has(> .dialog-body > .archive-workspace) {
+  width: min(1200px, 96vw);
+  max-width: 96vw;
+  height: min(960px, 94dvh);
+}
+.archive-workspace {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+.archive-tabs,
+.archive-intro,
+.archive-audit-summary,
+.embedding-guard,
+.archive-terminal > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.archive-tabs {
+  position: sticky;
+  top: 0;
+  background: var(--popover);
+  z-index: 2;
+  padding-bottom: 8px;
+}
+.archive-intro p,
+.archive-section p,
+.archive-audit-summary p {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  line-height: 1.6;
+  margin: 6px 0;
+}
+.archive-intro h2 {
+  font-size: 18px;
+  margin: 0;
+}
+.archive-intro > span {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.archive-totals {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+.archive-totals > div {
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: var(--r-3);
+  padding: 12px 15px;
+  display: grid;
+  gap: 6px;
+}
+.archive-totals span {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.archive-totals strong {
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+}
+.archive-section,
+.archive-coverage,
+.archive-audit-summary {
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  padding: 18px;
+  background: var(--card);
+  min-width: 0;
+}
+.archive-section h3,
+.archive-coverage h3,
+.archive-terminal h3 {
+  font-size: 13px;
+  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.archive-coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.archive-coverage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.archive-coverage h3 {
+  color: var(--muted-foreground);
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.archive-coverage p {
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.5;
+}
+.archive-coverage .btn {
+  align-self: start;
+  margin-top: auto;
+}
+.coverage-numbers {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.coverage-numbers strong {
+  font-size: 23px;
+}
+.coverage-numbers span,
+.coverage-numbers small {
+  color: var(--muted-foreground);
+}
+.coverage-numbers small {
+  margin-left: auto;
+}
+.archive-workspace progress {
+  width: 100%;
+  height: 5px;
+  border: 0;
+  accent-color: var(--primary);
+  border-radius: 5px;
+  background: var(--muted);
+}
+.archive-workspace progress::-webkit-progress-bar {
+  background: var(--muted);
+  border-radius: 5px;
+}
+.archive-workspace progress::-webkit-progress-value {
+  background: var(--primary);
+  border-radius: 5px;
+}
+.archive-table-scroll {
+  overflow: auto;
+}
+.archive-workspace table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.archive-workspace th,
+.archive-workspace td {
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  font-weight: 400;
+}
+.archive-workspace th:first-child {
+  text-align: left;
+}
+.archive-workspace thead {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.durable-jobs ul,
+.health-review-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.durable-jobs li {
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: 12px;
+  margin: 8px 0;
+}
+.durable-jobs li > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+.job-status {
+  color: var(--muted-foreground);
+}
+.status-failed,
+.level-error b {
+  color: var(--destructive);
+}
+.history-toggle {
+  font-size: 12px;
+  color: var(--primary);
+  margin-top: 8px;
+}
+.durable-jobs pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.archive-audit-summary.has-errors {
+  border-color: color-mix(in oklab, var(--destructive) 55%, var(--border));
+}
+.archive-audit-summary > span {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.health-category > h3 {
+  text-transform: capitalize;
+}
+.health-issue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+.health-issue strong {
+  font-size: 13px;
+}
+.health-count {
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 2px 7px;
+  margin-left: 9px;
+  color: var(--muted-foreground);
+}
+.health-issue-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.health-review-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.health-review-list p {
+  font-size: 12px;
+  word-break: break-word;
+  color: var(--muted-foreground);
+}
+.archive-backups {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.archive-backups h4 {
+  font-size: 13px;
+  margin: 0;
+}
+.archive-backups p {
+  overflow-wrap: anywhere;
+}
+.path-picker {
+  display: flex;
+  gap: 7px;
+  margin: 12px 0;
+}
+.path-picker input {
+  min-width: 0;
+  flex: 1;
+}
+.archive-backups input {
+  border: 1px solid var(--border);
+  background: var(--background);
+  padding: 8px;
+  border-radius: var(--r-2);
+  font-size: 12px;
+}
+.terminal-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.terminal-controls .search-field {
+  flex: 1;
+  min-width: 170px;
+}
+.terminal-connected {
+  color: var(--primary);
+  font-size: 12px;
+}
+.terminal-output {
+  height: 430px;
+  max-height: 60dvh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--background);
+  padding: 10px;
+  font: 11px/1.7 var(--font-mono, monospace);
+}
+.terminal-line {
+  display: grid;
+  grid-template-columns: 90px 50px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.terminal-line time {
+  color: var(--muted-foreground);
+}
+.terminal-line span {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.terminal-line b {
+  font-weight: 400;
+  color: var(--primary);
+}
+.level-warn b {
+  color: var(--warning, var(--primary));
+}
+@media (max-width: 800px) {
+  .archive-coverage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .archive-totals {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .health-issue {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .archive-backups {
+    grid-template-columns: 1fr;
+  }
+  .archive-tabs .segmented {
+    overflow: auto;
+    max-width: 100%;
+  }
+  .archive-tabs .segment {
+    white-space: nowrap;
+  }
+  .terminal-line {
+    grid-template-columns: 70px 42px minmax(0, 1fr);
+    gap: 5px;
+  }
+}
+@media (max-width: 480px) {
+  .archive-coverage-grid {
+    grid-template-columns: 1fr;
+  }
+  .archive-totals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .archive-section {
+    padding: 13px;
+  }
+}

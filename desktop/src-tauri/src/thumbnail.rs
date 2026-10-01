@@ -13,6 +13,18 @@ fn usable(path: &Path) -> bool {
     path.metadata().is_ok_and(|m| m.is_file() && m.len() > 100)
 }
 
+/// Look for existing artwork without copying, generating, or changing either archive.
+pub fn cached(root:&Path,id:&str,legacy_database:Option<&Path>)->Option<PathBuf> {
+    let output=root.join("thumbnails").join(format!("{:x}.jpg",Sha256::digest(id.as_bytes())));
+    if usable(&output){return Some(output);}
+    if let (Ok([channel,video]),Some(source))=(serde_json::from_str::<[String;2]>(id),legacy_database){
+        let digest=format!("{:x}",Sha256::digest(format!("{channel}\0{video}")));
+        let path=source.parent()?.join("thumbnails").join(format!("{}.jpg",&digest[..32]));
+        if usable(&path){return Some(path);}
+    }
+    None
+}
+
 /// Read legacy artwork without changing the old cache. New artwork belongs to Next.
 pub fn resolve(root: &Path, id: &str, generator: &Mutex<()>) -> Result<Option<PathBuf>> {
     let media = db::media(root, id)?;

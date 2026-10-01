@@ -133,13 +133,21 @@ pub struct Link {
     pub source_anchor:String,pub target_anchor:String,pub source_handle:Option<String>,pub target_handle:Option<String>,
 }
 pub fn link(root:&Path,input:&Link,remove:bool)->Result<()> {
+    link_on(&db::open(root)?,input,remove)
+}
+pub fn replace_link(root:&Path,previous:&Link,next:&Link)->Result<()> {
+    let mut db=db::open(root)?;let tx=db.transaction()?;
+    link_on(&tx,previous,true)?;
+    link_on(&tx,next,false)?;
+    tx.commit()?;Ok(())
+}
+fn link_on(db:&Connection,input:&Link,remove:bool)->Result<()> {
     anyhow::ensure!(input.source!=input.target,"Choose a different note");
     anyhow::ensure!(LINK_KINDS.contains(&input.kind.as_str()),"Unknown connection type");
     let mut v=input.clone();
     if ["same_claim","contradicts","same_topic","related"].contains(&v.kind.as_str()) && v.source>v.target {
         std::mem::swap(&mut v.source,&mut v.target);std::mem::swap(&mut v.source_anchor,&mut v.target_anchor);std::mem::swap(&mut v.source_handle,&mut v.target_handle);
     }
-    let db=db::open(root)?;
     if remove {
         db.execute("DELETE FROM links WHERE source=?1 AND target=?2 AND kind=?3 AND source_anchor=?4 AND target_anchor=?5",params![v.source,v.target,v.kind,v.source_anchor,v.target_anchor])?;
         return Ok(());
@@ -175,7 +183,7 @@ pub fn rename_tag(root:&Path,from:&str,to:Option<&str>,descendants:bool)->Result
 }
 
 pub fn layout(root:&Path,view:&str,nodes:&[Value])->Result<()> {
-    anyhow::ensure!(!view.is_empty()&&view.len()<=200&&nodes.len()<=10_000,"Invalid map layout");
+    anyhow::ensure!(!view.is_empty()&&view.len()<=4096&&nodes.len()<=10_000,"Invalid map layout");
     let mut db=db::open(root)?;let tx=db.transaction()?;
     for n in nodes {
         let id=n["node"].as_str().context("Missing node ID")?;

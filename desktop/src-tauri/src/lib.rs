@@ -1,6 +1,8 @@
 #[cfg(debug_assertions)]
 mod smoke;
 pub mod db;
+pub mod health;
+pub mod runtime_log;
 pub mod ai;
 pub mod speakers;
 pub mod research;
@@ -23,6 +25,7 @@ use tauri::{Emitter, Manager, State};
 
 pub struct AppState {
     ai: Arc<ai::Control>,
+    maintenance: Arc<health::Control>,
     root: PathBuf,
     runtime: speech::Runtime,
     control: Arc<speech::Control>,
@@ -38,6 +41,30 @@ async fn work<T: Send + 'static>(
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("{e:#}"))
 }
+#[tauri::command]
+async fn archive_status(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||health::report::snapshot(&root)).await}
+#[tauri::command]
+async fn archive_jobs(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||{let db=db::open(&root)?;Ok(serde_json::json!({"jobs":db::rows(&db,"SELECT * FROM maintenance_jobs ORDER BY created_at DESC,rowid DESC LIMIT 40",[])?,"aiJobs":db::rows(&db,"SELECT * FROM ai_jobs ORDER BY created_at DESC,rowid DESC LIMIT 20",[])?}))}).await}
+#[tauri::command]
+async fn archive_audit(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||health::report::audit(&root)).await}
+#[tauri::command]
+async fn archive_last_audit(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||{let rows=db::rows(&db::open(&root)?,"SELECT value FROM settings WHERE key='health.lastAudit'",[])?;Ok(rows.first().and_then(|v|v["value"].as_str()).and_then(|v|serde_json::from_str(v).ok()).unwrap_or(Value::Null))}).await}
+#[tauri::command]
+async fn archive_repair(state:State<'_,AppState>,action:String)->Result<String,String>{let root=state.root.clone();let control=state.maintenance.clone();let generator=state.thumbnail_generator.clone();let ai=state.ai.clone();work(move||{if action=="embed-recordings"||action=="embed-documents"{return ai::index::start_filtered(root,ai,Some(if action=="embed-recordings"{"recording"}else{"document"}.into()));}health::repair::start(root,control,generator,action)}).await}
+#[tauri::command]
+fn archive_cancel_repair(state:State<'_,AppState>){state.maintenance.cancel.store(true,Ordering::SeqCst);}
+#[tauri::command]
+async fn archive_verify_embedding(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||{let c=ai::config::read(&root)?;let p=if c.embedding.kind=="builtin"{ai::builtin::provider(&root,|_|Ok(()))?}else{c.embedding.clone()};let v=p.embed(&p.client()?,&["Concord embedding compatibility check".into()])?;let width=v[0].len();let db=db::open(&root)?;let rows=db::rows(&db,"SELECT dimensions FROM ai_indexes WHERE signature=?1",[c.embedding.signature()])?;if let Some(row)=rows.first(){anyhow::ensure!(row["dimensions"].as_u64()==Some(width as u64),"Model returns {width} dimensions, but the active index has {}. Choose the matching model or rebuild its index.",row["dimensions"]);}let result=serde_json::json!({"dimensions":width,"model":c.embedding.model,"checkedAt":health::now()});db.execute("INSERT INTO settings VALUES ('health.embeddingCheck',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[result.to_string()])?;runtime_log::push("info",&format!("Embedding compatibility verified: {width} dimensions"));Ok(result)}).await}
+#[tauri::command]
+async fn archive_create_backup(state:State<'_,AppState>,folder:String)->Result<Value,String>{let root=state.root.clone();work(move||health::backup::create(&root,Path::new(&folder))).await}
+#[tauri::command]
+async fn archive_validate_backup(path:String)->Result<Value,String>{work(move||health::backup::validate(Path::new(&path))).await}
+#[tauri::command]
+async fn archive_stage_restore(state:State<'_,AppState>,path:String)->Result<Value,String>{let root=state.root.clone();work(move||health::backup::stage(&root,Path::new(&path))).await}
+#[tauri::command]
+async fn archive_cancel_restore(state:State<'_,AppState>)->Result<(),String>{let root=state.root.clone();work(move||health::backup::cancel(&root)).await}
+#[tauri::command]
+fn runtime_logs(after:u64)->Vec<runtime_log::Entry>{runtime_log::read(after)}
 #[tauri::command]
 async fn ai_config(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||ai::config::view(&root)).await}
 #[tauri::command]
@@ -256,6 +283,10 @@ async fn set_note_link(state: State<'_, AppState>, link:research::Link, remove:b
     let root=state.root.clone(); work(move || research::link(&root,&link,remove)).await
 }
 #[tauri::command]
+async fn replace_note_link(state: State<'_, AppState>, previous:research::Link, next:research::Link) -> Result<(),String> {
+    let root=state.root.clone(); work(move || research::replace_link(&root,&previous,&next)).await
+}
+#[tauri::command]
 async fn rename_note_tag(state: State<'_, AppState>, from:String, to:Option<String>, descendants:bool) -> Result<usize,String> {
     let root=state.root.clone(); work(move || research::rename_tag(&root,&from,to.as_deref(),descendants)).await
 }
@@ -408,12 +439,17 @@ pub fn run() {
         smoke::on_load(_webview, _payload);
       })
       .setup(move |app| {
+        health::backup::apply_pending(&root)?;
         let db = db::open(&root)?;
+        if let Err(e)=health::legacy::seed(&root){runtime_log::push("warn",&format!("Additional legacy metadata import: {e:#}"));}
+        db.execute("UPDATE maintenance_jobs SET status='interrupted',message='Concord closed before the repair finished. Run it again to resume.' WHERE status='running'",[])?;
+        runtime_log::push("info",concat!("Concord Next ",env!("CARGO_PKG_VERSION")," started"));
         db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'", [])?;
         ai::builtin::initialize(app.path().resource_dir()?);
         db.execute("UPDATE ai_jobs SET status='interrupted',message='Concord closed before indexing finished. Update index to resume.' WHERE status='running'",[])?;
         app.manage(AppState {
             ai: Arc::new(ai::Control::default()),
+            maintenance: Arc::new(health::Control::default()),
             root: root.clone(),
             runtime: speech::Runtime::resolve(app.path().resource_dir().ok()),
             control: control.clone(),
@@ -427,7 +463,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
-      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.ai.cancel_index.store(true,Ordering::SeqCst);for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
+      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
 }

@@ -1,3 +1,4 @@
+import type { ArchiveStatus, Audit, BackupValidation, LogEntry, MaintenanceJob } from "../health/types.ts";
 import type { AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, Summary } from "../ai/types.ts";
 import { invoke, isTauri, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -38,6 +39,7 @@ export type Transport = {
   pickFiles(options: FilePick): Promise<string[]>;
   pickSavePath(options: SavePick): Promise<string | null>;
   version(): Promise<string>;
+  pickFolder?(): Promise<string | null>;
 };
 
 const tauriTransport: Transport = {
@@ -52,6 +54,7 @@ const tauriTransport: Transport = {
   pickSavePath: ({ title, name, extensions, defaultPath }) =>
     save({ title, defaultPath, filters: [{ name, extensions }] }),
   version: () => getVersion(),
+  pickFolder: async () => { const path = await open({ title: "Choose backup folder", directory: true, multiple: false }); return typeof path === "string" ? path : null; },
 };
 
 let transport: Transport = tauriTransport;
@@ -70,6 +73,20 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const MEDIA_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "ogg", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 
 export const api = {
+  archiveStatus: () => call<ArchiveStatus>("archive_status"),
+  archiveAudit: () => call<Audit>("archive_audit"),
+  archiveLastAudit: () => call<Audit | null>("archive_last_audit"),
+  archiveJobs: () => call<{jobs:MaintenanceJob[];aiJobs:MaintenanceJob[]}>("archive_jobs"),
+  archiveRepair: (action:string) => call<string>("archive_repair",{action}),
+  archiveCancelRepair: () => call<void>("archive_cancel_repair"),
+  archiveVerifyEmbedding: () => call<{dimensions:number;model:string;checkedAt:string}>("archive_verify_embedding"),
+  archiveCreateBackup: (folder:string) => call<{path:string;bytes:number}>("archive_create_backup",{folder}),
+  archiveValidateBackup: (path:string) => call<BackupValidation>("archive_validate_backup",{path}),
+  archiveStageRestore: (path:string) => call<BackupValidation>("archive_stage_restore",{path}),
+  archiveCancelRestore: () => call<void>("archive_cancel_restore"),
+  runtimeLogs: (after:number) => call<LogEntry[]>("runtime_logs",{after}),
+  pickFiles: (options: FilePick) => transport.pickFiles(options),
+  pickFolder: () => transport.pickFolder ? transport.pickFolder() : Promise.resolve(null),
   aiSuggestTags: (text: string) => call<string[]>("ai_suggest_tags", { text }),
   aiConfig: () => call<AiConfig>("ai_config"),
   aiSaveProvider: (task: "embedding" | "chat", provider: Provider, key: string | null) => call<AiConfig>("ai_save_provider", { task, provider, key }),
@@ -126,6 +143,7 @@ export const api = {
   deleteNote: (id: string) => call<void>("delete_note", { id }),
   setNoteLink: (link: NoteLink, remove = false) => call<void>("set_note_link", { link: { source_anchor: "", target_anchor: "", source_handle: null, target_handle: null, note: "", ...link }, remove }),
   renameNoteTag: (from: string, to: string | null, descendants = false) => call<number>("rename_note_tag", { from, to, descendants }),
+  replaceNoteLink: (previous: NoteLink, next: NoteLink) => call<void>("replace_note_link", { previous, next }),
   saveMapLayout: (view: string, nodes: Omit<MapPosition, "view">[]) => call<void>("save_map_layout", { view, nodes }),
   linkNotes: (source: string, target: string) => call<void>("link_notes", { source, target }),
   setStarred: (id: string, starred: boolean) => call<void>("set_starred", { id, starred }),

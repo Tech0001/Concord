@@ -124,7 +124,8 @@ pub fn status(root: &Path) -> Result<Value> {
         json!({"modelReady":config.embedding.kind!="builtin"||super::builtin::ready(root),"indexed":count,"total":sources(&db)?.len(),"chunks":vectors,"dimensions":dimensions,"job":db::rows(&db,"SELECT * FROM ai_jobs ORDER BY created_at DESC,rowid DESC LIMIT 1",[])?.pop()}),
     )
 }
-pub fn start(root: PathBuf, control: Arc<Control>) -> Result<String> {
+pub fn start(root: PathBuf, control: Arc<Control>) -> Result<String> { start_filtered(root,control,None) }
+pub fn start_filtered(root: PathBuf, control: Arc<Control>, kind:Option<String>) -> Result<String> {
     let provider = config::read(&root)?.embedding;
     provider.validate(true)?;
     ensure!(
@@ -135,8 +136,8 @@ pub fn start(root: PathBuf, control: Arc<Control>) -> Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
     let result = (|| -> Result<()> {
         db::open(&root)?.execute(
-            "INSERT INTO ai_jobs(id,status,message) VALUES(?1,'running','Preparing search index')",
-            [&id],
+            "INSERT INTO ai_jobs(id,status,message,scope) VALUES(?1,'running','Preparing search index',?2)",
+            params![id,kind.as_deref().unwrap_or("")],
         )?;
         Ok(())
     })();
@@ -144,9 +145,10 @@ pub fn start(root: PathBuf, control: Arc<Control>) -> Result<String> {
         control.indexing.store(false, Ordering::SeqCst);
         return Err(e);
     }
+    crate::runtime_log::push("info","Semantic index job started");
     let job = id.clone();
     std::thread::spawn(move || {
-        let result = build(&root, &provider, &control, &job);
+        let result = build_filtered(&root, &provider, &control, &job,kind.as_deref());
         let cancelled = control.cancel_index.load(Ordering::SeqCst);
         let (status, message) = if cancelled {
             (
@@ -165,11 +167,12 @@ pub fn start(root: PathBuf, control: Arc<Control>) -> Result<String> {
                 params![job, status, message],
             );
         }
+        crate::runtime_log::push(if status=="failed"{"error"}else{"info"},&format!("Semantic index: {message}"));
         control.indexing.store(false, Ordering::SeqCst);
     });
     Ok(id)
 }
-fn build(root: &Path, provider: &Provider, control: &Control, job: &str) -> Result<()> {
+fn build_filtered(root: &Path, provider: &Provider, control: &Control, job: &str, kind:Option<&str>) -> Result<()> {
     let mut db = db::open(root)?;
     let effective = if provider.kind == "builtin" {
         super::builtin::provider(root, |message| {
@@ -184,7 +187,7 @@ fn build(root: &Path, provider: &Provider, control: &Control, job: &str) -> Resu
         provider.clone()
     };
     let provider = &effective;
-    let list = sources(&db)?;
+    let list:Vec<_> = sources(&db)?.into_iter().filter(|(k,_)|kind.is_none_or(|wanted|k==wanted)).collect();
     let signature = provider.signature();
     let client = provider.client()?;
     db.execute(

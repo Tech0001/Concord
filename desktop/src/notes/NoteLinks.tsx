@@ -11,7 +11,7 @@ export function NoteLinks({id,data,onSelect}: {id:string;data:Research;onSelect?
   const links=data.links.filter(l=>l.source===id||l.target===id);
   const save=async()=>{setBusy(true);try{
     const next={...(editing??{}),source:editing?.source??id,target:editing?.target??target,kind,note:reason};
-    await api.setNoteLink(next);if(editing&&editing.kind!==kind)await api.setNoteLink(editing,true);
+    if(editing)await api.replaceNoteLink(editing,next);else await api.setNoteLink(next);
     setTarget("");setReason("");setEditing(undefined);refresh();
   }catch(e){toast.error(e);}finally{setBusy(false);}};
   const remove=async(l:NoteLink)=>{try{await api.setNoteLink(l,true);refresh();}catch(e){toast.error(e);}};

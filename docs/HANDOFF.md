@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.5.0**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.6.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,51 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Status, Health, and Terminal correction (0.6.0 installed)
+
+The user supplied Electron Status/Health/Terminal/Map/Docs screenshots and clarified
+that the small activity/runtime drawer was an incomplete port. Status & Health now
+opens a wide workspace with Status, Health & repair, Activity, and Terminal tabs.
+Implemented: archive totals and coverage, channel rollups, local audits with affected-item
+review, transcript reindexing, thumbnail generation, scoped embedding repairs, sampled
+media fingerprints and duplicate review, durable repair jobs with cancel/resume, embedding
+width verification, and recoverable database backup/restore. Backups include private provider
+configuration and use mode 0600. Restores are validated, explicitly staged through a product
+confirmation, applied at restart, and retain the previous library as a separate backup.
+Terminal is read-only runtime output with filter/pause/follow/copy/clear; the earlier removal
+request concerned themes, not this feature.
+
+Schema 6 adds maintenance/index provenance, fingerprints, channel metadata, and document
+root/path/category metadata. A one-time **read-only** legacy metadata import recovers old
+summaries, channel settings, document categories/root paths, and transcript index timestamps,
+without replacing edited notes, speaker labels, or new transcripts. A real-archive scratch
+check recovered 1,975 summaries and all document categories. Corrections made afterward:
+missing-transcript completed items retain completed status; existing legacy artwork counts
+as cached; diarization coverage counts distinct eligible recordings (never >100%).
+
+Native scratch UI checks passed dashboard, audit/review, reindex preserving speaker labels,
+fingerprints, backup validation/staging/cancellation, and live log buffering/filtering/clear.
+Unit tests cover backup round-trip and retained pre-restore data, invalid backups, duplicate
+fingerprint invalidation, safe reindexing, and atomic connection edits. CSS loading was caught
+in screenshots as a stale Vite cache; restarting Vite fixed it. Native computed styles and corrected real-archive counts passed. **0.6.0 is installed**,
+with schema 6 and 1,975 recovered summaries confirmed in the running library. Backup:
+`~/.local/share/concord-next/backups/before-0.6.0-20260930-210115.db`.
+52 Rust tests, 34 TypeScript tests, seven player regressions and Clippy pass. A real-archive
+scratch audit and 218 MB backup passed; it matches the old two missing transcripts, 25
+stale indexes, and one missing thumbnail. Native semantic vectors require first indexing
+for the new model, so their missing counts differ from Electron. Reproduce the UI check
+with `prepare-health-review.py` and `native-health-smoke.js`.
+
+The user asked why an amber stripe appeared inside a cyan speaker section. It was the
+current-playback highlight, not another speaker. The source now uses the speaker's own
+color for the current line plus a small play marker beside its timestamp.
+
+Map work started, then paused for this priority correction: `src/map/model.ts` and
+`MapNodes.tsx` implement graph/anchor modeling and reusable nodes but are not wired to the
+page yet. Existing root dependencies @xyflow/react 12.9.3, d3 7.9.0, @types/d3 7.4.3 were
+added to desktop via an offline, scripts-disabled workspace install. Finish Map, Pipeline,
+Docs folder tree/live sync and remaining parity. Do not call the overall port complete.
 
 ## Current direction and 0.5.0 work (September 30, late evening)
 

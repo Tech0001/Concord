@@ -51,7 +51,15 @@ function library(f: LibraryFilter) {
 const find = (id: string) => fx.mediaList.find((m) => m.id === id);
 
 // Handlers receive the IPC argument object; `any` keeps this dev shim short.
+const mockCoverage = (covered:number,total=42) => ({covered,total});
+const mockArchive = () => ({generatedAt:String(Date.now()),archive:{total:48,complete:42,hours:185,pending:6,failed:0,words:180000},coverage:{transcripts:mockCoverage(42),fts:mockCoverage(40),segments:18750,embeddings:mockCoverage(35),summaries:mockCoverage(28),diarization:mockCoverage(40),documents:mockCoverage(4,4),documentEmbeddings:mockCoverage(3,4)},speakers:{total:9,unidentified:6},documents:{starred:1,personal:3,work:1},channels:[{id:"mock-channel",name:"Tuesday Study",enabled:1,diarize:1,include_shorts:0,total:48,complete:42,pending:6,failed:0,embedded:35,summarized:28,diarized:40}],embedding:{model:"Qwen3-Embedding-0.6B-Q8_0",dimensions:1024,enabled:true},chat:{configured:false,model:""},jobs:[],aiJobs:[],restorePending:false});
+const mockAudit = () => ({generatedAt:String(Date.now()),errors:0,warnings:2,databaseBytes:195000000,mediaBytes:43700000000,issues:[{id:"stale-fts",category:"transcripts",severity:"warning",title:"Stale transcript search index",description:"Transcript files changed or have not reached full-text search yet.",count:2,items:[{id:"rec-01",title:"Harbour conversation",kind:"recording",detail:"Search index needs rebuilding"}],repair:"reindex"}]});
 const handlers: Record<string, (a: any) => unknown> = {
+  archive_status: mockArchive,
+  archive_jobs: () => ({jobs:[],aiJobs:[]}),
+  archive_last_audit: mockAudit,
+  archive_audit: mockAudit,
+  runtime_logs: ({after}) => after ? [] : [{id:1,timestamp:Date.now(),level:"info",message:"Concord Next started"},{id:2,timestamp:Date.now(),level:"info",message:"Archive audit completed: 0 errors, 2 warnings"}],
   ai_config: () => ({ embedding: { enabled: true, kind: "builtin", model: "Qwen3-Embedding-0.6B-Q8_0", baseUrl: "http://127.0.0.1", hasKey: false, local: true }, chat: { enabled: false, kind: "local", model: "", baseUrl: "http://127.0.0.1:11434/v1", hasKey: false, local: true } }),
   ai_status: () => ({ modelReady: true, indexed: 0, total: fx.mediaList.length, chunks: 0, dimensions: null, job: null }),
   ai_summary: () => null,

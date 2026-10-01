@@ -141,6 +141,7 @@ impl Control {
 }
 
 fn message(root: &Path, id: &str, status: &str, text: &str) -> Result<()> {
+    crate::runtime_log::push(if status=="failed" {"error"} else {"info"},&format!("Speech · {text}"));
     db::open(root)?.execute(
         "UPDATE jobs SET status=?1,message=?2 WHERE id=?3",
         params![status, text, id],
@@ -452,6 +453,7 @@ fn persist(root: &Path, id: &str, md: &Path, raw: &Value, diar: &Value) -> Resul
             id
         ],
     )?;
+    crate::health::indexed(&tx,id,md)?;
     tx.commit()?;
     Ok(())
 }
