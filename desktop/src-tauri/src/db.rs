@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 3 {
+    if version >= 4 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -93,6 +93,7 @@ fn migrate(db: &mut Connection) -> Result<()> {
             tx.execute_batch(&format!("ALTER TABLE media ADD COLUMN {ddl}"))?;
         }
     }
+    if version < 3 {
     for (name, ddl) in [("is_noise", "is_noise INTEGER NOT NULL DEFAULT 0"), ("sample_count", "sample_count INTEGER NOT NULL DEFAULT 1")] {
         let present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('speakers') WHERE name=?1)", [name], |r| r.get(0))?;
         if !present { tx.execute_batch(&format!("ALTER TABLE speakers ADD COLUMN {ddl}"))?; }
@@ -107,6 +108,9 @@ fn migrate(db: &mut Connection) -> Result<()> {
         SELECT f.media_id,f.speaker,sum(max(0,CAST(f.end AS REAL)-CAST(f.start AS REAL))),min(CAST(f.start AS REAL)),max(CAST(f.end AS REAL))
         FROM segments f JOIN media m ON m.id=f.media_id WHERE f.speaker IS NOT NULL AND f.speaker<>'' GROUP BY f.media_id,f.speaker;
       PRAGMA user_version = 3")?;
+    }
+    crate::research::migrate(&tx)?;
+    tx.execute_batch("PRAGMA user_version=4")?;
     tx.commit()?;
     Ok(())
 }
@@ -191,7 +195,7 @@ pub fn import_legacy(root: &Path, source: &Path) -> Result<Value> {
       INSERT INTO notes(id,title,body,quote,media_id,start,end,created_at)
         SELECT n.id,n.title,coalesce(n.note,''),coalesce(n.quote,''),m.id,n.start_seconds,n.end_seconds,n.created_at
         FROM previous.transcript_clips n LEFT JOIN media m ON m.id=json_array(n.channel_id,n.video_id);
-      INSERT OR IGNORE INTO links SELECT from_clip_id,to_clip_id,kind FROM previous.clip_links
+      INSERT OR IGNORE INTO links(source,target,kind) SELECT from_clip_id,to_clip_id,kind FROM previous.clip_links
         WHERE from_clip_id IN (SELECT id FROM notes) AND to_clip_id IN (SELECT id FROM notes);
       INSERT INTO docs(id,title,body)
         SELECT d.id,d.title,coalesce((SELECT group_concat(text,char(10)||char(10)) FROM
@@ -203,6 +207,7 @@ pub fn import_legacy(root: &Path, source: &Path) -> Result<Value> {
     )?;
     tx.execute_batch("UPDATE speakers SET is_noise=1 WHERE name='(noise)';
       INSERT OR IGNORE INTO speaker_training SELECT speaker_id,media_id,local_id FROM assignments WHERE speaker_id IS NOT NULL AND centroid IS NOT NULL;")?;
+    crate::research::backfill(&tx)?;
     tx.commit()?;
     stats(root)
 }
@@ -372,7 +377,7 @@ pub fn transcript(root: &Path, id: &str) -> Result<Value> {
     }
     let notes = rows(
         &db,
-        "SELECT id, title, start, end FROM notes WHERE media_id = ?1 AND start IS NOT NULL ORDER BY start",
+        "SELECT n.id,n.title,a.start,a.end FROM note_anchors a JOIN notes n ON n.id=a.note_id WHERE a.media_id=?1 AND a.start IS NOT NULL UNION ALL SELECT n.id,n.title,n.start,n.end FROM notes n WHERE n.media_id=?1 AND n.start IS NOT NULL AND NOT EXISTS(SELECT 1 FROM note_anchors a WHERE a.note_id=n.id) ORDER BY 3",
         [id],
     )?;
     Ok(json!({"media":item,"segments":segments,"assignments":assignments,"notes":notes,"model":model}))
@@ -598,7 +603,7 @@ mod tests {
         assert_eq!(row["review_state"], "unreviewed");
         assert_eq!(row["position"], 0.0);
         assert!(row["opened_at"].is_null());
-        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 3);
+        assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 4);
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
     }

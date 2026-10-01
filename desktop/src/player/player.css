@@ -933,3 +933,7 @@
     grid-template-columns: 1fr;
   }
 }
+
+.t-line.has-note:not(.is-in-range) { background:color-mix(in oklab,var(--primary) 7%,transparent); border-inline-start:2px solid color-mix(in oklab,var(--primary) 45%,transparent); }
+.t-note-marks { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:4px; }
+.t-note-marks button { color:var(--primary); font-size:var(--text-xs); text-align:left; }

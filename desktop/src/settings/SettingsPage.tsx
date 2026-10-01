@@ -170,7 +170,7 @@ export function SettingsPage() {
 
       <Section icon={Info} title="About">
         <p className="settings-note">
-          Concord Next{version && ` ${version}`}. Everything stays on this computer: search runs locally, and nothing is sent to an AI provider.
+          Concord Next{version && ` ${version}`}. Your library is stored on this computer. When you use a remote embedding or chat provider, the text needed for that request is sent to the provider you choose.
         </p>
       </Section>
     </div>

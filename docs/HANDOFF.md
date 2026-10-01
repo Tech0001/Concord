@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.3.0**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.4.0**
 (Delivery 1 plus verified native playback and range-tool repairs).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,32 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Notes and evidence (0.4.0)
+
+Delivery 3 now includes multiple recording ranges and document passages per note,
+adding a selected passage to an existing note, editing/removing evidence, normalized tags
+and suggestions from existing tags, tag rename/merge/delete (including descendants),
+typed connections with explanations, Notes filtering/sorting and detail pane, and saved
+passage highlights that open the note directly from the transcript. Standalone notes are
+supported. Unsaved editor changes require an explicit discard; opening a source saves first.
+Schema 4 adds anchors, tags, link metadata and map positions. Stable anchor IDs survive
+reordering. Removing an anchor removes only its anchor-specific links; ordinary note links
+survive. Existing single-source notes are backfilled without touching their source files.
+
+About copy corrected at the user's request: the library is local, but remote embedding
+or chat providers receive the text needed for requests. Delivery 4 must expose completely
+separate provider/key/model settings for embedding and chat (e.g. local embedding with
+OpenRouter chat or the reverse). Do not claim that no data ever leaves the computer.
+
+Verification: 40 Rust tests, 34 existing TypeScript tests, all seven player browser
+regressions, Clippy with warnings denied, and frontend compilation passed. A real
+WebKitGTK test using real Rust IPC passed transcript selection → multi-source note → tags,
+editing without losing anchors, transcript highlights, typed links, tag management, and
+document selection appended to an existing note. Scripts:
+`prepare-native-review.py` creates a fresh test copy; `native-notes-smoke.js` exercises it.
+AI-generated tag suggestions will share the chat provider in Delivery 4; existing-tag
+suggestions already work without AI. Full port work remains in progress.
 
 ## Port continuation — Speakers and Activity (0.3.0)
 
@@ -34,7 +60,7 @@ Clippy passed with warnings denied, and frontend compilation passed. Native WebK
 checks in a SQLite backup passed creation/automatic matching, grouped appearances,
 rename/color, merge/noise/delete, and Activity history clearing. The native test script is
 `desktop/scripts/native-speakers-smoke.js`; its fixture needs three local 2D centroids with
-S0/S1 similar and S2 orthogonal, as documented in that script's companion setup comments.
+S0/S1 similar and S2 orthogonal, created by `python3 desktop/scripts/prepare-native-review.py /path/to/library.db`.
 The original library was never used for test mutations.
 
 ## Packaged speech repair (0.2.2)
@@ -226,8 +252,8 @@ reaches Electron parity, then gets polished. Order:
    rescan/find matches, unidentified queue, the full label dialog. Appearances
    ("where they spoke") and speaker notes are included. Schema 3 includes
    `speakers.is_noise`, `sample_count`, and the training ledger.
-3. **Notes** — multi-anchor notes (ranges and document passages), tags, typed links,
-   a real Notes page, range notes from the player.
+3. **Notes** — implemented in 0.4.0: multi-anchor notes (ranges and document passages),
+   tags, typed links, a real Notes page, and range notes from the player.
 4. **Search and AI** — one search experience (words, meaning, chat); embedding and
    chat providers and models configured separately (local, OpenRouter, …).
 5. **Map** — Electron parity, then better (explicit user control, persisted layouts).

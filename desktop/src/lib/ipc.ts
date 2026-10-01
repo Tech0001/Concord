@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
+  NoteLink,
+  MapPosition,
   MatchResult,
   LabelVoice,
   Overview,
@@ -100,6 +102,10 @@ export const api = {
   document: (id: string) => call<DocumentBody>("document", { id }),
   importDocuments: (paths: string[]) => call<number>("import_documents", { paths }),
   saveNote: (note: Note) => call<string>("save_note", { note }),
+  deleteNote: (id: string) => call<void>("delete_note", { id }),
+  setNoteLink: (link: NoteLink, remove = false) => call<void>("set_note_link", { link: { source_anchor: "", target_anchor: "", source_handle: null, target_handle: null, note: "", ...link }, remove }),
+  renameNoteTag: (from: string, to: string | null, descendants = false) => call<number>("rename_note_tag", { from, to, descendants }),
+  saveMapLayout: (view: string, nodes: Omit<MapPosition, "view">[]) => call<void>("save_map_layout", { view, nodes }),
   linkNotes: (source: string, target: string) => call<void>("link_notes", { source, target }),
   setStarred: (id: string, starred: boolean) => call<void>("set_starred", { id, starred }),
   setReview: (id: string, state: ReviewState) => call<void>("set_review", { id, stateName: state }),

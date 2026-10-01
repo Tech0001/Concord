@@ -161,3 +161,5 @@
   font-family: var(--font-ui);
   font-size: var(--text-xs);
 }
+
+.document-selection { position:sticky; top:8px; z-index:5; display:flex; gap:12px; align-items:center; padding:10px; background:var(--card); border:1px solid var(--border); border-radius:var(--r-2); margin-bottom:12px; }

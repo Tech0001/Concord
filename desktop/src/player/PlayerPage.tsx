@@ -279,6 +279,10 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
     selection.setSelecting(false);
     document.getSelection()?.removeAllRanges();
   };
+  const openSavedNote = useCallback(async (id: string) => {
+    try { const data = await api.research(); const note = data.notes.find(n => n.id === id); if (note) openNote(note); }
+    catch (e) { toast.error(e); }
+  }, [openNote, toast]);
   const onVoice = useCallback((local: string) => setNaming(voices.get(local) ?? null), [voices]);
   const firstLine = (voice: Voice) => {
     const index = lines.findIndex((l) => voice.locals.includes(l.speaker ?? ""));
@@ -452,6 +456,8 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
   const transcript = (
     <Transcript
       lines={lines}
+      notes={data.notes}
+      onNote={openSavedNote}
       voices={voices}
       time={time}
       follow={follow}

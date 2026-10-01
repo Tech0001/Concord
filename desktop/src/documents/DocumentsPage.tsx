@@ -80,9 +80,18 @@ function DocumentList() {
 }
 
 function DocumentReader({ id }: { id: string }) {
-  const { navigate, setPageTitle } = useApp();
+  const { navigate, setPageTitle, openNote } = useApp();
   const toast = useToast();
   const [doc, setDoc] = useState<DocumentBody>();
+  const [passage, setPassage] = useState("");
+  useEffect(() => {
+    const selection = () => {
+      const s = getSelection(); const paper = document.querySelector(".doc-paper");
+      if (s && !s.isCollapsed && paper?.contains(s.anchorNode) && paper.contains(s.focusNode)) setPassage(s.toString().trim());
+    };
+    document.addEventListener("selectionchange", selection);
+    return () => document.removeEventListener("selectionchange", selection);
+  }, []);
   useEffect(() => {
     api
       .document(id)
@@ -102,6 +111,7 @@ function DocumentReader({ id }: { id: string }) {
       {doc && (
         <>
           <h1 className="doc-title">{doc.title}</h1>
+          {passage && <div className="document-selection"><Button variant="primary" onClick={() => openNote({ title: `${doc.title} · passage`, body: "", anchors: [{ doc_id: doc.id, title: doc.title, quote: passage }] })}>Save passage as note</Button><span className="muted">{passage.length} characters selected</span><Button variant="ghost" size="sm" onClick={() => { setPassage(""); getSelection()?.removeAllRanges(); }}>Clear</Button></div>}
           <div className="doc-paper">
             {doc.body.trim() ? (
               <Markdown source={doc.body} />

@@ -87,7 +87,13 @@ export type Appearance = {
   date: string;
   duration: number;
 };
+export type NoteAnchor = { id?: string; media_id?: string | null; doc_id?: string | null; start?: number | null; end?: number | null; quote: string; doc_start?: number | null; doc_end?: number | null; title?: string | null; channel?: string; date?: string };
+export type NoteLink = { source: string; target: string; kind: string; note?: string; source_anchor?: string; target_anchor?: string; source_handle?: string | null; target_handle?: string | null };
+export type MapPosition = { view: string; node: string; x: number; y: number; width?: number; height?: number };
 export type Note = {
+  anchors?: NoteAnchor[];
+  tags?: string[];
+  updated_at?: string;
   id?: string;
   title: string;
   body: string;
@@ -100,7 +106,9 @@ export type Note = {
 };
 export type Research = {
   notes: Note[];
-  links: { source: string; target: string; kind: string }[];
+  links: NoteLink[];
+  tags?: { tag: string; count: number }[];
+  positions?: MapPosition[];
   docs: { id: string; title: string; length: number }[];
 };
 export type Job = {

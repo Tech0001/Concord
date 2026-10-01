@@ -47,7 +47,7 @@ try {
   await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 940, deviceScaleFactor: 1, mobile: false });
   await send('Page.navigate', { url: `${base}?mock&delay.recording=900&delay.media_file=10#/library` });
   await until('!!document.querySelector(".rec-grid, .rec-list")', 'library');
-  await js(`(async () => { window.testApi = (await import('/src/lib/ipc.ts')).api; await testApi.savePosition('rec-01', 75); location.hash = '#/recording/rec-01'; })()`);
+  await js(`(async () => { window.testApi = window.__concordMockApi; await testApi.savePosition('rec-01', 75); location.hash = '#/recording/rec-01'; })()`);
   await until('!!document.querySelector(".player-loading")', 'pending transcript');
   await js(`location.hash = '#/library'`);
   await sleep(250);

@@ -1,5 +1,5 @@
 // Dev-only host that answers IPC commands from synthetic fixtures (open with ?mock).
-import { setTransport, type Transport } from "../lib/ipc.ts";
+import { api, setTransport, type Transport } from "../lib/ipc.ts";
 import type { LibraryFilter, Note, ReviewState } from "../lib/types.ts";
 import * as fx from "./fixtures.ts";
 
@@ -189,4 +189,5 @@ export function installMock(): void {
     version: async () => "0.2.0-dev",
   };
   setTransport(transport);
+  Object.assign(window, { __concordMockApi: api });
 }

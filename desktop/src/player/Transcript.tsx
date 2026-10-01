@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   type CSSProperties,
   type MouseEvent,
@@ -13,7 +14,7 @@ import { ArrowDownToLine, AudioLines } from "lucide-react";
 import { clock } from "../lib/format.ts";
 import { indexAt, markParts } from "../lib/range.ts";
 import type { TimeStore } from "../lib/timeStore.ts";
-import type { Segment } from "../lib/types.ts";
+import type { NoteMarker, Segment } from "../lib/types.ts";
 import { voiceLabel } from "../lib/speakers.ts";
 import { cx } from "../lib/cx.ts";
 import { Empty } from "../ui/Empty.tsx";
@@ -49,15 +50,17 @@ type LineProps = {
   onVoice: (local: string) => void;
   register: (index: number, el: HTMLDivElement | null) => void;
   press?: PressHandlers;
+  noteMarks?: NoteMarker[];
+  onNote?: (id: string) => void;
 };
 
 const TranscriptLine = memo(
-  function TranscriptLine({ index, line, voice, showSpeaker, state, onLine, onVoice, register, press }: LineProps) {
+  function TranscriptLine({ index, line, voice, showSpeaker, state, onLine, onVoice, register, press, noteMarks, onNote }: LineProps) {
     const name = voice?.name ?? (line.speaker ? voiceLabel(line.speaker) : "");
     return (
       <div
         ref={(el) => register(index, el)}
-        className={cx("t-line", state.inRange && "is-in-range", state.activeMatch && "is-active-match")}
+        className={cx("t-line", state.inRange && "is-in-range", state.activeMatch && "is-active-match", !!noteMarks?.length && "has-note")}
         data-line={index}
         data-edge={state.edge || undefined}
         style={voice ? ({ "--speaker": voice.color } as CSSProperties) : undefined}
@@ -89,6 +92,7 @@ const TranscriptLine = memo(
               {name}
             </button>
           )}
+          {!!noteMarks?.length && <div className="t-note-marks">{noteMarks.map((n,i) => <button key={`${n.id}:${i}`} type="button" onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onNote?.(n.id); }} title="Open saved note">Note · {n.title}</button>)}</div>}
           <p className="t-text">
             {state.query
               ? markParts(line.text, state.query).map((p, i) =>
@@ -115,6 +119,8 @@ const TranscriptLine = memo(
     a.onVoice === b.onVoice &&
     a.register === b.register &&
     a.press === b.press &&
+    a.noteMarks === b.noteMarks &&
+    a.onNote === b.onNote &&
     a.state.inRange === b.state.inRange &&
     a.state.edge === b.state.edge &&
     a.state.query === b.state.query &&
@@ -136,8 +142,12 @@ export function Transcript({
   header,
   footer,
   banner,
+  notes,
+  onNote,
 }: {
   lines: Segment[];
+  notes?: NoteMarker[];
+  onNote?: (id: string) => void;
   voices: Map<string, Voice>;
   time: TimeStore;
   follow: boolean;
@@ -152,6 +162,7 @@ export function Transcript({
   footer?: ReactNode;
   banner?: ReactNode;
 }) {
+  const noteMarks = useMemo(() => lines.map(line => notes?.filter(n => line.end > n.start && line.start < (n.end ?? n.start + 0.01))), [lines, notes]);
   const rows = useRef(new Map<number, HTMLDivElement>());
   const current = useRef(-1);
   const followRef = useRef(follow);
@@ -230,6 +241,8 @@ export function Transcript({
             onVoice={onVoice}
             register={register}
             press={press?.(i)}
+            noteMarks={noteMarks[i]}
+            onNote={onNote}
           />
         ))}
       </div>

@@ -2,6 +2,7 @@
 mod smoke;
 pub mod db;
 pub mod speakers;
+pub mod research;
 pub mod export;
 pub mod system;
 pub mod waveform;
@@ -11,7 +12,7 @@ pub mod thumbnail;
 pub mod transcript;
 use anyhow::{Context, Result};
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -204,10 +205,23 @@ async fn clear_jobs(state: State<'_, AppState>, id: Option<String>) -> Result<us
 }
 #[tauri::command]
 async fn research(state: State<'_, AppState>) -> Result<Value, String> {
-    let root = state.root.clone();
-    work(move||{
-    let db=db::open(&root)?;Ok(json!({"notes":db::rows(&db,"SELECT n.*, m.title AS media_title FROM notes n LEFT JOIN media m ON m.id = n.media_id ORDER BY n.created_at DESC",[])?,"links":db::rows(&db,"SELECT * FROM links",[])?,"docs":db::rows(&db,"SELECT id,title,length(body) AS length FROM docs ORDER BY title",[])?}))
-}).await
+    let root=state.root.clone(); work(move || research::read(&root)).await
+}
+#[tauri::command]
+async fn delete_note(state: State<'_, AppState>, id:String) -> Result<(),String> {
+    let root=state.root.clone(); work(move || research::delete(&root,&id)).await
+}
+#[tauri::command]
+async fn set_note_link(state: State<'_, AppState>, link:research::Link, remove:bool) -> Result<(),String> {
+    let root=state.root.clone(); work(move || research::link(&root,&link,remove)).await
+}
+#[tauri::command]
+async fn rename_note_tag(state: State<'_, AppState>, from:String, to:Option<String>, descendants:bool) -> Result<usize,String> {
+    let root=state.root.clone(); work(move || research::rename_tag(&root,&from,to.as_deref(),descendants)).await
+}
+#[tauri::command]
+async fn save_map_layout(state: State<'_, AppState>, view:String, nodes:Vec<Value>) -> Result<(),String> {
+    let root=state.root.clone(); work(move || research::layout(&root,&view,&nodes)).await
 }
 #[tauri::command]
 async fn document(state: State<'_, AppState>, id: String) -> Result<Value, String> {
@@ -253,33 +267,13 @@ async fn import_documents(state: State<'_, AppState>, paths: Vec<String>) -> Res
     .await
 }
 #[tauri::command]
-async fn save_note(state: State<'_, AppState>, note: Value) -> Result<String, String> {
-    let root = state.root.clone();
-    work(move||{
-    let id=note["id"].as_str().map(str::to_owned).unwrap_or_else(||uuid::Uuid::new_v4().to_string());
-    let title=note["title"].as_str().unwrap_or("").trim();anyhow::ensure!(!title.is_empty(),"Give the note a title");
-    db::open(&root)?.execute("INSERT INTO notes(id,title,body,quote,media_id,start,end) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET title=excluded.title,body=excluded.body",
-      params![id,title,note["body"].as_str().unwrap_or(""),note["quote"].as_str().unwrap_or(""),note["media_id"].as_str(),note["start"].as_f64(),note["end"].as_f64()])?;Ok(id)
-}).await
+async fn save_note(state: State<'_, AppState>, note:research::Note) -> Result<String,String> {
+    let root=state.root.clone(); work(move || research::save(&root,&note)).await
 }
 #[tauri::command]
-async fn link_notes(
-    state: State<'_, AppState>,
-    source: String,
-    target: String,
-) -> Result<(), String> {
-    let root = state.root.clone();
-    work(move || {
-        anyhow::ensure!(source != target, "Choose a different note");
-        db::open(&root)?.execute(
-            "INSERT OR IGNORE INTO links(source,target,kind) VALUES (?1,?2,'related')",
-            params![source, target],
-        )?;
-        Ok(())
-    })
-    .await
+async fn link_notes(state: State<'_, AppState>, source:String, target:String) -> Result<(),String> {
+    let root=state.root.clone();work(move || research::link(&root,&research::Link{source,target,kind:"related".into(),..Default::default()},false)).await
 }
-
 #[tauri::command]
 async fn transcript_text(state: State<'_, AppState>, id: String, start: f64, end: f64, format: String) -> Result<String, String> {
     let root = state.root.clone();
@@ -390,7 +384,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
       .run(move|_,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();}});
 }
