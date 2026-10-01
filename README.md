@@ -26,8 +26,7 @@ transcript folder and can run alongside it. Full Electron parity is still in pro
   queues, delayed retries, and batch re-transcription that preserves existing transcripts.
   Optional semantic indexing and summaries run independently after transcription, using
   separately approved providers. Both start off; existing recordings are not backfilled.
-- Tools for standalone M4A/MP3 extraction, recoverable Linux voice recording with optional local transcript preview, and
-  manual YouTube discovery with phrase filters and direct queueing.
+- Tools for standalone M4A/MP3 extraction and recoverable Linux voice recording with optional local transcript preview.
 - Status, archive audits and repairs, backups/restore, activity history, and runtime logs.
 
 ## Install and prepare speech
@@ -60,9 +59,9 @@ by OpenAI; the app links to Manage usage. This uses Concord’s own connection a
 read Codex credentials. See [OpenAI’s sign-in flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in).
 
 If you choose a remote
-provider, relevant text is sent to that provider. Speech processing stays local. Discover
-uses a separate YouTube Data API key in Settings and sends search queries to Google. It
-never starts recurring searches or adds subscriptions automatically.
+provider, relevant text is sent to that provider. Speech processing stays local.
+Optional YouTube subscriptions and downloads are configured in Pipeline; enable the downloader
+in Settings first.
 
 See [speech setup details](desktop/speech/README.md) for pinned models and dependencies.
 

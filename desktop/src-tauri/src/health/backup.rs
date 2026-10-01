@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-const CONFIG_FILES: [&str; 3] = ["ai-providers.json", "chatgpt-auth.json", "youtube-api.json"];
+const CONFIG_FILES: [&str; 2] = ["ai-providers.json", "chatgpt-auth.json"];
 fn readonly(path: &Path) -> Result<Connection> {
     Ok(Connection::open_with_flags(
         path,

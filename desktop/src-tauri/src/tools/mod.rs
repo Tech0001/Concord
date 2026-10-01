@@ -1,6 +1,5 @@
 //! Local media utilities. Capture and extraction keep working when a page is closed.
 pub mod extract;
-pub mod discover;
 mod process;
 pub mod recorder;
 pub mod live_transcript;

@@ -148,17 +148,18 @@ fn backup_round_trip_stages_until_restart_preserves_before_copy_and_private_conf
     assert!(p.join("meeting.ogg").exists());
 }
 #[test]
-fn backup_preserves_discover_key_and_accepts_backups_from_before_it_existed() {
-    let root=fixture();let p=root.path();
-    crate::tools::discover::save_key(p,"synthetic-youtube-key").unwrap();
+fn backups_ignore_configuration_for_removed_features() {
+    let root=fixture(); let p=root.path();
+    // An old optional credential is neither included in new backups nor restored from old ones.
+    fs::write(p.join("youtube-api.json"),br#"{"apiKey":"synthetic-removed-key"}"#).unwrap();
     let result=backup::create(p,&p.join("backups")).unwrap();
     let path=Path::new(result["path"].as_str().unwrap());
-    crate::tools::discover::save_key(p,"").unwrap();
-    backup::stage(p,path).unwrap();backup::apply_pending(p).unwrap();
-    assert_eq!(crate::tools::discover::status(p).unwrap()["hasKey"],true);
     let old=rusqlite::Connection::open(path).unwrap();
-    old.execute("DELETE FROM concord_backup_files WHERE name='youtube-api.json'",[]).unwrap();drop(old);
-    backup::validate(path).unwrap();backup::stage(p,path).unwrap();backup::apply_pending(p).unwrap();
+    assert_eq!(old.query_row("SELECT count(*) FROM concord_backup_files WHERE name='youtube-api.json'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    old.execute("INSERT INTO concord_backup_files VALUES ('youtube-api.json',?1)",[br#"{"apiKey":"synthetic-removed-key"}"#.as_slice()]).unwrap();
+    drop(old);
+    fs::remove_file(p.join("youtube-api.json")).unwrap();
+    backup::validate(path).unwrap(); backup::stage(p,path).unwrap(); backup::apply_pending(p).unwrap();
     assert!(!p.join("youtube-api.json").exists());
 }
 #[test]

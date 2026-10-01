@@ -1,5 +1,4 @@
 import type { PopoutSession, PlaybackPosition, PopoutCommand } from "../player/popout-types.ts";
-import type { YouTubeQuery, YouTubeHit, YouTubePage } from "../tools/discover-model.ts";
 import type { ToolsState } from "../tools/types.ts";
 import type { FileAction, RecordingFileInfo } from "../library/RecordingFileDialog.tsx";
 import type { AutomaticAi, SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
@@ -97,10 +96,6 @@ export const api = {
   onPopoutClosed: (handler:(session:PopoutSession)=>void) => transport.listen("concord-popout-closed",handler),
   onPopoutReturn: (handler:(value:{token:string;resume:boolean})=>void) => transport.listen("concord-popout-return",handler),
   onPopoutCommand: (handler:(value:{token:string;command:PopoutCommand})=>void) => transport.listen("concord-popout-command",handler),
-  youtubeStatus: () => call<{hasKey:boolean}>("youtube_status"),
-  youtubeSaveKey: (key:string) => call<{hasKey:boolean}>("youtube_save_key",{key}),
-  youtubeSearch: (query:YouTubeQuery) => call<YouTubePage>("youtube_search",{query}),
-  youtubeQueue: (hit:YouTubeHit,category:string) => call<{id:string;action:"queued"|"existing"|"alreadyQueued"}>("youtube_queue",{hit,category}),
   toolsState: () => call<ToolsState>("tools_state"),
   toolsExtract: (source:string,destination:string,format:string) => call<void>("tools_extract",{source,destination,format}),
   toolsCancelExtract: () => call<void>("tools_cancel_extract"),

@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.23.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.24.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,32 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Discover removed (0.24.0)
+
+The user explicitly removed Discover from the product scope. It is not a remaining parity gap.
+Tools now contains only Extract audio and Voice recorder. The YouTube search UI, phrase-filter
+helpers, API-key settings, privacy copy, IPC endpoints, Rust API client and Discover-only queue
+adapter have been removed, together with their obsolete mocks and tests. Existing recordings
+and processing jobs are untouched. YouTube sources, opt-in yt-dlp installation, and downloads
+remain in Pipeline/Settings.
+
+New backups no longer include the retired `youtube-api.json` credential. Older backups containing
+it remain valid; restoring them ignores that retired configuration. An existing file on disk is
+left untouched and is never read by the app. No schema change (still version 12).
+
+Validation: 151 Rust tests passed (8 opt-in integration tests ignored), 56 interface tests passed,
+Clippy all-targets `-D warnings` passed, and the frontend/debug/release builds passed. A real
+WebKitGTK scratch run confirmed the two remaining tool tabs, absence of Discover/key settings,
+rejection of all four removed IPC commands, and continued availability of downloader/Pipeline
+commands. Report: `/tmp/concord-024-native-test.log`; scratch library:
+`/tmp/concord-remove-discover-native-6rkgfeq8`. Smoke script: `/tmp/concord-024-native-smoke.js`.
+Other logs: `/tmp/concord-024-{tests,ts,clippy,native-build,package}.log`.
+
+Installed 0.24.0 at `~/.local/opt/concord-next/Concord-Next.AppImage`; verified it matches the
+built bundle. The user's 0.23.0 setup window was left running to preserve their current work.
+Close and reopen Concord Next to load this release. AppImage: 248.44 MiB; deb: 157.21 MiB.
+Database backup before updating: `/home/pc/.local/share/concord-next/backups/before-0.24.0-20261001-130847.db`.
 
 ## Optional YouTube downloader (0.23.0 installed)
 

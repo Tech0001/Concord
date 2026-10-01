@@ -27,7 +27,7 @@ export type Route =
   | { page: "ai" }
   | { page: "settings"; section?: SettingsSection }
   | { page: "setup"; step?: SetupStep; returnTo?: (typeof RETURNS)[number]; chat?: ChatChoice }
-  | { page: "tools"; tab?: "extract" | "record" | "discover"; source?: string };
+  | { page: "tools"; tab?: "extract" | "record"; source?: string };
 export type Page = Route["page"];
 
 export function parseRoute(hash: string): Route {
@@ -46,7 +46,7 @@ export function parseRoute(hash: string): Route {
       return params.has("t") && Number.isFinite(at) && at >= 0 ? { page: "recording", id, at } : { page: "recording", id };
     }
     case "tools":
-      return {page:"tools",tab:params.get("tab")==="record"?"record":params.get("tab")==="discover"?"discover":"extract",source:params.get("source")??undefined};
+      return {page:"tools",tab:params.get("tab")==="record"?"record":"extract",source:params.get("source")??undefined};
     case "search":
       return { page: "search", q: params.get("q") ?? "" };
     case "documents":

@@ -1,5 +1,4 @@
 import { DownloadSettings } from "./DownloadSettings.tsx";
-import { YouTubeSettings } from "../tools/YouTubeSettings.tsx";
 import { useEffect, useState } from "react";
 import { AudioLines, Check, CircleAlert, Cpu, FolderOpen, HardDrive, Info, Palette, RefreshCw } from "lucide-react";
 import { api } from "../lib/ipc.ts";
@@ -140,7 +139,6 @@ export function SettingsPage({ section }: { section?: SettingsSection }) {
       </div>
       <div id="settings-youtube" className="settings-anchor">
         <DownloadSettings />
-        <YouTubeSettings />
       </div>
       <Section id="speech" icon={AudioLines} title="Speech">
         <Row label="Status">
@@ -199,7 +197,7 @@ export function SettingsPage({ section }: { section?: SettingsSection }) {
 
       <Section id="about" icon={Info} title="About">
         <p className="settings-note">
-          Concord Next{version && ` ${version}`}. Your library is stored on this computer. When you use a remote embedding or chat provider, the text needed for that request is sent to the provider you choose. Discover sends your online search query to Google.
+          Concord Next{version && ` ${version}`}. Your library is stored on this computer. When you use a remote embedding or chat provider, the text needed for that request is sent to the provider you choose.
         </p>
       </Section>
     </div>
