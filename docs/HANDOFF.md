@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.6.0**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.7.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -49,11 +49,28 @@ The user asked why an amber stripe appeared inside a cyan speaker section. It wa
 current-playback highlight, not another speaker. The source now uses the speaker's own
 color for the current line plus a small play marker beside its timestamp.
 
-Map work started, then paused for this priority correction: `src/map/model.ts` and
-`MapNodes.tsx` implement graph/anchor modeling and reusable nodes but are not wired to the
-page yet. Existing root dependencies @xyflow/react 12.9.3, d3 7.9.0, @types/d3 7.4.3 were
-added to desktop via an offline, scripts-disabled workspace install. Finish Map, Pipeline,
-Docs folder tree/live sync and remaining parity. Do not call the overall port complete.
+## Map and extended research import (0.7.0)
+
+The native Map now has Videos, Cards, Arc, and Cluster layouts, search/collection/tag filters,
+passage-level drag-to-connect handles, typed edge editing/reconnection, explanations, resizable
+nodes, saved positions/dimensions per view, a note inspector, source navigation, pan/zoom and
+minimap. Whole-note links remain distinct from passage links. Shared-tag and same-recording
+connections are optional computed overlays; they are never saved as user-authored links.
+
+An idempotent read-only Electron importer recovers multi-source note evidence, tags, detailed
+connections and saved layouts omitted by the earliest preview. It upgrades only untouched
+notes and an unchanged imported graph, preserving native edits and positions. Missing sources
+never erase already-imported evidence. Fresh legacy imports also run this recovery immediately.
+A real-archive scratch check recovered all five notes, six passages, five deduplicated typed
+links and 12 applicable saved positions; all five edges rendered in native WebKitGTK.
+
+Native scratch UI checks pass multi-recording groups, document/standalone notes, selecting a
+non-first row, dragging passage handles to create a connection, atomic edge editing, persisted
+node dragging, all four layouts, and search/tag filters. Reproduce with
+`prepare-health-review.py` and `native-map-smoke.js`. 55 Rust tests, 37 TypeScript tests,
+Clippy and frontend compilation pass. Desktop and phone screenshots checked.
+Packaging/install of 0.7.0 is in progress; 0.6.0 remains installed until updated below.
+Next: Docs folder tree/live sync, Pipeline, and remaining parity. Full port is not complete.
 
 ## Current direction and 0.5.0 work (September 30, late evening)
 

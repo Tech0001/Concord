@@ -3,6 +3,7 @@ mod smoke;
 pub mod db;
 pub mod health;
 pub mod runtime_log;
+pub mod legacy_research;
 pub mod ai;
 pub mod speakers;
 pub mod research;
@@ -442,6 +443,7 @@ pub fn run() {
         health::backup::apply_pending(&root)?;
         let db = db::open(&root)?;
         if let Err(e)=health::legacy::seed(&root){runtime_log::push("warn",&format!("Additional legacy metadata import: {e:#}"));}
+        if let Err(e)=legacy_research::seed(&root){runtime_log::push("warn",&format!("Extended research import: {e:#}"));}
         db.execute("UPDATE maintenance_jobs SET status='interrupted',message='Concord closed before the repair finished. Run it again to resume.' WHERE status='running'",[])?;
         runtime_log::push("info",concat!("Concord Next ",env!("CARGO_PKG_VERSION")," started"));
         db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'", [])?;

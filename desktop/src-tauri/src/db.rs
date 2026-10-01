@@ -194,10 +194,12 @@ pub fn import_legacy(root: &Path, source: &Path) -> Result<Value> {
         FROM previous.video_speaker_assignments a JOIN media m ON m.id=json_array(a.channel_id,a.video_id);
       INSERT INTO segments(media_id,start,end,speaker,text)
         SELECT json_array(channel_id,video_id),start_seconds,end_seconds,speaker,text FROM previous.transcript_segments_fts;
-      INSERT INTO notes(id,title,body,quote,media_id,start,end,created_at)
-        SELECT n.id,n.title,coalesce(n.note,''),coalesce(n.quote,''),m.id,n.start_seconds,n.end_seconds,n.created_at
+      INSERT INTO notes(id,title,body,quote,media_id,start,end,created_at,updated_at)
+        SELECT n.id,n.title,coalesce(n.note,''),coalesce(n.quote,''),m.id,n.start_seconds,n.end_seconds,n.created_at,n.created_at
         FROM previous.transcript_clips n LEFT JOIN media m ON m.id=json_array(n.channel_id,n.video_id);
-      INSERT OR IGNORE INTO links(source,target,kind) SELECT from_clip_id,to_clip_id,kind FROM previous.clip_links
+      INSERT OR IGNORE INTO links(source,target,kind)
+        SELECT CASE WHEN kind IN ('same_claim','same_topic','contradicts','related') AND from_clip_id>to_clip_id THEN to_clip_id ELSE from_clip_id END,
+               CASE WHEN kind IN ('same_claim','same_topic','contradicts','related') AND from_clip_id>to_clip_id THEN from_clip_id ELSE to_clip_id END,kind FROM previous.clip_links
         WHERE from_clip_id IN (SELECT id FROM notes) AND to_clip_id IN (SELECT id FROM notes);
       INSERT INTO docs(id,title,body)
         SELECT d.id,d.title,coalesce((SELECT group_concat(text,char(10)||char(10)) FROM
@@ -211,6 +213,10 @@ pub fn import_legacy(root: &Path, source: &Path) -> Result<Value> {
       INSERT OR IGNORE INTO speaker_training SELECT speaker_id,media_id,local_id FROM assignments WHERE speaker_id IS NOT NULL AND centroid IS NOT NULL;")?;
     crate::research::backfill(&tx)?;
     tx.commit()?;
+    drop(db);
+    for result in [crate::health::legacy::seed(root), crate::legacy_research::seed(root)] {
+        if let Err(e) = result { crate::runtime_log::push("warn", &format!("Additional legacy metadata import: {e:#}")); }
+    }
     stats(root)
 }
 

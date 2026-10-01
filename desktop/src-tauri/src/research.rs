@@ -141,7 +141,7 @@ pub fn replace_link(root:&Path,previous:&Link,next:&Link)->Result<()> {
     link_on(&tx,next,false)?;
     tx.commit()?;Ok(())
 }
-fn link_on(db:&Connection,input:&Link,remove:bool)->Result<()> {
+pub(crate) fn link_on(db:&Connection,input:&Link,remove:bool)->Result<()> {
     anyhow::ensure!(input.source!=input.target,"Choose a different note");
     anyhow::ensure!(LINK_KINDS.contains(&input.kind.as_str()),"Unknown connection type");
     let mut v=input.clone();
