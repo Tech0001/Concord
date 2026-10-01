@@ -1,3 +1,4 @@
+pub mod automation;
 pub mod builtin;
 pub mod chat;
 pub mod chatgpt;
@@ -13,6 +14,9 @@ use std::sync::{atomic::AtomicBool, Mutex};
 pub struct Control {
     pub chatgpt: Arc<chatgpt::Control>,
     pub indexing: AtomicBool,
+    pub index_job: Mutex<Option<String>>,
+    pub automation_gate: Mutex<()>,
+    pub closing: AtomicBool,
     pub cancel_index: AtomicBool,
     pub chats: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub summaries: Mutex<HashMap<String, summary::Task>>,

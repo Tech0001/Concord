@@ -9,3 +9,8 @@ export type Batch = { category?: string; ids?: string[]; channel?: string; query
 export type Candidates = { total: number; eligible: number; unavailable: number; alreadyQueued: number; hours: number; items: { id: string; title: string; channel: string; date: string; path: string | null; transcript: string | null; duration: number }[] };
 export type Enqueued = { added: number; ids: string[]; unavailable: number; alreadyQueued: number };
 export const isPending = (status: string) => ["running", "queued", "retry", "waiting_live"].includes(status);
+
+export type AiTarget = { kind: string; baseUrl: string; model: string; accountId: string };
+export type AutomaticAction = { enabled: boolean; approved: AiTarget | null; current: AiTarget; ready: boolean; needsReview: boolean; local: boolean };
+export type AutomaticJob = { id: string; media_id: string; title: string; action: "embedding" | "summary"; target: string; status: string; message: string; progress_message: string; done: number; total: number };
+export type AutomaticAi = { embedding: AutomaticAction; summary: AutomaticAction; jobs: AutomaticJob[] };

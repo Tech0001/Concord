@@ -73,7 +73,7 @@ pub fn validate(path: &Path) -> Result<Value> {
     ensure!(path.is_file(), "Backup file does not exist");
     let db = readonly(path).context("Cannot open SQLite backup")?;
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    ensure!((1..=11).contains(&version),"Unsupported Concord Next backup version {version}. Electron libraries must be imported, not restored.");
+    ensure!((1..=12).contains(&version),"Unsupported Concord Next backup version {version}. Electron libraries must be imported, not restored.");
     let integrity: String = db.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     ensure!(
         integrity == "ok",

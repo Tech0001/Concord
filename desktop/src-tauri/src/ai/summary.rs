@@ -77,22 +77,47 @@ fn transcript(db: &Connection, id: &str) -> Result<Vec<index::Chunk>> {
     index::pack(pieces)
 }
 pub fn start(root: PathBuf, control: Arc<Control>, id: String) -> Result<String> {
+    let provider = config::read(&root)?.chat;
+    start_with(root, control, id, provider, None)
+}
+pub(super) fn start_automatic(
+    root: PathBuf,
+    control: Arc<Control>,
+    provider: config::Provider,
+    id: String,
+    followup: &str,
+) -> Result<String> {
+    start_with(root, control, id, provider, Some(followup))
+}
+fn start_with(
+    root: PathBuf,
+    control: Arc<Control>,
+    id: String,
+    provider: config::Provider,
+    followup: Option<&str>,
+) -> Result<String> {
     let mut active = control.summaries.lock().unwrap();
     if let Some(task) = active.get(&id) {
+        ensure!(
+            followup.is_none(),
+            "A summary is already running for this recording"
+        );
         return Ok(task.id.clone());
     }
     ensure!(
         active.is_empty(),
         "Another recording summary is running. Wait for it or stop it in Status & Health."
     );
-    let provider = config::read(&root)?.chat;
     provider.validate(true)?;
-    let db = db::open(&root)?;
+    let mut db = db::open(&root)?;
     let source = transcript(&db, &id)?;
     ensure!(!source.is_empty(), "Transcribe this recording first");
     let job = uuid::Uuid::new_v4().to_string();
     let cancel = Arc::new(AtomicBool::new(false));
-    db.execute("INSERT INTO summary_jobs(id,media_id,model,status,message,total) VALUES(?1,?2,?3,'running','Preparing transcript sections',?4)",params![job,id,provider.model,steps(source.len().div_ceil(10))])?;
+    let tx = db.transaction()?;
+    tx.execute("INSERT INTO summary_jobs(id,media_id,model,status,message,total) VALUES(?1,?2,?3,'running','Preparing transcript sections',?4)",params![job,id,provider.model,steps(source.len().div_ceil(10))])?;
+    super::automation::attach(&tx, followup, &job)?;
+    tx.commit()?;
     active.insert(
         id.clone(),
         Task {

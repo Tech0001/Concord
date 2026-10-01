@@ -133,9 +133,42 @@ pub fn status(root: &Path) -> Result<Value> {
         json!({"modelReady":config.embedding.kind!="builtin"||super::builtin::ready(root),"indexed":count,"total":sources(&db)?.len(),"chunks":vectors,"dimensions":dimensions,"job":db::rows(&db,"SELECT * FROM ai_jobs ORDER BY created_at DESC,rowid DESC LIMIT 1",[])?.pop()}),
     )
 }
-pub fn start(root: PathBuf, control: Arc<Control>) -> Result<String> { start_filtered(root,control,None) }
-pub fn start_filtered(root: PathBuf, control: Arc<Control>, kind:Option<String>) -> Result<String> {
+pub fn start(root: PathBuf, control: Arc<Control>) -> Result<String> {
+    start_filtered(root, control, None)
+}
+pub fn start_filtered(
+    root: PathBuf,
+    control: Arc<Control>,
+    kind: Option<String>,
+) -> Result<String> {
     let provider = config::read(&root)?.embedding;
+    start_scoped(root, control, provider, kind, None, None)
+}
+pub(super) fn start_recording(
+    root: PathBuf,
+    control: Arc<Control>,
+    provider: Provider,
+    media: String,
+    followup: &str,
+) -> Result<String> {
+    start_scoped(
+        root,
+        control,
+        provider,
+        Some("recording".into()),
+        Some(media),
+        Some(followup),
+    )
+}
+fn start_scoped(
+    root: PathBuf,
+    control: Arc<Control>,
+    provider: Provider,
+    kind: Option<String>,
+    media: Option<String>,
+    followup: Option<&str>,
+) -> Result<String> {
+    let mut active = control.index_job.lock().unwrap();
     provider.validate(true)?;
     ensure!(
         !control.indexing.swap(true, Ordering::SeqCst),
@@ -144,20 +177,33 @@ pub fn start_filtered(root: PathBuf, control: Arc<Control>, kind:Option<String>)
     control.cancel_index.store(false, Ordering::SeqCst);
     let id = uuid::Uuid::new_v4().to_string();
     let result = (|| -> Result<()> {
-        db::open(&root)?.execute(
+        let mut db = db::open(&root)?;
+        let tx = db.transaction()?;
+        tx.execute(
             "INSERT INTO ai_jobs(id,status,message,scope) VALUES(?1,'running','Preparing search index',?2)",
             params![id,kind.as_deref().unwrap_or("")],
         )?;
+        super::automation::attach(&tx, followup, &id)?;
+        tx.commit()?;
         Ok(())
     })();
     if let Err(e) = result {
         control.indexing.store(false, Ordering::SeqCst);
         return Err(e);
     }
-    crate::runtime_log::push("info","Semantic index job started");
+    *active = Some(id.clone());
+    drop(active);
+    crate::runtime_log::push("info", "Semantic index job started");
     let job = id.clone();
     std::thread::spawn(move || {
-        let result = build_filtered(&root, &provider, &control, &job,kind.as_deref());
+        let result = build_filtered(
+            &root,
+            &provider,
+            &control,
+            &job,
+            kind.as_deref(),
+            media.as_deref(),
+        );
         let cancelled = control.cancel_index.load(Ordering::SeqCst);
         let (status, message) = if cancelled {
             (
@@ -176,12 +222,24 @@ pub fn start_filtered(root: PathBuf, control: Arc<Control>, kind:Option<String>)
                 params![job, status, message],
             );
         }
-        crate::runtime_log::push(if status=="failed"{"error"}else{"info"},&format!("Semantic index: {message}"));
+        crate::runtime_log::push(
+            if status == "failed" { "error" } else { "info" },
+            &format!("Semantic index: {message}"),
+        );
+        let mut active = control.index_job.lock().unwrap();
+        *active = None;
         control.indexing.store(false, Ordering::SeqCst);
     });
     Ok(id)
 }
-fn build_filtered(root: &Path, provider: &Provider, control: &Control, job: &str, kind:Option<&str>) -> Result<()> {
+fn build_filtered(
+    root: &Path,
+    provider: &Provider,
+    control: &Control,
+    job: &str,
+    kind: Option<&str>,
+    media: Option<&str>,
+) -> Result<()> {
     let mut db = db::open(root)?;
     let effective = if provider.kind == "builtin" {
         super::builtin::provider(root, |message| {
@@ -196,7 +254,14 @@ fn build_filtered(root: &Path, provider: &Provider, control: &Control, job: &str
         provider.clone()
     };
     let provider = &effective;
-    let list:Vec<_> = sources(&db)?.into_iter().filter(|(k,_)|kind.is_none_or(|wanted|k==wanted)).collect();
+    let list: Vec<_> = if let Some(id) = media {
+        vec![("recording".to_owned(), id.to_owned())]
+    } else {
+        sources(&db)?
+            .into_iter()
+            .filter(|(k, _)| kind.is_none_or(|wanted| k == wanted))
+            .collect()
+    };
     let signature = provider.signature();
     let client = provider.client()?;
     db.execute(
@@ -399,7 +464,11 @@ pub fn search(
     ensure!(query.len() <= 16000, "Search query is too long");
     let db = db::open(root)?;
     let meta = metadata(&db, f)?;
-    let ranges = if semantic {speaker_ranges(&db, &f.speaker)?} else {HashMap::new()};
+    let ranges = if semantic {
+        speaker_ranges(&db, &f.speaker)?
+    } else {
+        HashMap::new()
+    };
     let mut hits = Vec::new();
     let limit = limit.clamp(1, 200);
     if semantic {
@@ -465,14 +534,16 @@ pub fn search(
             }
         }
     } else {
-        let fts = crate::search_index::query(query,f.exact);
-        let mut stmt=db.prepare("SELECT s.media_id,s.text,s.start,s.end,segments_fts.rank,
+        let fts = crate::search_index::query(query, f.exact);
+        let mut stmt = db.prepare(
+            "SELECT s.media_id,s.text,s.start,s.end,segments_fts.rank,
           highlight(segments_fts,0,char(2),char(3)),s.speaker,sp.name,sp.color
           FROM segments_fts JOIN segments s ON s.id=segments_fts.rowid
           LEFT JOIN assignments a ON a.media_id=s.media_id AND a.local_id=s.speaker
           LEFT JOIN speakers sp ON sp.id=a.speaker_id
-          WHERE segments_fts MATCH ?1 AND (?2='' OR a.speaker_id=?2) ORDER BY segments_fts.rank")?;
-        let mut rows = stmt.query(params![fts,f.speaker])?;
+          WHERE segments_fts MATCH ?1 AND (?2='' OR a.speaker_id=?2) ORDER BY segments_fts.rank",
+        )?;
+        let mut rows = stmt.query(params![fts, f.speaker])?;
         while let Some(r) = rows.next()? {
             let id: String = r.get(0)?;
             if let Some(base) = meta.get(&("recording".into(), id.clone())) {
@@ -480,10 +551,10 @@ pub fn search(
                 let end = r.get(3)?;
                 let mut h = base.clone();
                 h.text = r.get(1)?;
-                h.marked=r.get(5)?;
-                h.speaker=r.get(6)?;
-                h.speaker_name=r.get(7)?;
-                h.speaker_color=r.get(8)?;
+                h.marked = r.get(5)?;
+                h.speaker = r.get(6)?;
+                h.speaker_name = r.get(7)?;
+                h.speaker_color = r.get(8)?;
                 h.start = start;
                 h.end = end;
                 h.score = -r.get::<_, f64>(4)?;
@@ -494,11 +565,15 @@ pub fn search(
             }
         }
         // Text documents and notes are small enough to scan; recording search uses FTS.
-        let terms = if f.exact {vec![query.to_lowercase()]} else {query
-            .to_lowercase()
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect::<Vec<_>>()};
+        let terms = if f.exact {
+            vec![query.to_lowercase()]
+        } else {
+            query
+                .to_lowercase()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
         for ((kind, id), base) in &meta {
             if kind == "recording" {
                 continue;

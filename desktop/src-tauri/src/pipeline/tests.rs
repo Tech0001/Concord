@@ -391,3 +391,21 @@ fn category_limits_batch_preview_and_enqueue() {
     assert_eq!(snapshot(root).unwrap()["jobs"][0]["media_id"],"two");
     assert_eq!(enqueue(root,&c,&Batch{ids:vec!["one".into()],..batch},false).unwrap()["added"],0);
 }
+
+#[test]
+fn only_successful_transcription_queues_optional_ai_and_invalid_policy_cannot_fail_it() {
+    let (dir,c)=fixture();let root=dir.path();
+    let ai=crate::ai::Control::default();
+    crate::ai::automation::save(root,&ai,true,false).unwrap();
+    enqueue(root,&c,&Batch::default(),true).unwrap();
+    let one=queue::claim(root,1).unwrap().unwrap();let id=one["id"].as_str().unwrap();
+    queue::finish(root,id,Err(anyhow::anyhow!("speech failed")),&c,2).unwrap();
+    let db=db::open(root).unwrap();
+    assert_eq!(db.query_row("SELECT count(*) FROM ai_followups",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    let two=queue::claim(root,3).unwrap().unwrap();let id=two["id"].as_str().unwrap();
+    queue::finish(root,id,Ok(()),&c,4).unwrap();
+    assert_eq!(db.query_row("SELECT count(*) FROM ai_followups",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    db.execute("UPDATE settings SET value='invalid json' WHERE key='ai.automation'",[]).unwrap();
+    let id=one["id"].as_str().unwrap();queue::finish(root,id,Ok(()),&c,5).unwrap();
+    assert_eq!(state(root,id)["status"],"complete");
+}

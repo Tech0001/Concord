@@ -75,3 +75,12 @@
  .pipeline-options {grid-template-columns:1fr;}
  .pipeline-tabs {gap:0;}.pipeline-tabs button{font-size:12px;padding:8px;gap:5px;}
 }
+
+.automatic-option {width:100%;padding:12px 0;border-top:1px solid var(--border);display:grid;gap:7px;}
+.automatic-option p,.automatic-option small {overflow-wrap:anywhere;font-size:12px;line-height:1.6;color:var(--muted-foreground);}
+.automatic-option .automatic-review {color:var(--primary);}
+.automatic-actions {display:flex;flex-wrap:wrap;gap:8px;}
+.automatic-queue {display:grid;gap:12px;}
+.automatic-queue h2 {font-size:16px;margin:0;}
+.automatic-queue > p {font-size:13px;color:var(--muted-foreground);margin:0;line-height:1.6;}
+.automatic-queue > .btn {justify-self:start;}

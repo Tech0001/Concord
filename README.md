@@ -24,6 +24,8 @@ transcript folder and can run alongside it. Full Electron parity is still in pro
 - Markdown document folders, live sync, local images/links, categories, and research anchors.
 - YouTube subscriptions and local source folders, download setup, persistent processing
   queues, delayed retries, and batch re-transcription that preserves existing transcripts.
+  Optional semantic indexing and summaries run independently after transcription, using
+  separately approved providers. Both start off; existing recordings are not backfilled.
 - Tools for standalone M4A/MP3 extraction, recoverable Linux voice recording with optional local transcript preview, and
   manual YouTube discovery with phrase filters and direct queueing.
 - Status, archive audits and repairs, backups/restore, activity history, and runtime logs.
@@ -125,8 +127,7 @@ Native code: `desktop/src-tauri/`. Interface: `desktop/src/`. Electron reference
 
 ## Remaining work
 
-Remaining work includes optional post-transcription AI actions, final
-Electron parity checks and broad installation validation. macOS follows Linux, then Windows. Watchers and the standalone Compare screen
+Remaining work includes final Electron parity checks and broad installation validation. macOS follows Linux, then Windows. Watchers and the standalone Compare screen
 are intentionally omitted. Eleven-speaker recordings have been exercised; a recording with
 sixteen distinct speakers still needs validation.
 

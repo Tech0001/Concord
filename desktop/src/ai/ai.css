@@ -134,7 +134,12 @@
   gap: 12px;
   padding: 12px 0;
 }
-.ai-filter-grid input {
+.ai-date-filters {display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:12px;}
+.ai-date-range {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;width:min(100%,376px);}
+.ai-date-range .field {min-width:0;}
+.ai-date-range input {
+  width:100%;
+  min-width:0;
   background: var(--background);
   color: var(--foreground);
   border: 1px solid var(--border);

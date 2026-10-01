@@ -262,6 +262,14 @@ pub(super) fn finish(
         )?;
     }
     media_state(&tx, id)?;
+    if status == "complete" {
+        tx.execute_batch("SAVEPOINT automatic_ai")?;
+        if let Err(e) = crate::ai::automation::enqueue(&tx,id) {
+            tx.execute_batch("ROLLBACK TO automatic_ai")?;
+            crate::runtime_log::push("error",&format!("Transcript saved but automatic AI could not be queued: {e:#}"));
+        }
+        tx.execute_batch("RELEASE automatic_ai")?;
+    }
     tx.commit()?;
     crate::runtime_log::push(
         if status == "failed" { "error" } else { "info" },

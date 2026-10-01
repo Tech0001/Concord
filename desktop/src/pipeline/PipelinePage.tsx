@@ -11,6 +11,8 @@ import { Select } from "../ui/Select.tsx";
 import { useToast } from "../ui/Toasts.tsx";
 import { isPending, type Candidates, type PipelineState, type QueueJob } from "./types.ts";
 import { Sources } from "./Sources.tsx";
+import { AutomaticSetup, AutomaticQueue } from "./AutomaticAi.tsx";
+import type { AutomaticAi } from "./types.ts";
 import { Setup } from "./Setup.tsx";
 import "./pipeline.css";
 
@@ -19,6 +21,8 @@ export function PipelinePage() {
   const { navigate, refresh, device, setDevice } = useApp();
   const toast = useToast();
   const [state, setState] = useState<PipelineState>();
+  const [automatic, setAutomatic] = useState<AutomaticAi>();
+  const reloadAi = useCallback(async () => setAutomatic(await api.pipelineAiState()), []);
   const [tab, setTab] = useState<"queue" | "batch" | "sources" | "setup">("queue");
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState(false);
@@ -27,7 +31,7 @@ export function PipelinePage() {
     let alive = true;
     let timer = 0;
     const poll = async () => {
-      try { const next = await api.pipelineState(); if (alive) setState(next); }
+      try { const [next, ai] = await Promise.all([api.pipelineState(), api.pipelineAiState()]); if (alive) { setState(next); setAutomatic(ai); } }
       catch (e) { if (alive) toast.error(e); }
       if (alive) timer = window.setTimeout(poll, 1500);
     };
@@ -69,11 +73,12 @@ export function PipelinePage() {
     {!state ? <p className="muted">Loading pipeline…</p> : tab === "queue" ? <>
       <div className="pipeline-summary"><span>{count(pending.length, "recording")} in the queue</span><small>{active && !state.running ? "Paused after the current recording. Stop cancels the current recording too." : "This queue includes Personal and Work. Existing transcripts stay available until replacements are ready."}</small>{pending.some(j => j.status !== "running") && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act("cancel-pending")}>Clear pending</Button>}</div>
       <section className="pipeline-jobs" aria-label="Processing queue">{pending.length ? pending.map(row) : <Empty icon={Check} title="Queue is clear" text="Add recordings from your library to transcribe or re-transcribe them." action={<Button onClick={() => setTab("batch")}>Choose recordings</Button>}/>}</section>
+      {automatic && <AutomaticQueue state={automatic} onChanged={reloadAi}/>}
       <div className="pipeline-history"><Button variant="ghost" icon={Clock} onClick={() => setHistory(v => !v)}>{history ? "Hide" : "Show"} history ({finished.length})</Button>{history && finished.length > 0 && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void act("clear")}>Clear history</Button>}</div>
       {history && <section className="pipeline-jobs" aria-label="Queue history">{finished.slice().reverse().map(row)}</section>}
     </> : tab === "batch" ? <BatchView channels={state.channels.map(c => c.channel)} device={device} onAdded={async () => { await reload(); refresh(); setTab("queue"); }}/>
       : tab === "sources" ? <Sources sources={state.sources} checking={state.checking} onChanged={async () => { await reload(); refresh(); }}/>
-      : <Setup config={state.config} device={device} onSave={async value => { await api.pipelineSaveConfig(value); setDevice(value.device); await reload(); }}/>
+      : <><Setup config={state.config} device={device} onSave={async value => { await api.pipelineSaveConfig(value); setDevice(value.device); await reload(); }}/>{automatic && <AutomaticSetup state={automatic} onChanged={reloadAi}/>}</>
     }
   </div>;
 }

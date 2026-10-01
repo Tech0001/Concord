@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.20.0**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.21.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,58 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Optional AI after transcription and date-filter layout (0.21.0 installed)
+
+Pipeline → Setup → After transcription offers independent opt-in semantic indexing and summaries.
+Both default off. Enabling binds each action to the displayed provider kind, endpoint, model and
+ChatGPT account; no credentials go into SQLite. Only future successful processing completions
+queue work, in the same completion transaction. A failed optional enqueue is isolated by a savepoint
+and cannot roll back speech success. Existing archive recordings are not silently backfilled.
+
+A separate worker dispatches targeted recording jobs through the existing cancellable index and
+summary machinery. Speech processing continues independently. Jobs wait behind manual AI work,
+retain progress across navigation, and have their own Stop/Retry/history in Pipeline. Provider or
+model changes block pending work for review; saving a new choice approves future recordings only,
+with explicit retry needed for blocked jobs. Disabled actions cancel pending automatic work and
+stop only their own active child, never an unrelated manual job. In-flight embedding HTTP requests
+finish before cancellation takes effect. Saved summaries and newer transcript revisions are skipped.
+
+Schema 12 adds ai_followups. Child creation and queue attachment are atomic; restart preserves
+queued work but does not replay interrupted requests automatically. Speech history may be cleared
+without deleting pending AI work. Backup validation accepts schema 12. Application shutdown closes
+the automatic dispatcher before cancelling AI workers.
+
+The user's Search layout fix is included: From and To share a dedicated row below the four
+source/collection/speaker/tag filters. The pair stays together at desktop, compact and phone widths,
+including semantic-search filters which share this component.
+
+Validation: 121 Rust tests, 48 TS tests, Clippy, frontend build, and real WebKitGTK checks for opt-in
+setup, separate providers, automatic dispatch, cancellation before a summary's first token, retry
+without retranscription, publication of a one-recording index/summary, and the date-row geometry.
+Native report: `/tmp/concord-health-native-g_hszy_x/native-test-result.json`; reproduce with
+`desktop/scripts/native-automation-test.py`. Tests use a synthetic loopback provider and scratch
+library. Native completion is seeded; the actual speech-completion enqueue is covered by Rust tests.
+No real archive embeddings, summaries, or remote requests were started. Screens: `/tmp/concord-021-screens`.
+
+0.21.0 is installed beside Electron. Database schema 12 retains all 2,020 recordings; automatic AI remains off.
+Backup: `~/.local/share/concord-next/backups/before-0.21.0-20261001-081207.db`.
+
+The final parity pass has identified remaining behavior in Electron that needs specific follow-up:
+- Settings.tsx `SummariesCard`: explicit batch summary backfill/overwrite (current Rust supports
+  individual summaries and future automatic jobs, but not archive-wide summary generation yet).
+- Pipeline.tsx single-video URL lookup/download: a direct paste-URL path without creating a source
+  or requiring a YouTube Data API key. Current Rust supports video URLs as sources and Discover queueing.
+- Settings.tsx `transcriptDir` and `processing.keepAudio`: configurable transcript destination and
+  optionally retaining extracted audio alongside downloads. Rust currently keeps versioned transcripts
+  in its managed data folder and offers manual audio extraction.
+- Electron optional LAN browser access (phone/tablet on the same Wi-Fi) has no Rust equivalent yet.
+  The new loopback server serves only approved media; it is not a network UI/API server.
+
+Notes hierarchical tag rename/merge is confirmed present (including child tags) with collision tests.
+
+Next: address these feature gaps, continue the source-by-source audit, and validate independent
+installation/packaging. Platform expansion follows Linux. Do not call full parity complete.
 
 ## ChatGPT account connection (0.20.0 installed)
 

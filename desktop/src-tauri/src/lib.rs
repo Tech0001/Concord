@@ -106,6 +106,12 @@ async fn pipeline_action(state:State<'_,AppState>,action:String,id:Option<String
 #[tauri::command]
 async fn pipeline_save_config(state:State<'_,AppState>,config:pipeline::Config)->Result<(),String>{let root=state.root.clone();work(move||pipeline::save_config(&root,&config)).await}
 #[tauri::command]
+async fn pipeline_ai_state(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||ai::automation::state(&root)).await}
+#[tauri::command]
+async fn pipeline_ai_save(state:State<'_,AppState>,embedding:bool,summary:bool)->Result<Value,String>{let root=state.root.clone();let control=state.ai.clone();work(move||ai::automation::save(&root,&control,embedding,summary)).await}
+#[tauri::command]
+async fn pipeline_ai_action(state:State<'_,AppState>,id:String,action:String)->Result<(),String>{let root=state.root.clone();let control=state.ai.clone();work(move||ai::automation::action(&root,&control,&id,&action)).await}
+#[tauri::command]
 async fn archive_status(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||health::report::snapshot(&root)).await}
 #[tauri::command]
 async fn archive_jobs(state: State<'_, AppState>) -> Result<Value, String> {
@@ -581,6 +587,7 @@ pub fn run() {
         ai::builtin::initialize(app.path().resource_dir()?);
         pipeline::download::initialize(app.path().resource_dir()?);
         db.execute("UPDATE ai_jobs SET status='interrupted',message='Concord closed before indexing finished. Update index to resume.' WHERE status='running'",[])?;
+        ai::automation::recover(&db)?;
         if let Err(e)=documents::seed_legacy(&root){runtime_log::push("warn",&format!("Legacy document folders: {e:#}"));}
         let docs_control=Arc::new(documents::Control::default());
         documents::start(root.clone(),docs_control.clone());
@@ -590,6 +597,8 @@ pub fn run() {
         if let Err(e)=media_files::recover(&root){runtime_log::push("error",&format!("Pending recording file action: {e:#}"));}
         pipeline::recover(&root)?;
         if let Err(e)=tools::recorder::recover(&root){runtime_log::push("error",&format!("Voice recording recovery: {e:#}"));}
+        let ai=Arc::new(ai::Control::default());
+        ai::automation::launch(root.clone(),ai.clone());
         pipeline::launch(root.clone(),runtime.clone(),pipeline.clone());
         app.manage(AppState {
             popout: Arc::new(popout::Control::default()),
@@ -599,7 +608,7 @@ pub fn run() {
             speech_setup: Arc::new(speech_setup::Control::default()),
             pipeline,
             documents: docs_control,
-            ai: Arc::new(ai::Control::default()),
+            ai,
             maintenance: Arc::new(health::Control::default()),
             root: root.clone(),
             runtime,
@@ -613,7 +622,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![popout::popout_state,popout::popout_open,popout::popout_update,popout::popout_command,popout::popout_close,popout::popout_focus,youtube_status,youtube_save_key,youtube_search,youtube_queue,tools_state,tools_extract,tools_cancel_extract,recorder_live_start,recorder_live_stop,recorder_inputs,recorder_start,recorder_stop,recorder_save,recorder_discard,recorder_preview,recording_file_info,recording_file_action,set_recording_title,speech_setup_status,speech_setup_start,speech_setup_cancel,pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,chatgpt_status,chatgpt_start,chatgpt_cancel,chatgpt_sign_out,chatgpt_acknowledge,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary_state,ai_summary_start,ai_summary_cancel,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_category,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![popout::popout_state,popout::popout_open,popout::popout_update,popout::popout_command,popout::popout_close,popout::popout_focus,youtube_status,youtube_save_key,youtube_search,youtube_queue,tools_state,tools_extract,tools_cancel_extract,recorder_live_start,recorder_live_stop,recorder_inputs,recorder_start,recorder_stop,recorder_save,recorder_discard,recorder_preview,recording_file_info,recording_file_action,set_recording_title,speech_setup_status,speech_setup_start,speech_setup_cancel,pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,pipeline_ai_state,pipeline_ai_save,pipeline_ai_action,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,chatgpt_status,chatgpt_start,chatgpt_cancel,chatgpt_sign_out,chatgpt_acknowledge,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary_state,ai_summary_start,ai_summary_cancel,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_category,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
-      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {tools::live_transcript::stop(&state.live_transcript);state.recorder.closing.store(true,Ordering::SeqCst);tools::recorder::stop(&state.recorder);state.extraction.cancel.store(true,Ordering::SeqCst);state.export.cancel.store(true,Ordering::SeqCst);state.pipeline.shutdown();state.speech_setup.process.cancel();ai::chatgpt::cancel(&state.ai.chatgpt);state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for task in state.ai.summaries.lock().unwrap().values(){task.cancel.store(true,Ordering::SeqCst);}for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
+      .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {tools::live_transcript::stop(&state.live_transcript);state.recorder.closing.store(true,Ordering::SeqCst);tools::recorder::stop(&state.recorder);state.extraction.cancel.store(true,Ordering::SeqCst);state.export.cancel.store(true,Ordering::SeqCst);state.pipeline.shutdown();ai::automation::shutdown(&state.ai);state.speech_setup.process.cancel();ai::chatgpt::cancel(&state.ai.chatgpt);state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for task in state.ai.summaries.lock().unwrap().values(){task.cancel.store(true,Ordering::SeqCst);}for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
 }

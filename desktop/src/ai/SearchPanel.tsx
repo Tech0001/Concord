@@ -82,24 +82,28 @@ export function SearchFilters({
             })),
           ]}
         />
-        <label className="field">
-          <span>From</span>
-          <input
-            type="date"
-            aria-label="From date"
-            value={filter.from}
-            onChange={(e) => change("from", e.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span>To</span>
-          <input
-            type="date"
-            aria-label="To date"
-            value={filter.to}
-            onChange={(e) => change("to", e.target.value)}
-          />
-        </label>
+      </div>
+      <div className="ai-date-filters">
+        <div className="ai-date-range">
+          <label className="field">
+            <span>From</span>
+            <input
+              type="date"
+              aria-label="From date"
+              value={filter.from}
+              onChange={(e) => change("from", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>To</span>
+            <input
+              type="date"
+              aria-label="To date"
+              value={filter.to}
+              onChange={(e) => change("to", e.target.value)}
+            />
+          </label>
+        </div>
         <Button
           size="sm"
           variant="ghost"

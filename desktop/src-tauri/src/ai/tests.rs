@@ -576,3 +576,119 @@ fn category_filters_scope_words_semantic_retrieval_and_note_evidence() {
     let note=research["notes"].as_array().unwrap().iter().find(|n|n["id"]=="note").unwrap();
     assert_eq!(note["anchors"][0]["category"],"work");
 }
+
+fn completed_speech(root: &Path, parent: &str) {
+    let db = db::open(root).unwrap();
+    db.execute("UPDATE media SET transcript='revision-1.json',status='complete' WHERE id='prayer'",[]).unwrap();
+    db.execute("INSERT INTO jobs(id,media_id,title,status) VALUES(?1,'prayer','Prayer meeting','complete')",[parent]).unwrap();
+    super::automation::enqueue(&db,parent).unwrap();
+}
+fn finish_automatic(root: &Path, control: &Arc<Control>) -> Value {
+    let deadline = Instant::now();
+    loop {
+        super::automation::tick(root,control).unwrap();
+        let state = super::automation::state(root).unwrap();
+        if !state["jobs"].as_array().unwrap().iter().any(|j| j["status"]=="queued" || j["status"]=="running") && !control.indexing.load(Ordering::SeqCst) && control.summaries.lock().unwrap().is_empty() { return state; }
+        assert!(deadline.elapsed()<Duration::from_secs(10),"{state}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+#[test]
+fn automatic_ai_is_opt_in_and_scopes_each_provider_to_the_new_recording() {
+    let root=tempfile::tempdir().unwrap();fixture(root.path());
+    let embed=Fake::new();let chat=Fake::new();
+    embed.config(root.path(),"embedding","tiny-embedding","embedding-secret");
+    chat.config(root.path(),"chat","tiny-chat","chat-secret");
+    let control=Arc::new(Control::default());
+    completed_speech(root.path(),"before-opt-in");
+    assert!(super::automation::state(root.path()).unwrap()["jobs"].as_array().unwrap().is_empty());
+    super::automation::save(root.path(),&control,true,true).unwrap();
+    assert!(super::automation::state(root.path()).unwrap()["jobs"].as_array().unwrap().is_empty());
+    completed_speech(root.path(),"after-opt-in");
+    let db=db::open(root.path()).unwrap();
+    super::automation::enqueue(&db,"after-opt-in").unwrap();
+    let done=finish_automatic(root.path(),&control);
+    assert_eq!(done["jobs"].as_array().unwrap().len(),2);
+    assert!(done["jobs"].as_array().unwrap().iter().all(|j|j["status"]=="complete"),"{done}");
+    assert!(!done.to_string().contains("secret"));
+    assert_eq!(db.query_row("SELECT group_concat(kind||':'||source_id) FROM ai_sources",[],|r|r.get::<_,String>(0)).unwrap(),"recording:prayer");
+    assert_eq!(embed.requests.lock().unwrap().len(),1);
+    assert_eq!(chat.requests.lock().unwrap().len(),1);
+    assert_eq!(embed.requests.lock().unwrap()[0].1,"Bearer embedding-secret");
+    assert_eq!(chat.requests.lock().unwrap()[0].1,"Bearer chat-secret");
+    assert_eq!(db.query_row("SELECT status FROM jobs WHERE id='after-opt-in'",[],|r|r.get::<_,String>(0)).unwrap(),"complete");
+}
+#[test]
+fn automatic_ai_provider_changes_block_until_explicit_retry_and_never_reuse_keys() {
+    let root=tempfile::tempdir().unwrap();fixture(root.path());
+    let first=Fake::new();let second=Fake::new();
+    first.config(root.path(),"chat","tiny-chat","first-secret");
+    let control=Arc::new(Control::default());
+    super::automation::save(root.path(),&control,false,true).unwrap();
+    completed_speech(root.path(),"j");
+    second.config(root.path(),"chat","new-chat","second-secret");
+    let state=finish_automatic(root.path(),&control);
+    assert_eq!(state["jobs"][0]["status"],"blocked");assert_eq!(state["summary"]["needsReview"],true);
+    let id=state["jobs"][0]["id"].as_str().unwrap();
+    assert!(super::automation::action(root.path(),&control,id,"retry").is_err());
+    super::automation::save(root.path(),&control,false,true).unwrap();
+    assert_eq!(finish_automatic(root.path(),&control)["jobs"][0]["status"],"blocked");
+    assert!(first.requests.lock().unwrap().is_empty());assert!(second.requests.lock().unwrap().is_empty());
+    super::automation::action(root.path(),&control,id,"retry").unwrap();
+    assert_eq!(finish_automatic(root.path(),&control)["jobs"][0]["status"],"complete");
+    assert!(first.requests.lock().unwrap().is_empty());assert_eq!(second.requests.lock().unwrap()[0].1,"Bearer second-secret");
+}
+#[test]
+fn automatic_ai_waits_for_manual_work_and_failure_never_changes_speech_success() {
+    let root=tempfile::tempdir().unwrap();fixture(root.path());let fake=Fake::new();
+    fake.config(root.path(),"chat","broken-stream","");
+    let control=Arc::new(Control::default());
+    super::automation::save(root.path(),&control,false,true).unwrap();completed_speech(root.path(),"j");
+    control.summaries.lock().unwrap().insert("car".into(),super::summary::Task{id:"manual".into(),cancel:Arc::new(AtomicBool::new(false))});
+    super::automation::tick(root.path(),&control).unwrap();
+    assert_eq!(super::automation::state(root.path()).unwrap()["jobs"][0]["status"],"queued");
+    assert!(fake.requests.lock().unwrap().is_empty());
+    control.summaries.lock().unwrap().clear();
+    assert_eq!(finish_automatic(root.path(),&control)["jobs"][0]["status"],"failed");
+    let db=db::open(root.path()).unwrap();
+    assert_eq!(db.query_row("SELECT status FROM jobs WHERE id='j'",[],|r|r.get::<_,String>(0)).unwrap(),"complete");
+    assert_eq!(db.query_row("SELECT status FROM media WHERE id='prayer'",[],|r|r.get::<_,String>(0)).unwrap(),"complete");
+}
+#[test]
+fn automatic_ai_skips_newer_transcripts_and_keeps_existing_summaries() {
+    let root=tempfile::tempdir().unwrap();fixture(root.path());let fake=Fake::new();fake.config(root.path(),"chat","tiny-chat","");
+    let control=Arc::new(Control::default());super::automation::save(root.path(),&control,false,true).unwrap();completed_speech(root.path(),"old");
+    let db=db::open(root.path()).unwrap();
+    db.execute("UPDATE media SET transcript='revision-2.json' WHERE id='prayer'",[]).unwrap();
+    assert_eq!(finish_automatic(root.path(),&control)["jobs"][0]["status"],"skipped");
+    completed_speech(root.path(),"new");
+    db.execute("INSERT INTO ai_summaries VALUES('prayer','Keep this','old','hash',datetime('now'))",[]).unwrap();
+    assert!(finish_automatic(root.path(),&control)["jobs"].as_array().unwrap().iter().all(|j|j["status"]=="skipped"));
+    assert!(fake.requests.lock().unwrap().is_empty());
+    assert_eq!(super::summary::state(root.path(),"prayer").unwrap()["summary"]["content"],"Keep this");
+}
+#[test]
+fn automatic_ai_restart_retains_queued_work_without_repeating_interrupted_requests() {
+    let root=tempfile::tempdir().unwrap();fixture(root.path());let fake=Fake::new();fake.config(root.path(),"chat","tiny-chat","");
+    let control=Arc::new(Control::default());super::automation::save(root.path(),&control,false,true).unwrap();completed_speech(root.path(),"interrupted");completed_speech(root.path(),"queued");
+    let db=db::open(root.path()).unwrap();
+    db.execute_batch("INSERT INTO summary_jobs(id,media_id,model,status) VALUES('child','prayer','tiny-chat','running');UPDATE ai_followups SET status='running',child_id='child' WHERE parent_id='interrupted';").unwrap();
+    super::summary::recover(&db).unwrap();super::automation::recover(&db).unwrap();
+    let done=finish_automatic(root.path(),&Arc::new(Control::default()));
+    assert!(done["jobs"].as_array().unwrap().iter().any(|j|j["parent_id"]=="interrupted"&&j["status"]=="interrupted"));
+    assert!(done["jobs"].as_array().unwrap().iter().any(|j|j["parent_id"]=="queued"&&j["status"]=="complete"));
+    assert_eq!(fake.requests.lock().unwrap().len(),1);
+}
+#[test]
+fn disabling_automatic_actions_does_not_cancel_manual_jobs() {
+    let root=tempfile::tempdir().unwrap();fixture(root.path());let fake=Fake::new();fake.config(root.path(),"chat","tiny-chat","");
+    let control=Arc::new(Control::default());super::automation::save(root.path(),&control,true,true).unwrap();completed_speech(root.path(),"j");
+    let db=db::open(root.path()).unwrap();
+    // A prior child finished while a different manually requested job took the slot.
+    db.execute("UPDATE ai_followups SET status='running',child_id='old-child'",[]).unwrap();
+    *control.index_job.lock().unwrap()=Some("manual-index".into());control.indexing.store(true,Ordering::SeqCst);
+    let manual_cancel=Arc::new(AtomicBool::new(false));
+    control.summaries.lock().unwrap().insert("prayer".into(),super::summary::Task{id:"manual-summary".into(),cancel:manual_cancel.clone()});
+    super::automation::save(root.path(),&control,false,false).unwrap();
+    assert!(!control.cancel_index.load(Ordering::SeqCst));assert!(!manual_cancel.load(Ordering::SeqCst));
+}

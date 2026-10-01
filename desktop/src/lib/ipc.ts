@@ -2,7 +2,7 @@ import type { PopoutSession, PlaybackPosition, PopoutCommand } from "../player/p
 import type { YouTubeQuery, YouTubeHit, YouTubePage } from "../tools/discover-model.ts";
 import type { ToolsState } from "../tools/types.ts";
 import type { FileAction, RecordingFileInfo } from "../library/RecordingFileDialog.tsx";
-import type { SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
+import type { AutomaticAi, SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
 import type { DocumentsState, DocumentSync } from "../documents/types.ts";
 import type { ArchiveStatus, Audit, BackupValidation, LogEntry, MaintenanceJob } from "../health/types.ts";
 import type { ChatGPTStatus, AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, SummaryState } from "../ai/types.ts";
@@ -120,6 +120,9 @@ export const api = {
   pipelineStopCheck: () => call<void>("pipeline_stop_check"),
   pipelineTools: () => call<{ ready: boolean; version?: string; error?: string }>("pipeline_tools"),
   pipelineState: () => call<PipelineState>("pipeline_state"),
+  pipelineAiState: () => call<AutomaticAi>("pipeline_ai_state"),
+  pipelineAiSave: (embedding: boolean, summary: boolean) => call<AutomaticAi>("pipeline_ai_save", { embedding, summary }),
+  pipelineAiAction: (id: string, action: "cancel" | "retry") => call<void>("pipeline_ai_action", { id, action }),
   pipelineCandidates: (batch: Batch) => call<Candidates>("pipeline_candidates", { batch }),
   pipelineEnqueue: (batch: Batch, start: boolean) => call<Enqueued>("pipeline_enqueue", { batch, start }),
   pipelineAction: (action: string, id?: string) => call<void>("pipeline_action", { action, id }),
