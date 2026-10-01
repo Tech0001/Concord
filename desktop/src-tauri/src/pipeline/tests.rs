@@ -380,3 +380,14 @@ fn clearing_other_pending_work_does_not_change_a_later_failure() {
     action(root, &c, "cancel-pending", None).unwrap();
     assert_eq!(db::media(root, "one").unwrap()["status"], "failed");
 }
+
+#[test]
+fn category_limits_batch_preview_and_enqueue() {
+    let (dir,c)=fixture();let root=dir.path();
+    db::set_category(root,"two","work").unwrap();
+    let batch=Batch{category:"work".into(),..Default::default()};
+    assert_eq!(candidates(root,&batch).unwrap()["eligible"],1);
+    assert_eq!(enqueue(root,&c,&batch,false).unwrap()["added"],1);
+    assert_eq!(snapshot(root).unwrap()["jobs"][0]["media_id"],"two");
+    assert_eq!(enqueue(root,&c,&Batch{ids:vec!["one".into()],..batch},false).unwrap()["added"],0);
+}

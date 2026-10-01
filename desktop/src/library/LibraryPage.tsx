@@ -13,6 +13,8 @@ import { PageHeader } from "../ui/PageHeader.tsx";
 import { Select } from "../ui/Select.tsx";
 import { useToast } from "../ui/Toasts.tsx";
 import { useApp } from "../shell/AppContext.tsx";
+import { DEFAULT_FILTER, normalizeFilter } from "./model.ts";
+import { SavedViews } from "./SavedViews.tsx";
 import { recordingMenu } from "./recordingMenu.ts";
 import { RecordingCard } from "./RecordingCard.tsx";
 import { RecordingRow } from "./RecordingRow.tsx";
@@ -20,27 +22,22 @@ import { activeFilterCount, Toolbar } from "./Toolbar.tsx";
 import { Welcome } from "./Welcome.tsx";
 import "./library.css";
 
-const DEFAULT_FILTER: LibraryFilter = {
-  query: "",
-  channel: "",
-  kind: "",
-  transcribed: "",
-  starred: false,
-  review: "",
-  sort: "newest",
-  offset: 0,
-  limit: 60,
-};
-const isFilter = (v: unknown) => typeof v === "object" && v !== null && typeof (v as LibraryFilter).sort === "string";
 let savedScroll = 0;
 
 export function LibraryPage() {
-  const { overview, revision, navigate, transcribe, activeJob, jobs } = useApp();
+  const { overview, revision, navigate, transcribe, activeJob, jobs, category, setCategory, refresh } = useApp();
   const toast = useToast();
   const phone = useMediaQuery(PHONE);
   const narrow = useMediaQuery(TABLET);
-  const [stored, setFilter] = useStoredState<LibraryFilter>("library-filter-v1", DEFAULT_FILTER, isFilter);
-  const filter = { ...DEFAULT_FILTER, ...stored };
+  const [stored, setFilter] = useStoredState<LibraryFilter>("library-filter-v1", DEFAULT_FILTER);
+  const filter = { ...normalizeFilter(stored), category };
+  const lastCategory = useRef(category);
+  useEffect(() => {
+    if (lastCategory.current !== category) {
+      lastCategory.current = category;
+      setFilter(prev => ({ ...normalizeFilter(prev), category, channel: "", offset: 0 }));
+    }
+  }, [category, setFilter]);
   const [view, setView] = useStoredState<"grid" | "list">("library-view-v1", "grid", (v) => v === "grid" || v === "list");
   const [data, setData] = useState<Page>();
   const [loading, setLoading] = useState(true);
@@ -75,7 +72,7 @@ export function LibraryPage() {
 
   const update = useCallback(
     (patch: Partial<LibraryFilter>) => {
-      setFilter((prev) => ({ ...DEFAULT_FILTER, ...prev, ...patch, offset: "offset" in patch ? patch.offset! : 0 }));
+      setFilter((prev) => ({ ...normalizeFilter(prev), ...patch, offset: "offset" in patch ? patch.offset! : 0 }));
       window.scrollTo(0, 0);
     },
     [setFilter],
@@ -105,6 +102,7 @@ export function LibraryPage() {
       open: (at) => navigate({ page: "recording", id: m.id, ...(at != null ? { at } : {}) }),
       transcribe: () => void transcribe(m.id),
       setStarred: () => void star(m),
+      setCategory: c => { void api.setCategory(m.id, c).then(refresh).catch(toast.error); },
       setReview: (s) => void review(m, s),
       reveal: () => m.path && api.reveal(m.path).catch(toast.error),
       copyPath: () =>
@@ -118,7 +116,7 @@ export function LibraryPage() {
   if (overview?.media === 0) return <Welcome />;
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const filtered = activeFilterCount(filter) > 0 || !!filter.query.trim() || !!filter.channel;
+  const filtered = activeFilterCount(filter) > 0 || !!filter.query.trim() || !!filter.channel || !!category;
   const effectiveView = phone ? "list" : view;
   const Item = effectiveView === "grid" ? RecordingCard : RecordingRow;
   const sortBy = (sort: LibrarySort) => update({ sort });
@@ -138,6 +136,7 @@ export function LibraryPage() {
           )
         }
       />
+      <SavedViews filter={filter} layout={view} onApply={saved => { lastCategory.current = saved.filter.category; setCategory(saved.filter.category); setFilter({ ...saved.filter, offset: 0 }); setView(saved.layout); window.scrollTo(0, 0); }}/>
       <Toolbar
         filter={filter}
         update={update}

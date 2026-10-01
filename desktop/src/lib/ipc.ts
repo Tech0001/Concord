@@ -75,9 +75,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const MEDIA_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "ogg", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 
 export const api = {
+  setCategory: (id:string,category:"personal"|"work") => call<void>("set_category",{id,category}),
   pipelineSaveSource: (source: SourceInput) => call<string>("pipeline_save_source", { source }),
   pipelineRemoveSource: (id: string) => call<void>("pipeline_remove_source", { id }),
-  pipelineCheck: (id?: string, full = false) => call<void>("pipeline_check", { id, full }),
+  pipelineCheck: (id?: string, full = false, category = "") => call<void>("pipeline_check", { id, full, category }),
   pipelineStopCheck: () => call<void>("pipeline_stop_check"),
   pipelineTools: () => call<{ ready: boolean; version?: string; error?: string }>("pipeline_tools"),
   pipelineState: () => call<PipelineState>("pipeline_state"),
@@ -150,7 +151,7 @@ export const api = {
   mergeSpeakers: (source: string, target: string) => call<MatchResult>("merge_speakers", { source, target }),
   rescanSpeakers: (id?: string) => call<MatchResult>("rescan_speakers", { id: id ?? null }),
   labelVoices: (label: LabelVoice) => call<MatchResult>("label_speakers", { label }),
-  importMedia: (paths: string[]) => call<number>("import_media", { paths }),
+  importMedia: (paths: string[], category = "personal") => call<number>("import_media", { paths, category }),
   speechStatus: () => call<Runtime>("speech_status"),
   speechSetupStatus: () => call<import("./types.ts").SpeechSetupStatus>("speech_setup_status"),
   speechSetupStart: () => call<void>("speech_setup_start"),
@@ -161,7 +162,7 @@ export const api = {
   jobs: () => call<Job[]>("jobs"),
   research: () => call<Research>("research"),
   document: (id: string) => call<DocumentBody>("document", { id }),
-  importDocuments: (paths: string[]) => call<number>("import_documents", { paths }),
+  importDocuments: (paths: string[], category = "personal") => call<number>("import_documents", { paths, category }),
   saveNote: (note: Note) => call<string>("save_note", { note }),
   deleteNote: (id: string) => call<void>("delete_note", { id }),
   setNoteLink: (link: NoteLink, remove = false) => call<void>("set_note_link", { link: { source_anchor: "", target_anchor: "", source_handle: null, target_handle: null, note: "", ...link }, remove }),

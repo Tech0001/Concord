@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { LayoutGrid, List, Search, SlidersHorizontal, Star, X } from "lucide-react";
+import { STATUS_OPTIONS } from "./model.ts";
 import type { LibraryFilter, LibrarySort } from "../lib/types.ts";
 import { Button } from "../ui/Button.tsx";
 import { Panel } from "../ui/Menu.tsx";
@@ -16,7 +17,7 @@ export const SORTS: { value: LibrarySort; label: string }[] = [
 ];
 
 export function activeFilterCount(f: LibraryFilter): number {
-  return [f.kind, f.transcribed, f.review].filter(Boolean).length + (f.starred ? 1 : 0);
+  return [f.kind, f.transcribed, f.review, f.status].filter(Boolean).length + (f.starred ? 1 : 0);
 }
 
 export function Toolbar({
@@ -76,6 +77,7 @@ export function Toolbar({
               {sort}
             </div>
           )}
+          <div className="filter-group"><span className="filter-label">Processing status</span><Select label="Recording status" value={filter.status} onChange={status => update({ status })} options={STATUS_OPTIONS}/></div>
           <div className="filter-group">
             <span className="filter-label">Type</span>
             <Segmented
@@ -124,7 +126,7 @@ export function Toolbar({
               variant="ghost"
               icon={X}
               disabled={!active}
-              onClick={() => update({ kind: "", transcribed: "", review: "", starred: false })}
+              onClick={() => update({ kind: "", transcribed: "", review: "", status: "", starred: false })}
             >
               Reset
             </Button>

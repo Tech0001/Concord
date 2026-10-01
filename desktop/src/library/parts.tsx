@@ -5,6 +5,7 @@ import type { Media } from "../lib/types.ts";
 import { Chip, SpeakerChip } from "../ui/Chip.tsx";
 import { IconButton } from "../ui/Button.tsx";
 import { Menu, type MenuEntry } from "../ui/Menu.tsx";
+import { processingStatus } from "./model.ts";
 import { REVIEW_LABELS } from "./recordingMenu.ts";
 
 export function StarButton({ media, onToggle, className }: { media: Media; onToggle: () => void; className?: string }) {
@@ -38,15 +39,17 @@ export function SpeakerChips({ media, max = 3 }: { media: Media; max?: number })
 }
 
 export function StatusChips({ media, transcribing }: { media: Media; transcribing: boolean }) {
+  const status = transcribing ? "processing" : processingStatus(media);
+  const labels: Record<string,string> = {failed: "Processing failed", pending: "Queued / retrying", live: "Waiting for live stream", cancelled: "Cancelled", archived: "Media removed", ready: "Not transcribed"};
   return (
     <span className="status-chips">
-      {transcribing ? (
+      {status === "processing" ? (
         <Chip tone="accent">
           <LoaderCircle size={11} className="spin" aria-hidden />
           Processing
         </Chip>
       ) : (
-        !media.transcript && <Chip tone={media.status === "failed" ? "danger" : "neutral"}>{media.status === "failed" ? "Processing failed" : ["pending", "queued"].includes(media.status) ? "Queued" : media.status === "cancelled" ? "Cancelled" : "Not transcribed"}</Chip>
+        status !== "complete" && <Chip tone={status === "failed" ? "danger" : "neutral"}>{labels[status] ?? status}</Chip>
       )}
       {media.review_state !== "unreviewed" && (
         <Chip tone={media.review_state === "reviewed" ? "success" : "warn"}>{REVIEW_LABELS[media.review_state]}</Chip>

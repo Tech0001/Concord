@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.12.0**
+Updated September 30, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.13.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,37 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Library views, categories and processing status (0.13.0 installed)
+
+Restored named saved Library views (save/apply/update/delete) with search, collection, type,
+transcript/review/status filters, Personal/Work, sorting and layout. Saved view pagination resets
+on apply; malformed stored filters are normalized. Preferences remain in webview local storage,
+matching Electron's behavior. They are not included in the database backup.
+
+The top bar now carries Personal / Work / Both across Library, ordinary Search, semantic
+retrieval/chat evidence, Docs, Notes, Map and Pipeline source/batch selection. Notes match any
+of their evidence categories; standalone notes appear in both. A mixed-source note retains all
+its evidence. Category is a browsing filter, not an access boundary. Map layouts remain separate
+for each category; old Both layouts keep their keys. Queue controls/history and automatic
+scheduling still cover the whole archive, labelled accordingly. Manual source checks respect
+the selected category. Recording menus change category; new file imports inherit it and
+re-imports preserve existing categories.
+
+Library processing chips/filters derive from the latest attempt, including live-stream waits,
+retries, cancellation and failed re-transcription with the previous transcript still available.
+Earlier failed history cannot override a newer successful attempt. Mixed YYYYMMDD / ISO dates
+now sort together. No schema migration is required.
+
+83 Rust tests and 41 TypeScript tests pass, plus Clippy/frontend build. Native WebKitGTK checks
+saved views, failed replacement status, category navigation through Search/Docs/Notes/Pipeline,
+recording category changes and saved-view deletion. Fixture/result:
+`/tmp/concord-health-native-pym07o4p/native-test-result.json`; scripts prepare-library-review.py
+and native-library-smoke.js. Desktop and phone screenshots checked. Library file actions and
+other remaining Electron features are still in progress.
+
+0.13.0 is installed with schema 10 retained. Backup:
+`~/.local/share/concord-next/backups/before-0.13.0-20260930-234200.db`.
 
 ## Search grouping and archive lookup performance (0.12.0 installed)
 

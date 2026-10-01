@@ -12,20 +12,20 @@ import { Dialog, ConfirmDialog } from "../ui/Dialog.tsx";
 import { useToast } from "../ui/Toasts.tsx";
 import { useApp } from "../shell/AppContext.tsx";
 import { Markdown } from "../documents/Markdown.tsx";
-import { anchorsOf } from "./model.ts";
+import { anchorsOf, inCategory } from "./model.ts";
 import { NoteLinks } from "./NoteLinks.tsx";
 import "./notes.css";
 
 export function NotesPage() {
-  const {revision,openNote,refresh,navigate}=useApp();const toast=useToast();
+  const {revision,openNote,refresh,navigate,category}=useApp();const toast=useToast();
   const [data,setData]=useState<Research>();const [query,setQuery]=useState("");const [tag,setTag]=useState("");const [sort,setSort]=useState("recent");const [channel,setChannel]=useState("");
   const [selected,setSelected]=useState<string>();const [remove,setRemove]=useState(false);
   const [manage,setManage]=useState(false);const [from,setFrom]=useState("");const [to,setTo]=useState("");const [children,setChildren]=useState(false);const [busy,setBusy]=useState(false);
   useEffect(()=>{let alive=true;api.research().then(r=>alive&&setData(r)).catch(toast.error);return()=>{alive=false;};},[revision,toast]);
   const q=query.trim().toLowerCase();
-  const shown=(data?.notes??[]).filter(n=>(!q||[n.title,n.body,...anchorsOf(n).map(a=>`${a.title??""} ${a.quote}`),...(n.tags??[])].some(s=>s.toLowerCase().includes(q)))&&(!tag||n.tags?.includes(tag))&&(!channel||anchorsOf(n).some(a=>a.channel===channel)))
+  const shown=(data?.notes??[]).filter(n=>inCategory(n,category)&&(!q||[n.title,n.body,...anchorsOf(n).map(a=>`${a.title??""} ${a.quote}`),...(n.tags??[])].some(s=>s.toLowerCase().includes(q)))&&(!tag||n.tags?.includes(tag))&&(!channel||anchorsOf(n).some(a=>a.channel===channel)))
     .sort((a,b)=>sort==="title"?a.title.localeCompare(b.title):sort==="oldest"?(a.created_at??"").localeCompare(b.created_at??""):(b.updated_at??b.created_at??"").localeCompare(a.updated_at??a.created_at??""));
-  const active=data?.notes.find(n=>n.id===selected);
+  const active=shown.find(n=>n.id===selected);
   const tags=data?.tags??[];
   const channels=[...new Set((data?.notes??[]).flatMap(n=>anchorsOf(n).flatMap(a=>a.channel?[a.channel]:[])))].sort();
   const rename=async(deleting=false)=>{setBusy(true);try{await api.renameNoteTag(from,deleting?null:to,children);refresh();setManage(false);if(tag===from)setTag(deleting?"":to.trim().toLowerCase());toast.success(deleting?"Tag removed from notes":"Tags renamed or merged");}catch(e){toast.error(e);}finally{setBusy(false);}};

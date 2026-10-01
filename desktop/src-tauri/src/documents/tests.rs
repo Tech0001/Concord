@@ -203,3 +203,13 @@ fn older_null_root_ids_recover_the_original_folder_without_duplication() {
     assert_eq!(state["docs"][0]["category"], "work");
     assert_eq!(state["roots"][0]["label"], "Old research");
 }
+
+#[test]
+fn imported_document_category_is_set_once_and_kept_on_reimport() {
+    let root=tempfile::tempdir().unwrap();let control=Control::default();
+    let path=root.path().join("category.md");std::fs::write(&path,"# Work document\nResearch").unwrap();
+    let paths=vec![path.to_string_lossy().into_owned()];
+    import_in_category(root.path(),&control,&paths,"work").unwrap();
+    import_in_category(root.path(),&control,&paths,"personal").unwrap();
+    let data=snapshot(root.path()).unwrap();assert_eq!(data["docs"].as_array().unwrap().len(),1);assert_eq!(data["docs"][0]["category"],"work");
+}

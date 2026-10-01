@@ -315,6 +315,10 @@ fn youtube(root: &Path, control: &Control, source: &Value, full: bool) -> Result
     Ok(added)
 }
 pub fn start(root: PathBuf, control: Arc<Control>, id: Option<String>, full: bool) -> Result<()> {
+    start_filtered(root,control,id,full,String::new())
+}
+pub fn start_filtered(root: PathBuf, control: Arc<Control>, id: Option<String>, full: bool, category: String) -> Result<()> {
+    anyhow::ensure!(["", "personal", "work"].contains(&category.as_str()), "Unknown category");
     anyhow::ensure!(
         !control.closing.load(Ordering::SeqCst),
         "Concord is closing"
@@ -330,7 +334,7 @@ pub fn start(root: PathBuf, control: Arc<Control>, id: Option<String>, full: boo
             } else {
                 list(&root)?
                     .into_iter()
-                    .filter(|s| s["enabled"] == 1)
+                    .filter(|s| s["enabled"] == 1 && (category.is_empty() || s["category"] == category))
                     .collect()
             };
             for source in sources {

@@ -176,7 +176,7 @@ export function SearchPanel({
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
   const serial = useRef(0);
-  const { navigate } = useApp();
+  const { navigate, category } = useApp();
   useEffect(() => {
     setText(q);
   }, [q]);
@@ -186,7 +186,7 @@ export function SearchPanel({
     setError("");
     setSearched(true);
     try {
-      const result = await api.researchSearch(query, semantic, filter);
+      const result = await api.researchSearch(query, semantic, { ...filter, category });
       if (n === serial.current) setHits(result);
     } catch (e) {
       if (n === serial.current) {
@@ -199,6 +199,7 @@ export function SearchPanel({
   };
   useEffect(() => {
     if (!semantic && q.trim()) void run(q);
+    else if (semantic) { setHits([]); setSearched(false); }
     else if (!q.trim() && !semantic) {
       setHits([]);
       setSearched(false);
@@ -206,7 +207,7 @@ export function SearchPanel({
     return () => {
       serial.current++;
     };
-  }, [q, semantic, filter]);
+  }, [q, semantic, filter, category]);
   const submit = () => {
     if (!text.trim()) return;
     if (!semantic && text !== q) navigate({ page: "search", q: text }, { replace: true });

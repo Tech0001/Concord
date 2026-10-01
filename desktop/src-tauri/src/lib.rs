@@ -53,7 +53,7 @@ async fn pipeline_save_source(state:State<'_,AppState>,source:pipeline::sources:
 #[tauri::command]
 async fn pipeline_remove_source(state:State<'_,AppState>,id:String)->Result<(),String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||pipeline::sources::remove(&root,&control,&id)).await}
 #[tauri::command]
-async fn pipeline_check(state:State<'_,AppState>,id:Option<String>,full:bool)->Result<(),String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||pipeline::sources::start(root,control,id,full)).await}
+async fn pipeline_check(state:State<'_,AppState>,id:Option<String>,full:bool,category:Option<String>)->Result<(),String>{let root=state.root.clone();let control=state.pipeline.clone();work(move||pipeline::sources::start_filtered(root,control,id,full,category.unwrap_or_default())).await}
 #[tauri::command]
 fn pipeline_stop_check(state:State<'_,AppState>){state.pipeline.scanner.cancel();}
 #[tauri::command]
@@ -144,6 +144,11 @@ async fn import_legacy(state: State<'_, AppState>, path: String) -> Result<Value
 async fn library(state: State<'_, AppState>, filter: db::LibraryFilter) -> Result<Value, String> {
     let root = state.root.clone();
     work(move || db::library(&root, &filter)).await
+}
+#[tauri::command]
+async fn set_category(state: State<'_, AppState>, id: String, category: String) -> Result<(), String> {
+    let root = state.root.clone();
+    work(move || db::set_category(&root, &id, &category)).await
 }
 #[tauri::command]
 async fn set_starred(state: State<'_, AppState>, id: String, starred: bool) -> Result<(), String> {
@@ -255,9 +260,9 @@ async fn label_speakers(state: State<'_, AppState>, label: speakers::Label) -> R
     let root = state.root.clone(); work(move || speakers::label(&root,&label)).await
 }
 #[tauri::command]
-async fn import_media(state: State<'_, AppState>, paths: Vec<String>) -> Result<usize, String> {
+async fn import_media(state: State<'_, AppState>, paths: Vec<String>, category: Option<String>) -> Result<usize, String> {
     let root = state.root.clone();
-    work(move || db::import_files(&root, &paths)).await
+    work(move || db::import_files_in_category(&root, &paths, category.as_deref().unwrap_or("personal"))).await
 }
 #[tauri::command]
 async fn speech_status(state: State<'_, AppState>) -> Result<Value, String> {
@@ -333,8 +338,8 @@ async fn document(state: State<'_, AppState>, id: String) -> Result<Value, Strin
     let root=state.root.clone();work(move||documents::read(&root,&id)).await
 }
 #[tauri::command]
-async fn import_documents(state: State<'_, AppState>, paths: Vec<String>) -> Result<usize, String> {
-    let root=state.root.clone();let control=state.documents.clone();work(move||documents::import(&root,&control,&paths)).await
+async fn import_documents(state: State<'_, AppState>, paths: Vec<String>, category: Option<String>) -> Result<usize, String> {
+    let root=state.root.clone();let control=state.documents.clone();work(move||documents::import_in_category(&root,&control,&paths,category.as_deref().unwrap_or("personal"))).await
 }
 #[tauri::command]
 async fn documents_state(state:State<'_,AppState>)->Result<Value,String> {
@@ -514,7 +519,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![speech_setup_status,speech_setup_start,speech_setup_cancel,pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![speech_setup_status,speech_setup_start,speech_setup_cancel,pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,ai_config,ai_save_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_category,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
       .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {state.pipeline.shutdown();state.speech_setup.process.cancel();state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}});
 }

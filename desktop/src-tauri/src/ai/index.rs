@@ -18,6 +18,7 @@ use std::{
 #[derive(Default, Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Filter {
+    pub category: String,
     pub exact: bool,
     pub kind: String,
     pub channel: String,
@@ -288,7 +289,12 @@ pub fn clear(root: &Path, control: &Control) -> Result<()> {
     Ok(())
 }
 fn metadata(db: &Connection, f: &Filter) -> Result<HashMap<(String, String), Hit>> {
-    let rows=db::rows(db,"SELECT 'recording' AS kind,id,title,channel,date FROM media UNION ALL SELECT 'document',id,title,'','' FROM docs UNION ALL SELECT 'note',id,title,'',substr(created_at,1,10) FROM notes",[])?;
+    let rows=db::rows(db,"SELECT 'recording' AS kind,id,title,channel,date FROM media WHERE (?1='' OR category=?1)
+      UNION ALL SELECT 'document',id,title,'','' FROM docs WHERE (?1='' OR category=?1)
+      UNION ALL SELECT 'note',n.id,n.title,'',substr(n.created_at,1,10) FROM notes n WHERE ?1=''
+        OR NOT EXISTS(SELECT 1 FROM note_anchors a WHERE a.note_id=n.id)
+        OR EXISTS(SELECT 1 FROM note_anchors a LEFT JOIN media m ON m.id=a.media_id LEFT JOIN docs d ON d.id=a.doc_id
+          WHERE a.note_id=n.id AND coalesce(m.category,d.category)=?1)", [&f.category])?;
     let mut allowed = HashMap::new();
     // Apply filters before ranking/limit. Empty source metadata cannot satisfy a recording filter.
     let tagged: HashSet<(String, String)> = if f.tag.is_empty() {

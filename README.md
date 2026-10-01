@@ -9,7 +9,8 @@ transcript folder and can run alongside it. Full Electron parity is still in pro
 
 ## Available in the preview
 
-- Library/player with transcript seeking, speaker colors, resizable panes, range notes,
+- Library with saved views, Personal/Work categories and processing filters.
+- Player with transcript seeking, speaker colors, resizable panes, range notes,
   looping, copy, and media/transcript export.
 - Nemotron 3.5 multilingual transcription and Nemotron diarization, on GPU or CPU.
   Voice fingerprints link speakers across overlapping windows and recordings.

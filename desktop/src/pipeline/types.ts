@@ -5,7 +5,7 @@ export type SourceInput = { id?: string; name: string; url: string; kind: Source
 export type PipelineOverview = { running: boolean; active: number; queued: number; retry: number; waitingLive: number; failed: number; dailyDownloads: number; dailyLimit: number; atDailyLimit: boolean };
 export type QueueJob = Job & { kind: string; device: string; attempts: number; retry_at: number; cancelled: number; channel: string; path: string | null; finished_at: string | null };
 export type PipelineState = { running: boolean; checking: boolean; config: PipelineConfig; jobs: QueueJob[]; channels: { channel: string }[]; sources: Source[]; overview: PipelineOverview };
-export type Batch = { ids?: string[]; channel?: string; query?: string; missingOnly?: boolean; device?: string };
+export type Batch = { category?: string; ids?: string[]; channel?: string; query?: string; missingOnly?: boolean; device?: string };
 export type Candidates = { total: number; eligible: number; unavailable: number; alreadyQueued: number; hours: number; items: { id: string; title: string; channel: string; date: string; path: string | null; transcript: string | null; duration: number }[] };
 export type Enqueued = { added: number; ids: string[]; unavailable: number; alreadyQueued: number };
 export const isPending = (status: string) => ["running", "queued", "retry", "waiting_live"].includes(status);

@@ -452,3 +452,20 @@ fn stop_chat_interrupts_before_first_token() {
     trigger.join().unwrap();
     worker.join().unwrap();
 }
+
+#[test]
+fn category_filters_scope_words_semantic_retrieval_and_note_evidence() {
+    let root=tempfile::tempdir().unwrap();fixture(root.path());
+    db::open(root.path()).unwrap().execute_batch("UPDATE media SET category='work' WHERE id='prayer';
+      INSERT INTO notes(id,title,body) VALUES('standalone','Prayer thought','A prayer without evidence.');").unwrap();
+    let fake=Fake::new();fake.config(root.path(),"embedding","tiny-embedding","");
+    build(root.path(),Arc::new(Control::default()));
+    for semantic in [false,true] {
+        let hits=|category:&str|index::search(root.path(),"prayer",semantic,&Filter{category:category.into(),..Default::default()},100).unwrap().into_iter().map(|h|h.id).collect::<Vec<_>>();
+        let work=hits("work");assert!(work.contains(&"prayer".into()));assert!(work.contains(&"note".into()));assert!(work.contains(&"standalone".into()));assert!(!work.contains(&"doc".into()));
+        let personal=hits("personal");assert!(personal.contains(&"doc".into()));assert!(!personal.contains(&"note".into()));assert!(!personal.contains(&"prayer".into()));
+    }
+    let research=crate::research::read(root.path()).unwrap();
+    let note=research["notes"].as_array().unwrap().iter().find(|n|n["id"]=="note").unwrap();
+    assert_eq!(note["anchors"][0]["category"],"work");
+}

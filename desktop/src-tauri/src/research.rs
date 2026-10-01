@@ -41,7 +41,7 @@ pub fn backfill(db:&Connection)->Result<()> {
 pub fn read(root:&Path)->Result<Value> {
     let db=db::open(root)?;
     let mut notes=db::rows(&db,"SELECT n.*,m.title AS media_title FROM notes n LEFT JOIN media m ON m.id=n.media_id ORDER BY coalesce(n.updated_at,n.created_at) DESC",[])?;
-    let anchors=db::rows(&db,"SELECT a.*,coalesce(m.title,d.title) AS title,m.channel,m.date FROM note_anchors a LEFT JOIN media m ON m.id=a.media_id LEFT JOIN docs d ON d.id=a.doc_id ORDER BY a.position",[])?;
+    let anchors=db::rows(&db,"SELECT a.*,coalesce(m.title,d.title) AS title,m.channel,m.date,coalesce(m.category,d.category) AS category FROM note_anchors a LEFT JOIN media m ON m.id=a.media_id LEFT JOIN docs d ON d.id=a.doc_id ORDER BY a.position",[])?;
     let tags=db::rows(&db,"SELECT * FROM note_tags ORDER BY tag",[])?;
     let mut by_note:HashMap<String,Vec<Value>>=HashMap::new();
     let mut tags_by_note:HashMap<String,Vec<Value>>=HashMap::new();

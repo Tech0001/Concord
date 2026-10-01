@@ -66,7 +66,7 @@ export function PipelinePage() {
     </div>
     {state?.overview.atDailyLimit && <div className="pipeline-summary"><span>Daily download limit reached ({state.overview.dailyDownloads} / {state.overview.dailyLimit}). Downloads resume after local midnight; local transcription can continue.</span></div>}
     {!state ? <p className="muted">Loading pipeline…</p> : tab === "queue" ? <>
-      <div className="pipeline-summary"><span>{count(pending.length, "recording")} in the queue</span><small>{active && !state.running ? "Paused after the current recording. Stop cancels the current recording too." : "Work survives restarting Concord. Existing transcripts stay available until replacements are ready."}</small>{pending.some(j => j.status !== "running") && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act("cancel-pending")}>Clear pending</Button>}</div>
+      <div className="pipeline-summary"><span>{count(pending.length, "recording")} in the queue</span><small>{active && !state.running ? "Paused after the current recording. Stop cancels the current recording too." : "This queue includes Personal and Work. Existing transcripts stay available until replacements are ready."}</small>{pending.some(j => j.status !== "running") && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act("cancel-pending")}>Clear pending</Button>}</div>
       <section className="pipeline-jobs" aria-label="Processing queue">{pending.length ? pending.map(row) : <Empty icon={Check} title="Queue is clear" text="Add recordings from your library to transcribe or re-transcribe them." action={<Button onClick={() => setTab("batch")}>Choose recordings</Button>}/>}</section>
       <div className="pipeline-history"><Button variant="ghost" icon={Clock} onClick={() => setHistory(v => !v)}>{history ? "Hide" : "Show"} history ({finished.length})</Button>{history && finished.length > 0 && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void act("clear")}>Clear history</Button>}</div>
       {history && <section className="pipeline-jobs" aria-label="Queue history">{finished.slice().reverse().map(row)}</section>}
@@ -79,6 +79,7 @@ export function PipelinePage() {
 
 function BatchView({ channels, device, onAdded }: { channels: string[]; device: string; onAdded: () => Promise<void> }) {
   const toast = useToast();
+  const { category } = useApp();
   const [channel, setChannel] = useState("");
   const [query, setQuery] = useState("");
   const [missingOnly, setMissingOnly] = useState(true);
@@ -87,13 +88,13 @@ function BatchView({ channels, device, onAdded }: { channels: string[]; device: 
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let alive = true; setData(undefined); setSelected(new Set());
-    const timer = setTimeout(() => api.pipelineCandidates({ channel, query, missingOnly }).then(d => alive && setData(d)).catch(e => alive && toast.error(e)), 180);
+    const timer = setTimeout(() => api.pipelineCandidates({ channel, query, missingOnly, category }).then(d => alive && setData(d)).catch(e => alive && toast.error(e)), 180);
     return () => { alive = false; clearTimeout(timer); };
-  }, [channel, query, missingOnly, toast]);
+  }, [channel, query, missingOnly, category, toast]);
   const add = async () => {
     setBusy(true);
     try {
-      const result = await api.pipelineEnqueue({ channel, query, missingOnly, device, ids: [...selected] }, false);
+      const result = await api.pipelineEnqueue({ channel, query, missingOnly, category, device, ids: [...selected] }, false);
       toast.success(`${count(result.added, "recording")} queued${result.unavailable ? ` · ${result.unavailable} unavailable` : ""}${result.alreadyQueued ? ` · ${result.alreadyQueued} already queued` : ""}`);
       await onAdded();
     } catch (e) { toast.error(e); } finally { setBusy(false); }

@@ -264,7 +264,10 @@ fn write(db: &Connection, file: &FileData, id: &str, root: Option<&str>) -> Resu
     }
     Ok(changed)
 }
-pub fn import(root: &Path, control: &Control, paths: &[String]) -> Result<usize> {
+#[cfg(test)]
+pub fn import(root: &Path, control: &Control, paths: &[String]) -> Result<usize> { import_in_category(root,control,paths,"personal") }
+pub fn import_in_category(root: &Path, control: &Control, paths: &[String], category: &str) -> Result<usize> {
+    anyhow::ensure!(["personal", "work"].contains(&category), "Choose Personal or Work");
     let _guard = control
         .lock
         .lock()
@@ -281,12 +284,10 @@ pub fn import(root: &Path, control: &Control, paths: &[String]) -> Result<usize>
                 r.get(0)
             })
             .optional()?;
-        write(
-            &tx,
-            file,
-            &id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-            None,
-        )?;
+        let new = id.is_none();
+        let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        write(&tx, file, &id, None)?;
+        if new { tx.execute("UPDATE docs SET category=?1 WHERE id=?2",params![category,id])?; }
     }
     tx.commit()?;
     Ok(files.len())

@@ -1,8 +1,10 @@
 import { createContext, useContext } from "react";
 import type { Route } from "../lib/router.ts";
-import type { Job, Note, Overview } from "../lib/types.ts";
+import type { Category, Job, Note, Overview } from "../lib/types.ts";
 
 export type AppContextValue = {
+  category: Category;
+  setCategory: (category: Category) => void;
   route: Route;
   navigate: (route: Route, options?: { replace?: boolean }) => void;
   back: () => void;

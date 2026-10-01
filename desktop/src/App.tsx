@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./shell/shell.css";
 import { Library } from "lucide-react";
-import type { Job, Note, Overview } from "./lib/types.ts";
+import type { Category, Job, Note, Overview } from "./lib/types.ts";
 import { api } from "./lib/ipc.ts";
 import { count } from "./lib/format.ts";
 import { useRoute } from "./lib/router.ts";
@@ -18,6 +18,7 @@ import { CommandPalette } from "./shell/CommandPalette.tsx";
 import { ActivityPanel } from "./shell/ActivityPanel.tsx";
 import { NoteEditor } from "./notes/NoteEditor.tsx";
 import { PipelinePage } from "./pipeline/PipelinePage.tsx";
+import { isCategory } from "./library/model.ts";
 import { LibraryPage } from "./library/LibraryPage.tsx";
 import { PlayerPage } from "./player/PlayerPage.tsx";
 import { AiPage } from "./ai/AiPage.tsx";
@@ -42,6 +43,7 @@ function Shell() {
   const [overview, setOverview] = useState<Overview>();
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
+  const [category, setCategory] = useStoredState<Category>("archive-category-v1", "", isCategory);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [device, setDevice] = useStoredState<string>("speech-device", "auto", (v) => typeof v === "string");
   const [note, setNote] = useState<Note | null>(null);
@@ -114,14 +116,14 @@ function Shell() {
     try {
       const paths = await api.pickMedia();
       if (!paths.length) return;
-      const n = await api.importMedia(paths);
+      const n = await api.importMedia(paths, category || "personal");
       refresh();
       navigate({ page: "library" });
       toast.success(`${count(n, "recording")} added`);
     } catch (e) {
       toast.error(e);
     }
-  }, [navigate, refresh, toast]);
+  }, [navigate, refresh, toast, category]);
   const importLegacy = useCallback(
     async (path?: string) => {
       try {
@@ -140,6 +142,8 @@ function Shell() {
 
   const context = useMemo<AppContextValue>(
     () => ({
+      category,
+      setCategory,
       route,
       navigate,
       back,
@@ -160,6 +164,8 @@ function Shell() {
       setPageTitle,
     }),
     [
+      category,
+      setCategory,
       route,
       navigate,
       back,

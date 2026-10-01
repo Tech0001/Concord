@@ -35,7 +35,7 @@ import {
 import { api } from "../lib/ipc.ts";
 import { clock, count } from "../lib/format.ts";
 import type { MapPosition, NoteAnchor, Research } from "../lib/types.ts";
-import { anchorsOf, LINK_KINDS } from "../notes/model.ts";
+import { anchorsOf, inCategory, LINK_KINDS } from "../notes/model.ts";
 import { Markdown } from "../documents/Markdown.tsx";
 import { Button, IconButton } from "../ui/Button.tsx";
 import { Empty } from "../ui/Empty.tsx";
@@ -74,7 +74,7 @@ const blank: Research = {
   tags: [],
 };
 export function MapPage() {
-  const { revision, refresh, openNote, navigate } = useApp(),
+  const { revision, refresh, openNote, navigate, category } = useApp(),
     toast = useToast();
   const [data, setData] = useState<Research>(),
     [mode, setMode] = useState<Layout>("videos"),
@@ -108,8 +108,8 @@ export function MapPage() {
   }, [revision, toast]);
   const research = data || blank;
   const notes = useMemo(
-    () => filterNotes(research.notes, filter),
-    [research.notes, filter],
+    () => filterNotes(research.notes.filter(n => inCategory(n, category)), filter),
+    [research.notes, filter, category],
   );
   const links = useMemo(
     () => graphLinks(notes, research.links, kinds),
@@ -121,10 +121,10 @@ export function MapPage() {
   );
   const items = useMemo(() => mapItems(sorted, mode), [sorted, mode]);
   const view = useMemo(
-    () => viewKey(mode, filter, order),
-    [mode, filter, order],
+    () => viewKey(mode, { ...filter, category }, order),
+    [mode, filter, order, category],
   );
-  const selectedNote = research.notes.find((n) => n.id === selected);
+  const selectedNote = notes.find((n) => n.id === selected);
   const openSource = useCallback(
     (a: NoteAnchor) => {
       if (a.media_id)

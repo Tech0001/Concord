@@ -8,6 +8,7 @@ export type Provider = {
 };
 export type AiConfig = { embedding: Provider; chat: Provider };
 export type SearchFilter = {
+  category?: string;
   exact: boolean;
   kind: string;
   channel: string;

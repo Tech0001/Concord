@@ -239,6 +239,8 @@ fn kind_sql() -> String {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LibraryFilter {
+    pub category: String,
+    pub status: String,
     pub query: String,
     pub channel: String,
     pub kind: String,
@@ -252,12 +254,12 @@ pub struct LibraryFilter {
 
 fn order_by(sort: &str) -> &'static str {
     match sort {
-        "oldest" => "m.date ASC, m.title COLLATE NOCASE",
-        "opened" => "m.opened_at IS NULL, m.opened_at DESC, m.date DESC",
-        "words" => "m.words DESC, m.date DESC",
-        "title" => "m.title COLLATE NOCASE, m.date DESC",
-        "longest" => "m.duration DESC, m.date DESC",
-        _ => "m.date DESC, m.title COLLATE NOCASE",
+        "oldest" => "replace(m.date, '-', '') ASC, m.title COLLATE NOCASE",
+        "opened" => "m.opened_at IS NULL, m.opened_at DESC, replace(m.date, '-', '') DESC",
+        "words" => "m.words DESC, replace(m.date, '-', '') DESC",
+        "title" => "m.title COLLATE NOCASE, replace(m.date, '-', '') DESC",
+        "longest" => "m.duration DESC, replace(m.date, '-', '') DESC",
+        _ => "replace(m.date, '-', '') DESC, m.title COLLATE NOCASE",
     }
 }
 
@@ -266,27 +268,39 @@ pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
     let kind = kind_sql();
     let query = f.query.trim();
     let pattern = like_pattern(query);
+    let cte = "WITH latest_job AS (
+      SELECT media_id,status,row_number() OVER (PARTITION BY media_id ORDER BY rowid DESC) AS position FROM jobs
+    ), library_media AS (
+      SELECT m.*, CASE j.status WHEN 'running' THEN 'processing' WHEN 'queued' THEN 'pending'
+        WHEN 'retry' THEN 'pending' WHEN 'waiting_live' THEN 'live' WHEN 'failed' THEN 'failed'
+        WHEN 'cancelled' THEN 'cancelled' ELSE CASE m.status
+          WHEN 'live' THEN 'live' WHEN 'waiting_live' THEN 'live' WHEN 'failed' THEN 'failed'
+          WHEN 'archived' THEN 'archived' WHEN 'pending' THEN 'pending' WHEN 'queued' THEN 'pending'
+          WHEN 'cancelled' THEN 'cancelled' ELSE CASE WHEN m.transcript IS NOT NULL THEN 'complete' ELSE 'ready' END END
+        END AS processing_status FROM media m LEFT JOIN latest_job j ON j.media_id=m.id AND j.position=1
+    )";
     let filter = format!(
         "(?1 = '' OR m.title LIKE ?2 ESCAPE '\\' OR m.channel LIKE ?2 ESCAPE '\\' OR coalesce(m.path,'') LIKE ?2 ESCAPE '\\')
          AND (?3 = '' OR m.channel = ?3)
          AND (?4 = '' OR {kind} = ?4)
          AND (?5 = '' OR (?5 = 'yes') = (m.transcript IS NOT NULL))
          AND (?6 = 0 OR m.starred = 1)
-         AND (?7 = '' OR m.review_state = ?7)"
+         AND (?7 = '' OR m.review_state = ?7)
+         AND (?8 = '' OR m.category = ?8) AND (?9 = '' OR m.processing_status = ?9)"
     );
-    let args: [&dyn rusqlite::ToSql; 7] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review];
+    let args: [&dyn rusqlite::ToSql; 9] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status];
     let (total, transcribed): (i64, i64) = db.query_row(
-        &format!("SELECT count(*), coalesce(sum(m.transcript IS NOT NULL), 0) FROM media m WHERE {filter}"),
+        &format!("{cte} SELECT count(*), coalesce(sum(m.transcript IS NOT NULL), 0) FROM library_media m WHERE {filter}"),
         &args[..],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let limit = if [60, 120, 240].contains(&f.limit) { f.limit } else { 60 };
-    let paged: [&dyn rusqlite::ToSql; 8] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.offset];
+    let paged: [&dyn rusqlite::ToSql; 10] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status, &f.offset];
     let mut items = rows(
         &db,
         &format!(
-            "SELECT m.*, {kind} AS kind, (SELECT count(*) FROM assignments a WHERE a.media_id = m.id) AS speaker_count
-             FROM media m WHERE {filter} ORDER BY {} LIMIT {limit} OFFSET ?8",
+            "{cte} SELECT m.*, {kind} AS kind, (SELECT count(*) FROM assignments a WHERE a.media_id = m.id) AS speaker_count
+             FROM library_media m WHERE {filter} ORDER BY {},m.id LIMIT {limit} OFFSET ?10",
             order_by(&f.sort)
         ),
         &paged[..],
@@ -296,7 +310,7 @@ pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
         "items": items,
         "total": total,
         "transcribed": transcribed,
-        "channels": rows(&db, "SELECT DISTINCT channel FROM media ORDER BY channel COLLATE NOCASE", [])?,
+        "channels": rows(&db, "SELECT DISTINCT channel FROM media WHERE (?1='' OR category=?1) ORDER BY channel COLLATE NOCASE", [&f.category])?,
     }))
 }
 
@@ -331,6 +345,11 @@ fn update_media(root: &Path, sql: &str, args: impl rusqlite::Params) -> Result<(
     let changed = open(root)?.execute(sql, args)?;
     anyhow::ensure!(changed == 1, "Recording not found");
     Ok(())
+}
+
+pub fn set_category(root: &Path, id: &str, category: &str) -> Result<()> {
+    anyhow::ensure!(["personal", "work"].contains(&category), "Choose Personal or Work");
+    update_media(root, "UPDATE media SET category=?1 WHERE id=?2", params![category,id])
 }
 
 pub fn set_starred(root: &Path, id: &str, starred: bool) -> Result<()> {
@@ -468,7 +487,10 @@ pub fn assign(root: &Path, media_id: &str, local_id: &str, name: &str) -> Result
     Ok(())
 }
 
-pub fn import_files(root: &Path, paths: &[String]) -> Result<usize> {
+#[cfg(test)]
+pub fn import_files(root: &Path, paths: &[String]) -> Result<usize> { import_files_in_category(root,paths,"personal") }
+pub fn import_files_in_category(root: &Path, paths: &[String], category: &str) -> Result<usize> {
+    anyhow::ensure!(["personal", "work"].contains(&category), "Choose Personal or Work");
     let mut db = open(root)?;
     let tx = db.transaction()?;
     let mut count = 0;
@@ -500,8 +522,8 @@ pub fn import_files(root: &Path, paths: &[String]) -> Result<usize> {
         let id = uuid::Uuid::new_v4().to_string();
         let title = path.file_stem().unwrap_or_default().to_string_lossy();
         tx.execute(
-            "INSERT INTO media(id,title,path,date) VALUES (?1,?2,?3,date('now'))",
-            params![id, title, path.to_string_lossy()],
+            "INSERT INTO media(id,title,path,date,category) VALUES (?1,?2,?3,date('now'),?4)",
+            params![id, title, path.to_string_lossy(),category],
         )?;
         count += 1;
     }
@@ -699,6 +721,36 @@ mod tests {
         assert_eq!(ids(&library(&root, &paged).unwrap()), ["c"]);
         paged.limit = 7; // not an allowed page size, falls back to 60
         assert_eq!(ids(&library(&root, &paged).unwrap()), ["c"]);
+    }
+
+    #[test]
+    fn library_categories_and_latest_processing_state_keep_existing_transcripts() {
+        let (_tmp,root)=library_fixture();
+        set_category(&root,"b","work").unwrap();
+        assert!(set_category(&root,"b","unknown").is_err());
+        assert!(set_category(&root,"missing","personal").is_err());
+        let db=open(&root).unwrap();
+        db.execute_batch("UPDATE media SET date='2025-10-08' WHERE id='b';
+          INSERT INTO jobs(id,media_id,title,status) VALUES ('old','a','Old failure','failed'),('new','a','New success','complete');
+          INSERT INTO jobs(id,media_id,title,status) VALUES ('latest','c','Failed replacement','failed');").unwrap();
+        let all=library(&root,&LibraryFilter::default()).unwrap();
+        assert_eq!(ids(&all),["b","a","c"]); // ISO and compact dates sort together.
+        let filtered=|category:&str,status:&str| library(&root,&LibraryFilter{category:category.into(),status:status.into(),..Default::default()}).unwrap();
+        assert_eq!(ids(&filtered("personal","complete")),["a"]);
+        assert_eq!(ids(&filtered("personal","failed")),["c"]);
+        assert_eq!(filtered("personal","failed")["transcribed"],1);
+        assert_eq!(ids(&filtered("work","ready")),["b"]);
+        assert_eq!(filtered("work","")["channels"],json!([{"channel":"Interviews"}]));
+        for (state,status) in [("queued","pending"),("running","processing"),("retry","pending"),("waiting_live","live"),("cancelled","cancelled")] {
+            db.execute("UPDATE jobs SET status=?1 WHERE id='latest'",[state]).unwrap();
+            assert_eq!(ids(&filtered("personal",status)),["c"]);
+        }
+        assert_eq!(media(&root,"c").unwrap()["transcript"],"/t/gamma.md");
+        let path=root.join("work.ogg");std::fs::write(&path,b"fixture").unwrap();
+        let paths=vec![path.to_string_lossy().into_owned()];
+        assert_eq!(import_files_in_category(&root,&paths,"work").unwrap(),1);
+        assert_eq!(import_files_in_category(&root,&paths,"personal").unwrap(),0);
+        assert_eq!(filtered("work","")["total"],2);
     }
 
     #[test]

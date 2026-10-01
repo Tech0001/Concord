@@ -31,12 +31,11 @@ import { Markdown } from "./Markdown.tsx";
 import "./documents.css";
 
 export function DocumentsPage({ id }: { id?: string }) {
-  const { navigate, revision, refresh } = useApp();
+  const { navigate, revision, refresh, category, setCategory } = useApp();
   const toast = useToast();
   const [data, setData] = useState<DocumentsState>({ roots: [], docs: [] });
   const [loaded, setLoaded] = useState(false),
     [query, setQuery] = useState(""),
-    [category, setCategory] = useState(""),
     [starred, setStarred] = useState(false);
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
@@ -90,7 +89,7 @@ export function DocumentsPage({ id }: { id?: string }) {
     try {
       const paths = await api.pickDocuments();
       if (!paths.length) return;
-      const n = await api.importDocuments(paths);
+      const n = await api.importDocuments(paths, category || "personal");
       toast.success(`${count(n, "document")} added`);
       await load();
       refresh();

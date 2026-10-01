@@ -402,6 +402,12 @@ export function PlayerPage({ id, at }: { id: string; at?: number }) {
       onSelect: () => void setReviewState(s),
     })),
     { kind: "separator" },
+    { kind: "label", label: "Category" },
+    ...(["personal", "work"] as const).map(category => ({
+      label: category === "work" ? "Work" : "Personal", checked: (media.category ?? "personal") === category,
+      onSelect: () => { void api.setCategory(media.id, category).then(refresh).catch(toast.error); },
+    })),
+    { kind: "separator" },
     {
       label: "Show file in folder",
       icon: FolderOpen,

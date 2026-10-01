@@ -507,3 +507,10 @@
   gap: 8px;
   margin-top: 8px;
 }
+
+.library-saved-views { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; color: var(--muted-foreground); }
+.library-saved-views .select { max-width: 280px; }
+.saved-views-list { display: grid; margin-top: 18px; }
+.saved-views-list > div { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.saved-views-list > div > button:first-child { flex: 1; text-align: left; min-width: 0; overflow-wrap: anywhere; }
+.saved-views-list small { display: block; color: var(--muted-foreground); }

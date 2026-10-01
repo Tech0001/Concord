@@ -4,6 +4,7 @@ import { anchorsOf } from "../notes/model.ts";
 export type Layout = "videos" | "cards" | "arc" | "cluster";
 export type ArcOrder = "tag" | "date" | "collection" | "title" | "connections";
 export type MapFilter = {
+  category?: string;
   query: string;
   collection: string;
   tags: string[];
@@ -75,6 +76,7 @@ export function viewKey(mode: Layout, filter: MapFilter, order: ArcOrder) {
     [...filter.tags].sort(),
     filter.limit,
     mode === "arc" ? order : "",
+    ...(filter.category ? [filter.category] : []),
   ]);
 }
 export function filterNotes(notes: Note[], f: MapFilter) {

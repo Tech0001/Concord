@@ -9,6 +9,7 @@ use std::{collections::HashSet, path::Path, sync::atomic::Ordering};
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Batch {
+    pub category: String,
     pub ids: Vec<String>,
     pub channel: String,
     pub query: String,
@@ -20,8 +21,8 @@ fn selected(db: &Connection, batch: &Batch) -> Result<Vec<Value>> {
     Ok(db::rows(
         db,
         "SELECT m.id,m.title,m.channel,m.date,m.path,m.transcript,m.status,m.duration,COALESCE(c.diarize,1) AS diarize FROM media m LEFT JOIN channels c ON c.id=m.source_id
-        WHERE (?1='' OR m.channel=?1) AND (?2='' OR m.title LIKE ?3 ESCAPE '\\') ORDER BY m.date,m.id",
-        params![batch.channel, batch.query, db::like_pattern(&batch.query)],
+        WHERE (?1='' OR m.channel=?1) AND (?2='' OR m.title LIKE ?3 ESCAPE '\\') AND (?4='' OR m.category=?4) ORDER BY replace(m.date,'-',''),m.id",
+        params![batch.channel, batch.query, db::like_pattern(&batch.query), batch.category],
     )?
     .into_iter()
     .filter(|m| ids.is_empty() || ids.contains(&m["id"].as_str().unwrap_or_default().to_owned()))

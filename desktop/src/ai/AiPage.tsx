@@ -31,7 +31,7 @@ import {
 } from "./types.ts";
 import "./ai.css";
 function Chat({ config }: { config: AiConfig }) {
-  const { openNote } = useApp();
+  const { openNote, category } = useApp();
   const toast = useToast();
   const [list, setList] = useState<Conversation[]>([]);
   const [selected, setSelected] = useState("");
@@ -127,7 +127,7 @@ function Chat({ config }: { config: AiConfig }) {
         text,
         useLibrary,
         semantic,
-        filter,
+        filter: { ...filter, category },
       });
       setDetail(d);
       setDraftTitle(d.conversation.title);
