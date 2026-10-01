@@ -1,3 +1,4 @@
+pub mod subscription;
 pub mod automation;
 pub mod builtin;
 pub mod chat;

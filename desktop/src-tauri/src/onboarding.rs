@@ -285,7 +285,8 @@ pub fn status(
     let chat = &config.chat;
     let connected = chat.enabled
         && !chat.model.is_empty()
-        && (chat.kind != "chatgpt" || ai::chatgpt::available(root, &chat.account_id));
+        && (chat.kind != "chatgpt" || ai::chatgpt::available(root, &chat.account_id))
+        && (!ai::subscription::is_cli(&chat.kind) || ai::subscription::installed(&chat.kind));
     let embedding = &config.embedding;
     let legacy = if started {
         Value::Null

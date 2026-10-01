@@ -66,7 +66,8 @@ pub fn view(root: &Path) -> Result<Value> {
     let expose = |p: &Provider| {
         let mut v = json!(p);
         v["hasKey"] = json!(!p.api_key.is_empty());
-        v["local"] = json!(p.kind == "builtin" || p.is_loopback());
+        v["local"] = json!(!super::subscription::is_cli(&p.kind) && (p.kind == "builtin" || p.is_loopback()));
+        if super::subscription::is_cli(&p.kind) { v["cliInstalled"] = json!(super::subscription::installed(&p.kind)); }
         if p.kind == "chatgpt" {
             let connected = super::chatgpt::available(root, &p.account_id);
             v["connected"] = json!(connected);
@@ -88,6 +89,7 @@ pub fn save(root: &Path, task: &str, mut provider: Provider, key: Option<String>
         provider = super::builtin::default_provider();
         provider.enabled = enabled;
     }
+    if super::subscription::is_cli(&provider.kind) { ensure!(task == "chat", "Subscriptions support chat, summaries and tags, not embeddings"); provider.api_key.clear(); provider.account_id.clear(); provider.base_url.clear(); }
     if provider.kind == "chatgpt" {ensure!(task == "chat", "ChatGPT sign-in is only available for chat, summaries and tags");}
     let _guard = CONFIG_LOCK.lock().unwrap();
     let mut c = read_unlocked(root)?;
@@ -114,7 +116,7 @@ pub fn save(root: &Path, task: &str, mut provider: Provider, key: Option<String>
         !provider.api_key.contains(['\r', '\n']),
         "API key contains a line break"
     );
-    if provider.kind == "chatgpt" {provider.api_key.clear();}
+    if provider.kind == "chatgpt" || super::subscription::is_cli(&provider.kind) {provider.api_key.clear();}
     else {provider.account_id.clear();}
     *old = provider;
     let mut value = json!(c);
@@ -144,6 +146,7 @@ pub fn pick_model(task: &str, models: &[Value]) -> Option<String> {
 /// returns the model list (with `error`), so another model can be chosen.
 pub fn try_provider(root: &Path, task: &str, mut provider: Provider, key: Option<String>) -> Result<Value> {
     ensure!(["embedding", "chat"].contains(&task), "Unknown AI task");
+    ensure!(task == "chat" || !super::subscription::is_cli(&provider.kind), "Subscriptions cannot produce embeddings");
     let saved = read(root)?;
     let old = if task == "embedding" { &saved.embedding } else { &saved.chat };
     provider.base_url = provider.base_url.trim().trim_end_matches('/').to_owned();
@@ -162,7 +165,7 @@ pub fn try_provider(root: &Path, task: &str, mut provider: Provider, key: Option
         provider.models(task)?
     };
     let model = Some(provider.model.trim().to_owned())
-        .filter(|m| models.iter().any(|x| x["id"] == m.as_str()))
+        .filter(|m| !m.is_empty() && (super::subscription::is_cli(&provider.kind) || models.iter().any(|x| x["id"] == m.as_str())))
         .or_else(|| pick_model(task, &models))
         .context("This provider didn't list any models. Check the address, then try again.")?;
     provider.model = model.clone();
@@ -219,9 +222,14 @@ impl Provider {
     }
     pub fn validate(&self, model_required: bool) -> Result<()> {
         ensure!(
-            ["builtin", "local", "openrouter", "custom", "chatgpt"].contains(&self.kind.as_str()),
+            ["builtin", "local", "openrouter", "custom", "chatgpt", "codex", "claude-code"].contains(&self.kind.as_str()),
             "Unknown AI provider"
         );
+        if super::subscription::is_cli(&self.kind) {
+            ensure!(!model_required || (self.enabled && !self.model.is_empty()), "Choose and enable a chat model in Settings first");
+            ensure!(self.model.len() <= 200 && !self.model.contains(['\r', '\n']), "Invalid chat model");
+            return Ok(());
+        }
         if self.kind == "chatgpt" {
             ensure!(self.base_url == super::chatgpt::RESOURCE, "Use the official ChatGPT API endpoint");
             ensure!(!model_required || !self.account_id.is_empty(), "Choose a connected ChatGPT account in Settings");
@@ -329,9 +337,10 @@ impl Provider {
     }
     pub fn models(&self, task: &str) -> Result<Vec<Value>> {
         ensure!(self.kind != "chatgpt", "Load ChatGPT models through the selected account");
+        if super::subscription::is_cli(&self.kind) { ensure!(task == "chat", "Subscriptions cannot produce embeddings"); return Ok(super::subscription::models(&self.kind)); }
         if self.kind == "builtin" {
             return Ok(vec![
-                json!({"id":super::builtin::MODEL,"name":"Built-in Qwen3 Embedding · CPU"}),
+                json!({"id":super::builtin::MODEL,"name":"Built-in Qwen3 Embedding · automatic GPU / CPU"}),
             ]);
         }
         let path = if self.kind == "openrouter" && task == "embedding" {
@@ -354,7 +363,7 @@ impl Provider {
         Ok(models)
     }
     pub fn embed(&self, client: &Client, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
-        ensure!(self.kind != "chatgpt", "ChatGPT sign-in cannot be used for embeddings");
+        ensure!(self.kind != "chatgpt" && !super::subscription::is_cli(&self.kind), "Chat subscriptions cannot be used for embeddings");
         self.validate(true)?;
         let result = self.json(
             client,

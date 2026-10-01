@@ -130,7 +130,7 @@ pub fn status(root: &Path) -> Result<Value> {
         )
         .optional()?;
     Ok(
-        json!({"modelReady":config.embedding.kind!="builtin"||super::builtin::ready(root),"indexed":count,"total":sources(&db)?.len(),"chunks":vectors,"dimensions":dimensions,"job":db::rows(&db,"SELECT * FROM ai_jobs ORDER BY created_at DESC,rowid DESC LIMIT 1",[])?.pop()}),
+        json!({"device":if config.embedding.kind=="builtin" {super::builtin::device(root)} else {None},"modelReady":config.embedding.kind!="builtin"||super::builtin::ready(root),"indexed":count,"total":sources(&db)?.len(),"chunks":vectors,"dimensions":dimensions,"job":db::rows(&db,"SELECT * FROM ai_jobs ORDER BY created_at DESC,rowid DESC LIMIT 1",[])?.pop()}),
     )
 }
 pub fn start(root: PathBuf, control: Arc<Control>) -> Result<String> {
@@ -284,7 +284,7 @@ fn build_filtered(
                 "UPDATE ai_jobs SET message=?2 WHERE id=?1",
                 params![
                     job,
-                    format!("Indexing {} of {} ({kind})", i + 1, list.len())
+                    format!("Indexing {} of {} ({kind}){}", i + 1, list.len(), if provider.kind == "builtin" { super::builtin::device(root).map(|d| format!(" · {d}")).unwrap_or_default() } else { String::new() })
                 ],
             )?;
             let mut vectors = Vec::new();

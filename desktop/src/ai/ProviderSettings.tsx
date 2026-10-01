@@ -40,19 +40,20 @@ function ProviderEditor({
     value.local,
   ]);
   const builtin = draft.kind === "builtin";
+  const cli = draft.kind === "codex" || draft.kind === "claude-code";
   const chatgpt = draft.kind === "chatgpt";
   const changed = (kind: Provider["kind"]) => {
     setDraft({
       ...draft,
       kind,
       baseUrl:
-        kind === "chatgpt"
+        kind === "codex" || kind === "claude-code" ? "" : kind === "chatgpt"
           ? "https://api.openai.com/v1"
           : kind === "openrouter"
             ? "https://openrouter.ai/api/v1"
             : "http://127.0.0.1:11434/v1",
-      model: kind === "builtin" ? "Qwen3-Embedding-0.6B-Q8_0" : "",
-      enabled: kind === "builtin" || draft.enabled,
+      model: kind === "codex" || kind === "claude-code" ? "default" : kind === "builtin" ? "Qwen3-Embedding-0.6B-Q8_0" : "",
+      enabled: kind === "builtin" || kind === "codex" || kind === "claude-code" || draft.enabled,
       hasKey: false,
       accountId: "",
       connected: false,
@@ -75,6 +76,13 @@ function ProviderEditor({
     setBusy(true);
     setMessage("");
     try {
+      if (cli && what === "check") {
+        const tried = await api.aiTryProvider(task, draft, null);
+        if (tried.error) throw new Error(tried.error);
+        await save();
+        setMessage(tried.message || "Connected");
+        return;
+      }
       await save();
       if (what === "models") {
         setModels(await api.aiModels(task));
@@ -115,6 +123,8 @@ function ProviderEditor({
               : []),
             ...(task === "chat"
               ? [
+                  { value: "codex", label: "Codex CLI · ChatGPT subscription" },
+                  { value: "claude-code", label: "Claude Code CLI · Claude subscription" },
                   {
                     value: "chatgpt",
                     label: "ChatGPT · sign in with your account",
@@ -129,11 +139,12 @@ function ProviderEditor({
       </label>
       {builtin ? (
         <p className="settings-note">
-          Runs on CPU with Concord's own runtime. No dedicated GPU, API key, or
-          separate AI application needed.
+          Uses your GPU automatically when supported; otherwise runs on CPU.
+          No API key or separate AI application needed. The index below shows the active device.
         </p>
       ) : (
         <>
+          {cli && <p className="settings-note">Uses your installed, signed-in {draft.kind === "codex" ? "Codex" : "Claude Code"}. Sign in with <code>{draft.kind === "codex" ? "codex login" : "claude auth login"}</code>, then Test connection. Use <code>default</code> for its default model, or enter a model available to your account. Concord does not store your subscription credentials.</p>}
           {chatgpt && (
             <ChatGPTSettings
               accountId={draft.accountId || ""}
@@ -158,7 +169,7 @@ function ProviderEditor({
             />{" "}
             Enable {task === "embedding" ? "this embedding provider" : "chat"}
           </label>
-          {!chatgpt && (
+          {!chatgpt && !cli && (
             <>
               <label className="field">
                 <span>API base URL</span>
@@ -231,7 +242,7 @@ function ProviderEditor({
             </datalist>
           </label>
           <p className="settings-note">
-            {chatgpt
+            {cli ? "Messages and selected archive excerpts go through the CLI to its provider. Subscription limits and extra-usage settings apply. Embeddings stay with your separate search provider." : chatgpt
               ? "Model choices come from the selected ChatGPT account. Requests use that account’s plan or credits."
               : draft.kind === "local"
                 ? "Requests go to a server on this computer."

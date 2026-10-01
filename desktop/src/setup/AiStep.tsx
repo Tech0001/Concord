@@ -46,13 +46,14 @@ function Connect({
 }) {
   const toast = useToast();
   const same = current.kind === choice;
+  const cli = choice === "codex" || choice === "claude-code";
   const [baseUrl, setBaseUrl] = useState(
     same && choice !== "openrouter" ? current.baseUrl : choice === "local" ? (server?.baseUrl ?? "http://127.0.0.1:11434/v1") : choice === "custom" ? "" : OPENROUTER_URL,
   );
   const [key, setKey] = useState("");
   const [account, setAccount] = useState(same ? (current.accountId ?? "") : "");
   const [models, setModels] = useState<Model[]>([]);
-  const [model, setModel] = useState(same ? current.model : "");
+  const [model, setModel] = useState(same ? current.model : cli ? "default" : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [connected, setConnected] = useState(same && current.enabled && !!current.model && (choice !== "chatgpt" || !!current.connected));
@@ -60,7 +61,7 @@ function Connect({
   const address = choice === "local" && server ? server.baseUrl : baseUrl.trim();
   const provider = (m: string, accountId = account): Provider => ({
     kind: choice,
-    baseUrl: choice === "chatgpt" ? CHATGPT_URL : choice === "openrouter" ? OPENROUTER_URL : address,
+    baseUrl: cli ? "" : choice === "chatgpt" ? CHATGPT_URL : choice === "openrouter" ? OPENROUTER_URL : address,
     model: m,
     enabled: true,
     accountId,
@@ -99,6 +100,7 @@ function Connect({
   );
   return (
     <div className="setup-connect">
+      {cli && <><p>Install and sign in to {choice === "codex" ? "Codex" : "Claude Code"} on this computer using <code>{choice === "codex" ? "codex login" : "claude auth login"}</code>. Concord uses that CLI and its subscription login; no API key is needed.</p><div className="setup-connect-row"><input aria-label="Subscription chat model" value={model} placeholder="default" onChange={e => setModel(e.target.value)} />{test}</div><p>Use default or enter a model available to your account. A test sends a short connection check.</p></>}
       {choice === "chatgpt" && (
         <ChatGPTSettings
           accountId={account}
@@ -317,6 +319,8 @@ export function AiStep({ status, next, skip, back, detour, chat: preselected }: 
             </div>
             <div className="setup-choices" role="radiogroup" aria-labelledby="ask-archive">
               <Choice checked={chat === "off"} label="Not now" hint="Add it later" onClick={() => void pickChat("off")} />
+              <Choice checked={chat === "codex"} label="Codex" hint="Installed CLI · ChatGPT subscription" onClick={() => void pickChat("codex")} />
+              <Choice checked={chat === "claude-code"} label="Claude Code" hint="Installed CLI · Claude subscription" onClick={() => void pickChat("claude-code")} />
               <Choice checked={chat === "chatgpt"} label="ChatGPT account" hint="Sign in, uses your plan" onClick={() => void pickChat("chatgpt")} />
               <Choice checked={chat === "openrouter"} label="OpenRouter" hint="API key, many models" onClick={() => void pickChat("openrouter")} />
               <Choice

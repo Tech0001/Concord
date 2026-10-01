@@ -28,6 +28,10 @@ test("setup keeps its step, where to return, and a preselected chat provider", (
   const route: Route = { page: "setup", step: "ai", returnTo: "ai", chat: "openrouter" };
   assert.equal(formatRoute(route), "#/setup?step=ai&return=ai&chat=openrouter");
   assert.deepEqual(parseRoute(formatRoute(route)), route);
+  for (const chat of ["codex", "claude-code"] as const) {
+    const subscription: Route = { ...route, chat };
+    assert.deepEqual(parseRoute(formatRoute(subscription)), subscription);
+  }
   assert.deepEqual(parseRoute("#/setup"), { page: "setup" });
   assert.deepEqual(parseRoute("#/setup?step=nowhere&return=recording&chat=fax"), { page: "setup" });
 });

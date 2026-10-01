@@ -49,6 +49,8 @@ function ConnectChat() {
       text="Connect a chat provider to get answers quoted from your recordings, each linked to the moment it was said."
       action={
         <div className="setup-connect-options">
+          <Button onClick={() => go("codex")}>Use Codex<small>ChatGPT subscription</small></Button>
+          <Button onClick={() => go("claude-code")}>Use Claude Code<small>Claude subscription</small></Button>
           <Button onClick={() => go("chatgpt")}>
             Sign in with ChatGPT<small>Uses your plan</small>
           </Button>

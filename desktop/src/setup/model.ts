@@ -61,7 +61,7 @@ export function stepState(s: SetupStatus, step: SetupStep, current: SetupStep): 
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 export const SEARCH_NAME: Record<string, string> = { builtin: "Local", local: "Local server", openrouter: "OpenRouter", custom: "Custom" };
-export const CHAT_NAME: Record<string, string> = { chatgpt: "ChatGPT", openrouter: "OpenRouter", local: "Local", custom: "Custom" };
+export const CHAT_NAME: Record<string, string> = { codex: "Codex", "claude-code": "Claude Code", chatgpt: "ChatGPT", openrouter: "OpenRouter", local: "Local", custom: "Custom" };
 
 export function speechSummary(s: SetupStatus): string {
   const speech = speechState(s);
@@ -177,6 +177,8 @@ const SEARCH_PRIVACY: Record<SearchChoice, string> = {
 };
 const CHAT_PRIVACY: Record<ChatChoice, string> = {
   off: "No chat provider is connected.",
+  codex: "Chat sends your question and matching passages to OpenAI through your signed-in Codex CLI. Subscription limits apply.",
+  "claude-code": "Chat sends your question and matching passages to Anthropic through your signed-in Claude Code CLI. Subscription limits and extra-usage settings apply.",
   chatgpt: "Chat sends your question and the matching passages to OpenAI.",
   openrouter: "Chat sends your question and the matching passages to OpenRouter.",
   local: "Chat uses your local server and stays on this computer.",

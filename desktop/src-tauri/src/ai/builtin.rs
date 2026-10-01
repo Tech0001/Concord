@@ -1,4 +1,4 @@
-//! App-managed, CPU-only embedding service. No Python, API key or external AI app required.
+//! App-managed embedding service with automatic GPU offload. No Python, API key or external AI app required.
 use super::config::Provider;
 use crate::model_download::{self, Pinned};
 use anyhow::{ensure, Context, Result};
@@ -26,12 +26,28 @@ struct Server {
     child: Child,
     provider: Provider,
     root: PathBuf,
+    device: std::sync::Arc<Mutex<String>>,
 }
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+/// Never block the UI while a model is starting under the server mutex.
+pub fn device(root: &Path) -> Option<String> {
+    let Ok(mut server) = SERVER.try_lock() else { return Some("Starting local model…".into()); };
+    let s = server.as_mut()?;
+    if s.root != root || s.child.try_wait().ok().flatten().is_some() { return None; }
+    let label = s.device.lock().unwrap().clone();
+    Some(label)
+}
+fn offload_status(line: &str) -> Option<String> {
+    let layers = line.split("offloaded ").nth(1)?.split_whitespace().next()?;
+    let (loaded, total) = layers.split_once('/')?;
+    let loaded: u32 = loaded.parse().ok()?;
+    let total: u32 = total.parse().ok()?;
+    Some(if loaded > 0 { format!("GPU · {loaded}/{total} model layers") } else { "CPU".into() })
 }
 pub fn initialize(path: PathBuf) {
     let _ = RESOURCES.set(path);
@@ -190,7 +206,7 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
             progress(&format!("Downloading local model · {} of 639 MB", bytes / 1_000_000))
         })?;
     }
-    progress("Starting local semantic search on CPU")?;
+    progress("Starting local semantic search · automatic GPU detection")?;
     model_download::verify(&model, &PINNED)?;
     let bin_name = if cfg!(windows) {
         "llama-server.exe"
@@ -212,6 +228,8 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
     provider.api_key = token.clone();
     let mut cmd = Command::new(&binary);
     cmd.args(["--model"]).arg(&model).args([
+        "--log-verbosity",
+        "4",
         "--embedding",
         "--pooling",
         "last",
@@ -224,7 +242,7 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
         "--parallel",
         "1",
         "--n-gpu-layers",
-        "0",
+        "auto",
         "--host",
         "127.0.0.1",
         "--port",
@@ -244,7 +262,7 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
     cmd.env("LLAMA_API_KEY", token)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;
@@ -261,13 +279,27 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
             });
         }
     }
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .context("Cannot start local embedding runtime")?;
+    let device = std::sync::Arc::new(Mutex::new("CPU".to_string()));
+    let detected = device.clone();
+    let stderr = child.stderr.take().context("No embedding runtime diagnostics")?;
+    // Drain diagnostics continuously without recording prompts, tokens, or response bodies.
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader};
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some(label) = offload_status(&line) {
+                crate::runtime_log::push("info", &format!("Local semantic search: {label}"));
+                *detected.lock().unwrap() = label;
+            }
+        }
+    });
     let mut running = Server {
         child,
         provider: provider.clone(),
         root: root.to_owned(),
+        device,
     };
     let client = reqwest::blocking::Client::builder()
         .no_proxy()
@@ -290,7 +322,7 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
             started.elapsed() < Duration::from_secs(90),
             "Local embedding runtime took too long to start"
         );
-        progress("Starting local semantic search on CPU")?;
+        progress("Starting local semantic search · automatic GPU detection")?;
         std::thread::sleep(Duration::from_millis(200));
     }
     *server = Some(running);

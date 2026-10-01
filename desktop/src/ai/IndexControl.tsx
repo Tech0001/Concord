@@ -49,6 +49,7 @@ export function IndexControl() {
             ? `${status.indexed.toLocaleString()} of ${status.total.toLocaleString()} sources indexed · ${status.chunks.toLocaleString()} passages`
             : "Checking index…"}
         </p>
+        {status?.device && <p className="muted">Processing on {status.device}</p>}
         {!status?.modelReady && (
           <small>
             The built-in model downloads once (639 MB), then runs on this

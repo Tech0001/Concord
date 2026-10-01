@@ -1,10 +1,11 @@
 export type Provider = {
   enabled: boolean;
-  kind: "builtin" | "local" | "openrouter" | "custom" | "chatgpt";
+  kind: "builtin" | "local" | "openrouter" | "custom" | "chatgpt" | "codex" | "claude-code";
   baseUrl: string;
   model: string;
   accountId?: string;
   connected?: boolean;
+  cliInstalled?: boolean;
   hasKey: boolean;
   local: boolean;
 };
@@ -51,6 +52,7 @@ export type FilterOptions = {
   tags: { tag: string }[];
 };
 export type IndexStatus = {
+  device?: string | null;
   modelReady: boolean;
   indexed: number;
   total: number;
@@ -92,7 +94,7 @@ export type Summary = {
   created_at: string;
 };
 export const chatReady = (p?: Provider) =>
-  !!p?.enabled && !!p.model && (p.kind !== "openrouter" || p.hasKey) && (p.kind !== "chatgpt" || !!p.connected);
+  !!p?.enabled && !!p.model && (p.kind !== "openrouter" || p.hasKey) && (p.kind !== "chatgpt" || !!p.connected) && (p.cliInstalled !== false);
 
 export type SummaryJob = {id:string;media_id:string;model:string;status:string;message:string;done:number;total:number;created_at:string};
 export type SummaryState = {summary:Summary|null;job:SummaryJob|null};

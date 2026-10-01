@@ -51,8 +51,21 @@ New environments are activated only after extracting and checking a real voice f
 A cancelled or failed repair keeps the previous working environment.
 
 Semantic search uses a separate app-managed local Qwen3 embedding model, prepared from the
-AI page or Settings. Chat remains disabled until a provider is configured. Local/OpenRouter/
-custom embedding and chat services are supported independently. Chat also supports **Continue
+AI page or Settings. Its bundled Vulkan runtime uses a supported GPU automatically, with CPU
+processing available when no GPU is supported. The semantic index shows its actual processing
+device; ordinary file scanning and exact-word indexing still use the CPU. Chat remains disabled until a provider is configured. Local/OpenRouter/
+custom embedding and chat services are supported independently.
+
+For subscription chat, choose **Codex CLI** or **Claude Code CLI** in Settings → AI → Chat.
+Install the unmodified CLI and sign in using `codex login` or `claude auth login`, then use
+**Test chat**. `default` selects the CLI's default model; an account-supported model ID can
+be entered instead. Concord runs the CLI with a private temporary working folder, coding
+customizations disabled, and restricted tools. Credentials stay with the CLI. Messages and
+selected source excerpts go to its provider; subscription limits and extra-usage rules apply.
+These subscriptions do not supply embeddings. See [Codex non-interactive mode](https://developers.openai.com/codex/noninteractive)
+and [Claude Code integrations](https://code.claude.com/docs/en/legal-and-compliance).
+
+Chat also supports **Continue
 with ChatGPT**: choose ChatGPT in Settings → AI providers, authorize Concord, load the
 account’s models, select one and save. ChatGPT plan eligibility and usage limits are controlled
 by OpenAI; the app links to Manage usage. This uses Concord’s own connection and does not
@@ -67,7 +80,7 @@ See [speech setup details](desktop/speech/README.md) for pinned models and depen
 
 ## Develop and package on Linux
 
-Install Rust, Node.js 24+, pnpm 10, FFmpeg, CMake/Ninja, Vulkan development tools,
+Install Rust, Node.js 24+, pnpm 10, FFmpeg, CMake/Ninja, Vulkan development tools (Vulkan headers/loader, glslc, and SPIRV-Headers),
 GStreamer base/good/bad/libav plugins, patchelf, and the
 [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/#linux).
 

@@ -15,7 +15,7 @@ done
 if [[ ! -x build/binaries/nemo/nemo-speech ]]; then
   bash scripts/stage-nemo-runtime.sh
 fi
-if [[ ! -x build/binaries/embedding/llama-server ]]; then
+if [[ ! -x build/binaries/embedding/llama-server || ! -f build/binaries/embedding/libggml-vulkan.so ]]; then
   bash scripts/build-embedding-runtime.sh
 fi
 bash scripts/stage-next-downloads.sh

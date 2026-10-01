@@ -30,6 +30,7 @@ pub fn complete(
 ) -> Result<String> {
     provider.validate(true)?;
     if provider.kind == "chatgpt" { return super::chatgpt::responses::complete(root, provider, messages, cancel, on_delta); }
+    if super::subscription::is_cli(&provider.kind) { return super::subscription::complete(provider, messages, cancel, on_delta); }
     // A small async runtime lets Stop drop an in-flight HTTP request immediately,
     // including while a slow local model is still preparing its first token.
     tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {

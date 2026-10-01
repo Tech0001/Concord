@@ -69,3 +69,8 @@ __pycache__/
 /build/download-cache/
 /build/speech-setup-lab/
 /build/binaries/setup/
+
+# Optional local Vulkan build headers (not runtime resources)
+/build/vulkan-headers/
+/build/spirv-headers/
+/build/vulkan-sdk/

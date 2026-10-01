@@ -39,4 +39,4 @@ export type Preflight = {
 };
 export type LocalServer = { kind: "ollama" | "lmstudio"; baseUrl: string; models: number };
 export type SearchChoice = "builtin" | "local" | "openrouter" | "custom" | "off";
-export type ChatChoice = "off" | "chatgpt" | "openrouter" | "local" | "custom";
+export type ChatChoice = "off" | "codex" | "claude-code" | "chatgpt" | "openrouter" | "local" | "custom";

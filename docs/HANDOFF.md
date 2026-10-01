@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.25.1**
+Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.26.0**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,52 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## GPU semantic indexing and subscription chat (0.26.0)
+
+Local embeddings were explicitly CPU-only: the runtime build disabled Vulkan and startup
+passed `--n-gpu-layers 0`. The same pinned llama.cpp now includes Vulkan and starts with
+automatic layer placement. CPU remains available on machines without a supported GPU.
+The index panel reports **actual** offloaded layers from runtime diagnostics, and indexing
+activity messages include the device. Model, dimensions, pooling and index signature stay
+the same; existing indexed sources do not need rebuilding. File scanning, parsing and exact
+word indexing still use CPU.
+
+Verified on this PC's RTX 2080 Ti: **29/29 layers offloaded**, 1024 dimensions, CPU/GPU
+cosine similarity above 0.99965 for both synthetic inputs. Native WebKitGTK indexing of a
+scratch document succeeded and visibly reported GPU. The short warmed test took 0.164 seconds
+on CPU and 0.030 on GPU; this is a connection smoke test, not an archive throughput benchmark.
+Build dependencies include Vulkan headers/loader, glslc and SPIRV-Headers. This machine's
+headers were staged privately in ignored build/vulkan-{headers,sdk} and build/spirv-headers,
+using Khronos's vulkan-sdk-1.4.321.0 tags. No system packages or GPU settings were changed.
+
+Chat now offers **Codex CLI · ChatGPT subscription** and **Claude Code CLI · Claude subscription**
+in Settings, onboarding and the AI connection screen. These run installed unmodified CLIs
+using their own sign-in; Concord does not read or copy subscription credentials. Use
+`codex login` or `claude auth login`, then **Test chat**. `default` uses the CLI default, or
+enter a model supported by the account. CLI options require current versions: tested with
+Codex 0.158.0 and Claude Code 2.1.284. These providers also serve summaries/tags through the
+shared chat completion path. Embedding providers stay entirely separate.
+
+Requests use private temporary folders/files, an isolated working directory, ephemeral
+sessions, no inherited API keys, disabled coding customizations, and restricted tools.
+Codex runs read-only with shell/web/apps/agents disabled. Claude runs safe mode with an empty
+tool set; **do not use --bare**, which disables subscription authentication. Claude subscription
+authentication is checked via its own `auth status` command. Cancellation/timeouts kill the
+process group. Streaming JSON is bounded and requires an explicit successful completion.
+Credentials, prompts and raw CLI errors are not copied into runtime logs. Each user's
+subscription limits and provider extra-usage rules still apply. See the README's official
+provider documentation links.
+
+Validation: 158 Rust tests, 56 interface tests, clean Clippy; actual signed-in synthetic
+connection checks passed for both CLIs. Native regression:
+`desktop/scripts/native-ai-runtime-smoke.js`, scratch root `/tmp/concord-ai-native-5sucm59v`.
+It verifies provider deep-links, settings, independent embeddings and real GPU indexing.
+Logs: `/tmp/concord-026-{rust,ts,clippy,cli-live,gpu-check,native-test,package}.log`.
+The real library/settings were not used for tests. Its existing index is preserved.
+Installed and byte-verified the 0.26.0 AppImage at `~/.local/opt/concord-next/Concord-Next.AppImage`.
+The app window was left open; reopening loads the update. Backup:
+`~/.local/share/concord-next/backups/before-0.26.0-20261001-150625.db`.
 
 ## Dropdowns inside dialogs (0.25.1)
 

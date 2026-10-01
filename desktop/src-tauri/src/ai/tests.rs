@@ -733,3 +733,22 @@ fn trying_a_provider_tests_it_without_saving_anything() {
     assert!(config::try_provider(root.path(), "chat", down, None).is_err());
     assert_eq!(std::fs::read(root.path().join("ai-providers.json")).unwrap(), before);
 }
+
+#[test]
+fn subscription_chat_keeps_embedding_settings_and_never_stores_api_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let embedding = config::read(dir.path()).unwrap().embedding.signature();
+    for kind in ["codex", "claude-code"] {
+        let provider = Provider { enabled: true, kind: kind.into(), model: "default".into(), account_id: "old-account".into(), ..Provider::default() };
+        assert!(config::save(dir.path(), "embedding", provider.clone(), None).is_err());
+        config::save(dir.path(), "chat", provider, Some("old-api-key".into())).unwrap();
+        let saved = config::read(dir.path()).unwrap();
+        assert_eq!(saved.embedding.signature(), embedding);
+        assert!(saved.chat.api_key.is_empty());
+        assert!(saved.chat.account_id.is_empty());
+        assert!(saved.chat.base_url.is_empty());
+        assert_eq!(config::view(dir.path()).unwrap()["chat"]["local"], false);
+        assert!(!std::fs::read_to_string(dir.path().join("ai-providers.json")).unwrap().contains("old-api-key"));
+        assert!(saved.chat.embed(&reqwest::blocking::Client::new(), &["text".into()]).is_err());
+    }
+}

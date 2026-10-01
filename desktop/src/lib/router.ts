@@ -8,7 +8,7 @@ export type PipelineTab = (typeof PIPELINE_TABS)[number];
 const SETUP_STEPS: SetupStep[] = ["library", "speech", "recordings", "ai", "look", "ready"];
 /** Pages that setup can return to when it was opened from somewhere else. */
 const RETURNS = ["library", "ai", "search", "settings"] as const;
-const CHATS: ChatChoice[] = ["chatgpt", "openrouter", "local", "custom"];
+const CHATS: ChatChoice[] = ["codex", "claude-code", "chatgpt", "openrouter", "local", "custom"];
 const pick = <T extends string>(list: readonly T[], value: string | null): T | undefined =>
   value != null && (list as readonly string[]).includes(value) ? (value as T) : undefined;
 /** Drop undefined fields so parsed routes compare equal to the ones they came from. */
