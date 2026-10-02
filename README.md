@@ -1,7 +1,12 @@
 # Concord Next
 
-A local research archive for spoken-word media. Listen, transcribe, find passages,
-recognize familiar voices, and connect what you learn.
+A desktop research workspace for recordings you create or are authorized to use.
+Turn meetings, interviews, lectures, and voice notes into searchable transcripts,
+recognized speakers, and linked research notes. Transcription and semantic search
+can run on your own computer; connecting a chat provider is optional.
+
+**Built with:** Rust, Tauri, React, TypeScript, and SQLite. This repository also
+contains the earlier Electron/Express application and its Python speech pipeline.
 
 This branch is the **Linux-first Rust/Tauri preview**. The working Electron/Nemotron
 build is preserved on `feature/nemo-native`. Concord Next has its own database and
@@ -22,8 +27,9 @@ transcript folder and can run alongside it. Full Electron parity is still in pro
   have background progress and cancellation, preserving the previous summary until success.
 - Research notes with multiple passages, tags, typed connections, and four map layouts.
 - Markdown document folders, live sync, local images/links, categories, and research anchors.
-- YouTube subscriptions and local source folders, download setup, persistent processing
-  queues, delayed retries, and batch re-transcription that preserves existing transcripts.
+- Local recording folders, persistent processing queues, delayed retries, and batch
+  re-transcription that preserves existing transcripts. Optional online sources are
+  described below.
   Optional semantic indexing and summaries run independently after transcription, using
   separately approved providers. Both start off; existing recordings are not backfilled.
 - Tools for standalone M4A/MP3 extraction and recoverable Linux voice recording with optional local transcript preview.
@@ -89,10 +95,25 @@ read Codex credentials. See [OpenAI’s sign-in flow](https://developers.openai.
 
 If you choose a remote
 provider, relevant text is sent to that provider. Speech processing stays local.
-Optional YouTube subscriptions and downloads are configured in Pipeline; enable the downloader
-in Settings first.
+Optional online sources are configured in Pipeline after enabling the downloader in Settings.
 
 See [speech setup details](desktop/speech/README.md) for pinned models and dependencies.
+
+## Media sources and permissions
+
+Concord works with local audio/video files and recording folders without enabling online
+downloads. Use recordings you own, have permission to process, or are otherwise legally
+entitled to use. Obtain any consent needed to record or process other people's speech.
+
+The optional YouTube integration uses yt-dlp. In Concord Next it is disabled by default,
+requires explicit setup, and is not bundled with the app. Copyright permission and a
+platform's terms are separate requirements: enabling a downloader does not grant either.
+Follow the source's applicable terms, including [YouTube's Terms of Service](https://www.youtube.com/t/terms).
+Do not use Concord to infringe copyright or bypass access restrictions.
+
+Concord's source-code license does not grant rights to third-party recordings, transcripts,
+artwork, or model weights. Public examples and screenshots should use self-created,
+appropriately licensed, or fictional demonstration material.
 
 ## Develop and package on Linux
 

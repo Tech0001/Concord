@@ -1,6 +1,6 @@
 # Concord
 
-A personal research archive for spoken-word media. Save videos and audio, transcribe them locally, and turn the useful parts into searchable transcripts, linked notes, and conversations with your archive.
+A desktop research archive for recordings you create or are authorized to use. Import local audio and video, transcribe speech on your computer, and turn useful passages into searchable transcripts and linked research notes.
 
 Concord combines an Electron desktop app with a React interface, a local Node server, and SQLite storage. Linux transcription uses NVIDIA NeMo Parakeet or faster-whisper; Apple Silicon builds use FluidAudio.
 
@@ -8,11 +8,9 @@ Concord combines an Electron desktop app with a React interface, a local Node se
 
 **Instructions:** [User manual](MANUAL.md) · [PDF manual](Concord_MANUAL.pdf). Linux still needs Python for transcription; the manual covers first-run setup and NVIDIA/CPU choices.
 
-![Concord Library showing saved videos, speaker labels, and processing status](docs/screenshots/library.png)
-
 ## What you can do
 
-- Download individual YouTube videos, follow channels, and import local media.
+- Import local recordings and organize audio/video collections.
 - Generate timestamped transcripts, with speaker diarization on the Parakeet path.
 - Browse your library, search transcripts, and jump from a passage to its source video.
 - Save quotes and research notes, organize them with tags, and explore their connections on a map.
@@ -22,32 +20,17 @@ Concord combines an Electron desktop app with a React interface, a local Node se
 
 Media processing and transcription run on your machine. AI features use the model endpoint you configure; a remote endpoint receives the text sent to it. Internet access is needed for downloads and initial model setup.
 
-## Screenshots
+## Media sources and permissions
 
-Watch a video alongside its timestamped transcript, identify speakers, and save passages as clips.
+Local recordings are the starting point. Concord also includes YouTube source and download
+support; its availability does not grant permission to download or reuse content. Use only
+media you own, are authorized to process, or are otherwise legally entitled to use, and
+follow the source platform's terms, including [YouTube's Terms of Service](https://www.youtube.com/t/terms).
+Do not use Concord to infringe copyright or bypass access restrictions. Obtain any consent
+needed to record or process other people's speech.
 
-![Video workspace with playback, speaker-labeled transcript segments, and clipping controls](docs/screenshots/video-transcript.png)
-
-<details>
-<summary>Explore transcript search, speakers, the pipeline, and AI settings</summary>
-
-**Transcript search** — find passages across the archive and open a video at the matching timestamp.
-
-![Transcript search results with source titles, excerpts, and timestamp links](docs/screenshots/transcript-search.png)
-
-**Speakers** — review identified voices and their appearances across videos.
-
-![Speakers page listing known voices, labeled duration, and video counts](docs/screenshots/speakers.png)
-
-**Pipeline** — add YouTube sources, manage followed channels, and monitor processing.
-
-![Pipeline page showing download controls, configuration, and channel settings](docs/screenshots/pipeline.png)
-
-**AI settings** — connect a model server, choose chat and embedding models, and manage indexing and summaries. The endpoint and model names shown are examples from one installation.
-
-![AI configuration with provider settings, model selections, and semantic indexing controls](docs/screenshots/ai-settings.png)
-
-</details>
+The application's source-code license does not cover third-party recordings or artwork.
+Public examples should use self-created, appropriately licensed, or fictional demo material.
 
 ## Hardware and platforms
 
