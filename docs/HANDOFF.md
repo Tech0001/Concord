@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.28.0**
+Updated October 2, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.28.1**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,33 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Stable SQLite connection lifetime (0.28.1)
+
+The user saw `library.db-wal` and `library.db-shm` repeatedly appear/disappear in the
+file manager. Every background request opened a short-lived connection; when the final
+connection closed, SQLite removed the sidecars, only to recreate them on the next poll.
+This was unnecessary filesystem activity, not evidence that the database was corrupt.
+
+`AppState` now retains the initialized SQLite connection for the app lifetime. Worker
+connections still run independently; the retained connection holds no transaction or
+read cursor, so normal WAL checkpointing remains enabled. Pending restores are applied
+before this connection is opened. The retained connection is explicitly dropped on the
+final Tauri Exit event, after cancellation has been requested, because process exit may
+not run managed-state destructors. No schema, journaling or durability settings changed.
+
+`desktop/scripts/native-database-lifetime-test.py` monitors filesystem events with inotify
+while the native app exercises 60 IPC reads, writes a synthetic conversation and creates
+and validates a backup. Before the fix each sidecar was created/deleted 53 times; afterward
+each was created once and removed once at normal exit. The saved write was present in
+both the final database and backup, and both passed integrity checks. The test uses only
+a fresh scratch library and no provider. Final root: `/tmp/concord-database-native-c0xv1eyd`.
+
+All 163 Rust tests passed (9 existing opt-in tests ignored); Clippy and the frontend/native
+build passed. Logs: `/tmp/concord-0281-{before,rust,clippy,native-test,package}.log`.
+Installed and byte-verified 0.28.1 at `~/.local/opt/concord-next/Concord-Next.AppImage`.
+The existing app was left running; close and reopen to load the fix. Verified backup:
+`~/.local/share/concord-next/backups/before-0.28.1-20261002-103542.db`.
 
 ## Global Ask panel and shared chat (0.28.0)
 
