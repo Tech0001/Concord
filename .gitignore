@@ -2,10 +2,27 @@
 node_modules/
 venv/
 venv-parakeet/
+.venv/
+__pycache__/
+*.py[cod]
 
 # Build output
 dist/
 server/public/
+/dist-electron/
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
+
+# Downloaded runtimes, sources and toolchains (keep build icons/scripts tracked)
+/build/binaries/*
+!/build/binaries/.gitignore
+/build/download-cache/
+/build/llama-source/
+/build/speech-setup-lab/
+/build/concord-media.*/
+/build/vulkan-headers/
+/build/spirv-headers/
+/build/vulkan-sdk/
 
 # Editor / OS
 .DS_Store
@@ -27,6 +44,9 @@ downloads/
 transcripts/
 saved_videos/
 youtube-dl-cache/
+/backups/
+/models/
+/voice-recordings/
 
 # Media files anywhere in repo (belt-and-suspenders)
 *.mp4
@@ -35,7 +55,22 @@ youtube-dl-cache/
 *.wav
 *.webm
 *.mkv
+*.ogg
+*.opus
+*.flac
+*.aac
+*.aiff
+*.mov
+*.m4v
+*.avi
 *.tar.gz
+
+# Downloaded model weights
+*.gguf
+*.safetensors
+*.nemo
+*.onnx
+*.ckpt
 
 # SQLite — never track live DBs in git (they corrupt across pulls).
 # Use scripts/backup-db.sh or `sqlite3 src.db ".backup dest.db"` for snapshots.
@@ -44,7 +79,13 @@ youtube-dl-cache/
 *.db-wal
 *.db-journal
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
 *.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal
 
 # Logs
 *.log
@@ -52,10 +93,20 @@ logs/
 
 # Environment / secrets
 .env
-.env.local
-.env.*.local
-.env.notarize
-pipeline.db
-__pycache__/
-*.pyc
-/dist-electron
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.template
+cookies.txt
+cookies.json
+*.cookies.txt
+.claude/settings.local.json
+
+# Personal archive screenshots; use separate demo assets for public documentation
+/docs/screenshots/ai-settings.png
+/docs/screenshots/library.png
+/docs/screenshots/pipeline.png
+/docs/screenshots/speakers.png
+/docs/screenshots/transcript-search.png
+/docs/screenshots/video-transcript.png
