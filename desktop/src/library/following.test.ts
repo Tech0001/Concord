@@ -30,6 +30,8 @@ test("a followed source's header says what it is and how it is set up", () => {
   assert.equal(followingMeta(source({ url: "https://www.youtube.com/playlist?list=PL1", diarize: 0 }), NOW), "Playlist · Personal · checked 2 hours ago");
   assert.equal(followingMeta(source({ kind: "folder", url: "/home/you/Interviews", category: "work", check_status: "checking" }), NOW), "Folder · Work · speakers identified · checking now");
   assert.equal(followingMeta(source({ check_status: "failed", check_message: "The channel is unavailable" }), NOW), "Channel · Personal · speakers identified · last check failed: The channel is unavailable");
+  assert.equal(followingMeta(source({ check_status: "queued" }), NOW), "Channel · Personal · speakers identified · waiting to check");
+  assert.equal(followingMeta(source({ check_status: "cancelled", check_message: "Source check stopped" }), NOW), "Channel · Personal · speakers identified · check stopped");
   assert.equal(followingNote(source(), NOW), "New videos are added while Concord is open. Following since October 6.");
   assert.equal(followingNote(source({ kind: "folder" }), NOW), "Recordings saved in this folder are added while Concord is open. Watching since October 6.");
   assert.equal(followingNote(source({ since: Date.UTC(2025, 2, 3, 12) / 1000 }), NOW), "New videos are added while Concord is open. Following since March 3, 2025.");

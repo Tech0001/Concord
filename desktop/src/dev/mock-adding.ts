@@ -88,6 +88,9 @@ export const addingHandlers: Record<string, (a: any) => unknown> = {
     s.check_status = "checking";
     setTimeout(() => Object.assign(s, { check_status: "complete", last_check: NOW(), check_message: "Nothing new" }), 3000);
   },
+  pipeline_stop_check: () => {
+    for (const s of sources) if (["checking", "queued"].includes(s.check_status)) Object.assign(s, { check_status: "cancelled", check_message: "Source check stopped" });
+  },
   pipeline_save_source: ({ source }) => {
     const s = sources.find((x) => x.id === source.id);
     if (s) Object.assign(s, { name: source.name, category: source.category, diarize: source.diarize ? 1 : 0, include_shorts: source.includeShorts ? 1 : 0, enabled: source.enabled ? 1 : 0 });

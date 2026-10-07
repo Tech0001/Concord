@@ -19,6 +19,8 @@ pub struct Control {
     pub checking: AtomicBool,
     pub previewing: AtomicBool,
     pub scanner: Arc<speech::Control>,
+    /// Sources asked to be checked while another check ran; taken in order when it finishes.
+    pub(crate) waiting_checks: Mutex<std::collections::VecDeque<String>>,
 }
 impl Control {
     pub fn new(speech: Arc<speech::Control>) -> Self {
@@ -32,6 +34,7 @@ impl Control {
             checking: AtomicBool::new(false),
             previewing: AtomicBool::new(false),
             scanner: Arc::new(speech::Control::default()),
+            waiting_checks: Mutex::new(std::collections::VecDeque::new()),
         }
     }
     pub fn shutdown(&self) {

@@ -1,5 +1,8 @@
 import type { Source } from "../pipeline/types.ts";
 
+/** A check is running on this source, or waiting for another to finish. */
+export const isChecking = (s: Source) => s.check_status === "checking" || s.check_status === "queued";
+
 /** Followed channels and watched folders: the sources that add new recordings by themselves. */
 export const isFollowed = (s: Source) => s.kind !== "collection" && s.enabled === 1 && (s.since ?? 0) > 0;
 
@@ -20,7 +23,11 @@ export function followingMeta(s: Source, now = Date.now() / 1000): string {
   const check =
     s.check_status === "checking"
       ? "checking now"
-      : s.check_status && !["complete", "interrupted"].includes(s.check_status)
+      : s.check_status === "queued"
+        ? "waiting to check"
+        : s.check_status === "cancelled"
+          ? "check stopped"
+          : s.check_status && !["complete", "interrupted"].includes(s.check_status)
         ? `last check failed${s.check_message ? `: ${s.check_message}` : ""}`
         : checkedAgo(s.last_check, now);
   return [sourceKind(s), s.category === "work" ? "Work" : "Personal", s.diarize ? "speakers identified" : "", check].filter(Boolean).join(" · ");

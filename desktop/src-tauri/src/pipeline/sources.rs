@@ -26,10 +26,18 @@ pub struct Source {
 pub fn list(root: &Path) -> Result<Vec<Value>> {
     db::rows(&db::open(root)?,"SELECT c.*,(SELECT count(*) FROM media m WHERE m.source_id=c.id) AS recordings FROM channels c ORDER BY name COLLATE NOCASE",[])
 }
+/// Whether this source is the one a running check is working on. Others can change meanwhile.
+fn being_checked(root: &Path, control: &Control, id: Option<&str>) -> Result<bool> {
+    let Some(id) = id else { return Ok(false) };
+    if !control.checking.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    Ok(db::open(root)?.query_row("SELECT EXISTS(SELECT 1 FROM channels WHERE id=?1 AND check_status='checking')", [id], |r| r.get(0))?)
+}
 pub fn save(root: &Path, control: &Control, input: &Source) -> Result<String> {
     anyhow::ensure!(
-        !control.checking.load(Ordering::SeqCst),
-        "Wait for the source check to finish, or stop it before editing sources"
+        !being_checked(root, control, input.id.as_deref())?,
+        "Wait for this check to finish, or stop it, before changing it"
     );
     let name = input.name.trim();
     anyhow::ensure!(
@@ -109,12 +117,14 @@ pub fn save(root: &Path, control: &Control, input: &Source) -> Result<String> {
 }
 pub fn remove(root: &Path, control: &Control, id: &str) -> Result<()> {
     anyhow::ensure!(
-        !control.checking.load(Ordering::SeqCst),
-        "Stop the source check before removing a source"
+        !being_checked(root, control, Some(id))?,
+        "Stop this check before removing it"
     );
+    control.waiting_checks.lock().unwrap().retain(|w| w != id);
     let mut db = db::open(root)?;
     let tx = db.transaction()?;
     tx.execute("UPDATE media SET source_id=NULL WHERE source_id=?1", [id])?;
+    tx.execute("DELETE FROM source_seen WHERE source_id=?1", [id])?;
     tx.execute("DELETE FROM channels WHERE id=?1", [id])?;
     tx.commit()?;
     Ok(())
@@ -547,8 +557,18 @@ pub fn start_filtered(root: PathBuf, control: Arc<Control>, id: Option<String>, 
     );
     // Serialize check startup with filesystem changes and queue transitions.
     let gate=control.gate.lock().map_err(|_|anyhow::anyhow!("Processing lock interrupted"))?;
-    if control.checking.swap(true, Ordering::SeqCst) {
-        anyhow::bail!("A source check is already running");
+    {
+        // The same lock the running check takes before it stops, so a request is never lost.
+        let mut waiting = control.waiting_checks.lock().unwrap();
+        if control.checking.load(Ordering::SeqCst) {
+            let Some(id) = id else { anyhow::bail!("A source check is already running") };
+            if !waiting.contains(&id) {
+                db::open(&root)?.execute("UPDATE channels SET check_status='queued',check_message='Waiting for another check to finish' WHERE id=?1", [&id])?;
+                waiting.push_back(id);
+            }
+            return Ok(());
+        }
+        control.checking.store(true, Ordering::SeqCst);
     }
     control.scanner.begin();
     drop(gate);
@@ -569,48 +589,72 @@ pub fn start_filtered(root: PathBuf, control: Arc<Control>, id: Option<String>, 
                 if source["kind"] == "collection" {
                     continue;
                 }
-                let id = source["id"].as_str().unwrap();
-                db::open(&root)?.execute("UPDATE channels SET check_status='checking',check_message='Checking for recordings' WHERE id=?1",[id])?;
-                let started = std::time::Instant::now();
-                runtime_log::debug("Source check", &format!("Starting {} source; full history: {full}", source["kind"].as_str().unwrap_or("unknown")));
-                let result = if source["kind"] == "folder" {
-                    local(&root, &control, &source)
-                } else {
-                    let result = (|| {
-                        let guard=control.gate.lock().unwrap();
-                        super::downloader::binary(&root)?;
-                        control.checking_youtube.store(true, Ordering::SeqCst);
-                        drop(guard);
-                        youtube(&root, &control, &source, full)
-                    })();
-                    control.checking_youtube.store(false, Ordering::SeqCst);
-                    result
-                };
-                let (status, message) = match result {
-                    Ok(n) => ("complete", format!("{n} new recordings queued")),
-                    Err(_) if control.scanner.is_cancelled() => {
-                        ("cancelled", "Source check stopped".into())
-                    }
-                    Err(e) => ("failed", format!("{e:#}")),
-                };
-                db::open(&root)?.execute("UPDATE channels SET check_status=?1,check_message=?2,last_check=?3 WHERE id=?4",params![status,message,now(),id])?;
-                runtime_log::debug("Source check", &format!("Finished: {status}; elapsed {:.2}s", started.elapsed().as_secs_f64()));
-                runtime_log::push(
-                    if status == "failed" { "error" } else { "info" },
-                    &format!(
-                        "Source {}: {message}",
-                        source["name"].as_str().unwrap_or("")
-                    ),
-                );
+                check_one(&root, &control, &source, full)?;
             }
             Ok(())
         })();
         if let Err(e) = result {
             runtime_log::push("error", &format!("Source check: {e:#}"));
         }
+        // Then each check asked for meanwhile, in order, until none wait.
+        while let Some(id) = next_waiting(&control) {
+            let result = if control.scanner.is_cancelled() {
+                db::open(&root).and_then(|db| Ok(db.execute("UPDATE channels SET check_status='cancelled',check_message='Source check stopped' WHERE id=?1", [&id])?)).map(|_| ())
+            } else {
+                source(&root, &id).and_then(|s| check_one(&root, &control, &s, false))
+            };
+            if let Err(e) = result {
+                runtime_log::push("error", &format!("Source check: {e:#}"));
+            }
+        }
+    });
+    Ok(())
+}
+/// The next check asked for while one ran. When none wait, the check is over: it lets go
+/// under the same lock `start` takes, so a request made at that moment starts a new check.
+pub fn next_waiting(control: &Control) -> Option<String> {
+    let mut waiting = control.waiting_checks.lock().unwrap();
+    let next = waiting.pop_front();
+    if next.is_none() {
         control.scanner.busy.store(false, Ordering::SeqCst);
         control.checking.store(false, Ordering::SeqCst);
-    });
+    }
+    next
+}
+fn check_one(root: &Path, control: &Control, source: &Value, full: bool) -> Result<()> {
+    let id = source["id"].as_str().context("Source missing")?;
+    db::open(root)?.execute("UPDATE channels SET check_status='checking',check_message='Checking for recordings' WHERE id=?1",[id])?;
+    let started = std::time::Instant::now();
+    runtime_log::debug("Source check", &format!("Starting {} source; full history: {full}", source["kind"].as_str().unwrap_or("unknown")));
+    let result = if source["kind"] == "folder" {
+        local(root, control, source)
+    } else {
+        let result = (|| {
+            let guard=control.gate.lock().unwrap();
+            super::downloader::binary(root)?;
+            control.checking_youtube.store(true, Ordering::SeqCst);
+            drop(guard);
+            youtube(root, control, source, full)
+        })();
+        control.checking_youtube.store(false, Ordering::SeqCst);
+        result
+    };
+    let (status, message) = match result {
+        Ok(n) => ("complete", format!("{n} new recordings queued")),
+        Err(_) if control.scanner.is_cancelled() => {
+            ("cancelled", "Source check stopped".into())
+        }
+        Err(e) => ("failed", format!("{e:#}")),
+    };
+    db::open(root)?.execute("UPDATE channels SET check_status=?1,check_message=?2,last_check=?3 WHERE id=?4",params![status,message,now(),id])?;
+    runtime_log::debug("Source check", &format!("Finished: {status}; elapsed {:.2}s", started.elapsed().as_secs_f64()));
+    runtime_log::push(
+        if status == "failed" { "error" } else { "info" },
+        &format!(
+            "Source {}: {message}",
+            source["name"].as_str().unwrap_or("")
+        ),
+    );
     Ok(())
 }
 pub fn monitor(root: PathBuf, control: Arc<Control>) {

@@ -826,3 +826,56 @@ fn upgrading_a_quiet_library_runs_by_default() {
     as_schema_15(root);
     assert!(overview(root).unwrap()["running"].as_bool().unwrap());
 }
+fn folder_source(root: &Path, c: &Control, name: &str) -> String {
+    let folder = root.join(name);
+    std::fs::create_dir_all(&folder).unwrap();
+    sources::save(root, c, &sources::Source { id: None, name: name.into(), kind: "folder".into(), url: folder.to_string_lossy().into_owned(), enabled: true, diarize: true, include_shorts: false, category: "personal".into() }).unwrap()
+}
+#[test]
+fn only_the_source_being_checked_is_locked_during_a_check() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let busy = folder_source(root, &c, "Busy");
+    let other = folder_source(root, &c, "Other");
+    c.checking.store(true, Ordering::SeqCst);
+    db::open(root).unwrap().execute("UPDATE channels SET check_status='checking' WHERE id=?1", [&busy]).unwrap();
+    // Following something new, and editing or removing another source, all go ahead.
+    sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudy", "Tuesday Study", "personal", true, false).unwrap();
+    let mut edit = sources::Source { id: Some(other.clone()), name: "Other renamed".into(), kind: "folder".into(), url: root.join("Other").to_string_lossy().into_owned(), enabled: true, diarize: false, include_shorts: false, category: "work".into() };
+    sources::save(root, &c, &edit).unwrap();
+    edit.id = Some(busy.clone());
+    edit.name = "Busy renamed".into();
+    edit.url = root.join("Busy").to_string_lossy().into_owned();
+    assert!(sources::save(root, &c, &edit).is_err(), "the source being checked waits");
+    assert!(sources::remove(root, &c, &busy).is_err());
+    sources::remove(root, &c, &other).unwrap();
+}
+#[test]
+fn checking_one_source_while_another_is_checked_waits_its_turn() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let first = folder_source(root, &c, "First");
+    let second = folder_source(root, &c, "Second");
+    let c = Arc::new(c);
+    c.checking.store(true, Ordering::SeqCst);
+    sources::start(root.to_path_buf(), c.clone(), Some(second.clone()), false).unwrap();
+    sources::start(root.to_path_buf(), c.clone(), Some(second.clone()), false).unwrap();
+    assert_eq!(sources::source(root, &second).unwrap()["check_status"], "queued");
+    assert!(sources::start(root.to_path_buf(), c.clone(), None, false).is_err(), "checking everything still waits for the running check");
+    // When the running check finishes it takes the waiting one, once, then stops.
+    assert_eq!(sources::next_waiting(&c).as_deref(), Some(second.as_str()));
+    assert!(c.checking.load(Ordering::SeqCst));
+    assert_eq!(sources::next_waiting(&c), None);
+    assert!(!c.checking.load(Ordering::SeqCst));
+    let _ = first;
+}
+#[test]
+fn removing_a_followed_source_forgets_what_it_had_seen() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let source = channel(root, &c);
+    sources::follow_ingest(root, &source, &[tab(VIDEOS, &["aaaaaaaaaaa"], true)], "auto").unwrap();
+    sources::remove(root, &c, source["id"].as_str().unwrap()).unwrap();
+    let left: i64 = db::open(root).unwrap().query_row("SELECT count(*) FROM source_seen WHERE source_id=?1", [source["id"].as_str()], |r| r.get(0)).unwrap();
+    assert_eq!(left, 0);
+}

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowUpRight, CircleAlert, Clock, Folder, HeartPulse, LoaderCircle, Pause, Play, RefreshCw, Rss, X } from "lucide-react";
+import { ArrowUpRight, CircleAlert, Clock, Folder, HeartPulse, LoaderCircle, Pause, Play, RefreshCw, Rss, Square, X } from "lucide-react";
 import { AskHelp } from "../ai/ConcordHelp.tsx";
 import { api } from "../lib/ipc.ts";
 import { count } from "../lib/format.ts";
-import { checkedAgo, isFollowed } from "../library/following.ts";
+import { checkedAgo, isChecking, isFollowed } from "../library/following.ts";
 import { AutomaticQueue } from "../pipeline/AutomaticAi.tsx";
 import { isPending, type AutomaticAi, type PipelineState, type QueueJob, type Source } from "../pipeline/types.ts";
 import { useApp } from "../shell/AppContext.tsx";
@@ -212,7 +212,7 @@ export function ActivityPage() {
           {sources.length ? (
             <div className="activity-card activity-list">
               {sources.map((s) => (
-                <FollowingRow key={s.id} source={s} busy={busy} onOpen={() => navigate({ page: "library", collection: s.id })} onCheck={() => void run(() => api.pipelineCheck(s.id))} onFollow={() => void run(() => api.addFollow(s.url, s.name, s.category, s.diarize === 1, s.include_shorts === 1))} />
+                <FollowingRow key={s.id} source={s} busy={busy} onOpen={() => navigate({ page: "library", collection: s.id })} onCheck={() => void run(() => api.pipelineCheck(s.id))} onStop={() => void run(() => api.pipelineStopCheck())} onFollow={() => void run(() => api.addFollow(s.url, s.name, s.category, s.diarize === 1, s.include_shorts === 1))} />
               ))}
             </div>
           ) : (
@@ -277,11 +277,11 @@ export function ActivityPage() {
   );
 }
 
-function FollowingRow({ source: s, busy, onOpen, onCheck, onFollow }: { source: Source; busy: boolean; onOpen: () => void; onCheck: () => void; onFollow: () => void }) {
+function FollowingRow({ source: s, busy, onOpen, onCheck, onStop, onFollow }: { source: Source; busy: boolean; onOpen: () => void; onCheck: () => void; onStop: () => void; onFollow: () => void }) {
   const Icon = s.kind === "folder" ? Folder : Rss;
-  const checking = s.check_status === "checking";
+  const checking = isChecking(s);
   const legacy = !isFollowed(s);
-  const failed = !!s.check_status && !["complete", "interrupted", "checking"].includes(s.check_status);
+  const failed = !!s.check_status && !["complete", "interrupted", "checking", "queued", "cancelled"].includes(s.check_status);
   return (
     <div className="activity-row activity-following">
       <Icon size={15} aria-hidden className="activity-following-icon" />
@@ -289,14 +289,18 @@ function FollowingRow({ source: s, busy, onOpen, onCheck, onFollow }: { source: 
         {s.name}
       </button>
       <small className={failed ? "activity-following-failed" : undefined}>
-        {legacy && s.kind === "youtube" ? "Older subscription" : checking ? "Checking now…" : failed ? s.check_message || "Last check failed" : checkedAgo(s.last_check)}
+        {legacy && s.kind === "youtube" ? "Older subscription" : s.check_status === "queued" ? "Waiting to check" : checking ? "Checking now…" : failed ? s.check_message || "Last check failed" : checkedAgo(s.last_check)}
       </small>
       {legacy && s.kind === "youtube" ? (
         <Button size="sm" disabled={busy} onClick={onFollow}>
           Follow for new videos
         </Button>
       ) : (
-        <IconButton size="sm" icon={RefreshCw} label={`Check ${s.name} now`} disabled={busy || checking} onClick={onCheck} />
+        checking ? (
+          <IconButton size="sm" icon={Square} label={`Stop checking ${s.name}`} disabled={busy} onClick={onStop} />
+        ) : (
+          <IconButton size="sm" icon={RefreshCw} label={`Check ${s.name} now`} disabled={busy} onClick={onCheck} />
+        )
       )}
     </div>
   );

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronLeft, Folder, RefreshCw, Rss } from "lucide-react";
+import { ChevronDown, ChevronLeft, Folder, RefreshCw, Rss, Square } from "lucide-react";
 import { api } from "../lib/ipc.ts";
 import { count, initials } from "../lib/format.ts";
 import type { Source, SourceInput } from "../pipeline/types.ts";
@@ -9,7 +9,7 @@ import { Chip } from "../ui/Chip.tsx";
 import { ConfirmDialog, Dialog } from "../ui/Dialog.tsx";
 import { Menu, type MenuEntry } from "../ui/Menu.tsx";
 import { useToast } from "../ui/Toasts.tsx";
-import { followingMeta, followingNote, isFollowed, sourceKind } from "./following.ts";
+import { followingMeta, followingNote, isChecking, isFollowed, sourceKind } from "./following.ts";
 
 /** The top of a followed channel or watched folder: when it was checked, and its options. */
 export function FollowingHeader({ source }: { source: Source }) {
@@ -20,7 +20,7 @@ export function FollowingHeader({ source }: { source: Source }) {
   const [busy, setBusy] = useState(false);
   const followed = isFollowed(source);
   const folder = source.kind === "folder";
-  const checking = source.check_status === "checking";
+  const checking = isChecking(source);
   const save = async (patch: Partial<SourceInput>) => {
     const input: SourceInput = {
       id: source.id,
@@ -56,8 +56,18 @@ export function FollowingHeader({ source }: { source: Source }) {
   // The check starts in the background; look again shortly so "Checking…" shows and is then followed.
   const check = () => run(() => api.pipelineCheck(source.id)).then(() => void setTimeout(refresh, 1000));
   const follow = () => run(() => api.addFollow(source.url, source.name, source.category, source.diarize === 1, source.include_shorts === 1));
+  const stopCheck = () => run(() => api.pipelineStopCheck());
   const stop = () =>
     run(async () => {
+      // A source can't be removed mid-check: stop the check and let it wind down first.
+      if (checking) {
+        await api.pipelineStopCheck();
+        for (let i = 0; i < 40; i++) {
+          const now = (await api.sourcesList()).find((s) => s.id === source.id);
+          if (!now || !isChecking(now)) break;
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      }
       await api.pipelineRemoveSource(source.id);
       navigate({ page: "library" });
       toast.success(`${folder ? "Stopped watching" : "Stopped following"} ${source.name}`);
@@ -107,9 +117,15 @@ export function FollowingHeader({ source }: { source: Source }) {
         </div>
         <div className="collection-actions">
           {followed || folder ? (
-            <Button icon={RefreshCw} className={checking ? "is-checking" : undefined} disabled={busy || checking} onClick={() => void check()}>
-              {checking ? "Checking…" : "Check now"}
-            </Button>
+            checking ? (
+              <Button icon={Square} disabled={busy} onClick={() => void stopCheck()}>
+                {source.check_status === "queued" ? "Cancel check" : "Stop checking"}
+              </Button>
+            ) : (
+              <Button icon={RefreshCw} disabled={busy} onClick={() => void check()}>
+                Check now
+              </Button>
+            )
           ) : (
             <Button variant="primary" icon={Rss} disabled={busy} onClick={() => void follow()}>
               Follow for new videos

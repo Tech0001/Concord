@@ -39,6 +39,7 @@ import { AddDialog } from "./add/AddDialog.tsx";
 import { DropVeil, useDropAndPaste } from "./add/useDropAndPaste.tsx";
 import type { AddSeed } from "./add/types.ts";
 import type { Source } from "./pipeline/types.ts";
+import { isChecking } from "./library/following.ts";
 import type { QueueOverview } from "./shell/activity.ts";
 import type { SetupStatus } from "./setup/types.ts";
 
@@ -90,12 +91,22 @@ function Shell() {
       .catch(toast.error);
   }, [available, revision, toast]);
 
-  // A source check runs in the background; follow it until it finishes so its header and the sidebar update.
+  // A source check runs in the background. Follow just the source list while it runs, so the
+  // header and sidebar show it, then refresh everything once when it ends.
+  const sourceChecking = sources.some(isChecking);
+  const wasChecking = useRef(false);
   useEffect(() => {
-    if (!sources.some((s) => s.check_status === "checking")) return;
-    const timer = window.setTimeout(refresh, 2500);
-    return () => clearTimeout(timer);
-  }, [sources, refresh]);
+    if (wasChecking.current && !sourceChecking) refresh();
+    wasChecking.current = sourceChecking;
+    if (!sourceChecking) return;
+    const timer = window.setInterval(() => {
+      api
+        .sourcesList()
+        .then((next) => setSources((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next)))
+        .catch(() => {});
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [sourceChecking, refresh]);
 
   // Poll quickly while a job runs, slowly otherwise; refresh data when job states change.
   useEffect(() => {
