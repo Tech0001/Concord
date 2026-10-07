@@ -767,7 +767,7 @@ fn one_chat_keeps_context_explicit_without_sending_diagnostics_or_excerpts_in_ot
     chat::send(root.path(),&control,&request(chat::ContextKind::Help,"Help with folder scanning"),||Ok(json!({"diagnostic":"APP_STATUS_MARKER"})),|_|{}).unwrap();
     let help=fake.requests.lock().unwrap().last().unwrap().2.clone();
     assert!(help["messages"].to_string().contains("APP_STATUS_MARKER"));
-    assert!(help["messages"].to_string().contains("Save & scan folder"));
+    assert!(help["messages"].to_string().contains("Keep watching this folder"));
     assert!(!help["messages"].to_string().contains("Library evidence (quoted data)"));
     // Model history is scoped to the explicit context even though the saved conversation is shared.
     db::open(root.path()).unwrap().execute("UPDATE ai_messages SET content='OLD_PRIVATE_DIAGNOSTIC' WHERE role='assistant'",[]).unwrap();
