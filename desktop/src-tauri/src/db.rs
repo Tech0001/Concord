@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 15 {
+    if version >= 16 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -129,7 +129,14 @@ fn migrate(db: &mut Connection) -> Result<()> {
             if !present { tx.execute_batch(&format!("ALTER TABLE ai_messages ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"))?; }
         }
     }
-    tx.execute_batch("PRAGMA user_version=15")?;
+    if version < 16 {
+        // Following needs channels.since and source_seen on libraries that were already past version 9.
+        crate::pipeline::migrate_sources(&tx)?;
+        if version > 0 {
+            crate::pipeline::keep_old_work_paused(&tx)?;
+        }
+    }
+    tx.execute_batch("PRAGMA user_version=16")?;
     tx.commit()?;
     Ok(())
 }
@@ -666,7 +673,7 @@ mod tests {
         assert_eq!(
             db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error

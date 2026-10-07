@@ -695,3 +695,50 @@ fn files_can_skip_speaker_identification() {
     let rows = db::rows(&db::open(root).unwrap(), "SELECT p.diarize FROM pipeline_work p JOIN jobs j ON j.id=p.id JOIN media m ON m.id=j.media_id WHERE m.path LIKE '%solo.m4a'", []).unwrap();
     assert_eq!(rows[0]["diarize"], 0);
 }
+/// A library last opened by 0.28 (schema 15): no follow columns, no queue state saved.
+fn as_schema_15(root: &Path) {
+    db::open(root)
+        .unwrap()
+        .execute_batch("ALTER TABLE channels DROP COLUMN since;DROP TABLE source_seen;DELETE FROM settings WHERE key='pipeline.running';PRAGMA user_version=15;")
+        .unwrap();
+}
+#[test]
+fn an_existing_library_can_follow_channels_and_watch_folders_after_upgrading() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    as_schema_15(root);
+    let id = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudy", "Tuesday Study", "personal", true, false).unwrap();
+    assert!(sources::source(root, &id).unwrap()["since"].as_i64().unwrap() > 0);
+    let folder = root.join("Interviews");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("elena.wav"), b"fixture").unwrap();
+    let added = sources::add_folder(root, &c, &folder, true, "work", true).unwrap();
+    assert_eq!(added["added"], 1);
+}
+#[test]
+fn upgrading_keeps_old_waiting_work_paused_until_resumed() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    queue::insert(&db::open(root).unwrap(), "one", "one", "transcribe", "auto", true).unwrap();
+    as_schema_15(root);
+    assert!(!queue::claim(root, 1).unwrap().is_some(), "work queued before the upgrade waits for Resume");
+    action(root, &c, "start", None).unwrap();
+    assert!(queue::claim(root, 2).unwrap().is_some());
+}
+#[test]
+fn upgrading_a_library_with_automatic_checks_keeps_it_paused() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    let mut cfg = config(root).unwrap();
+    cfg.automatic_checks = true;
+    save_config(root, &cfg).unwrap();
+    as_schema_15(root);
+    assert!(!overview(root).unwrap()["running"].as_bool().unwrap());
+}
+#[test]
+fn upgrading_a_quiet_library_runs_by_default() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    as_schema_15(root);
+    assert!(overview(root).unwrap()["running"].as_bool().unwrap());
+}

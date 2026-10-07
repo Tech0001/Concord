@@ -789,7 +789,7 @@ fn schema_thirteen_chats_migrate_with_history_intact() {
     drop(db);
     let old=chat::read(root.path(),"old").unwrap();
     assert_eq!(old["messages"][0]["content"],"Keep this question");assert_eq!(old["messages"][0]["context_kind"],"archive");
-    let db=db::open(root.path()).unwrap();assert_eq!(db.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),15);
+    let db=db::open(root.path()).unwrap();assert_eq!(db.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),16);
 }
 
 #[test]

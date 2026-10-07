@@ -199,6 +199,18 @@ pub fn migrate_sources(db: &Connection) -> Result<()> {
         UPDATE channels SET kind='collection' WHERE url='' AND kind='youtube';")?;
     Ok(())
 }
+/// Work now runs unless paused. A library from before that, with work it queued without
+/// starting (or automatic checks on), keeps waiting until the person resumes it.
+pub fn keep_old_work_paused(db: &Connection) -> Result<()> {
+    db.execute(
+        "INSERT INTO settings(key,value) SELECT 'pipeline.running','false'
+         WHERE NOT EXISTS(SELECT 1 FROM settings WHERE key='pipeline.running')
+         AND (EXISTS(SELECT 1 FROM jobs j JOIN pipeline_work p ON p.id=j.id WHERE j.status IN ('queued','retry','waiting_live'))
+           OR COALESCE((SELECT json_extract(value,'$.automaticChecks') FROM settings WHERE key='pipeline.config'),0)=1)",
+        [],
+    )?;
+    Ok(())
+}
 pub(crate) fn running(db: &Connection) -> Result<bool> {
     Ok(db.query_row(
         // Work runs unless someone paused it.
