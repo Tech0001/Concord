@@ -26,6 +26,21 @@ pub struct Source {
 pub fn list(root: &Path) -> Result<Vec<Value>> {
     db::rows(&db::open(root)?,"SELECT c.*,(SELECT count(*) FROM media m WHERE m.source_id=c.id) AS recordings FROM channels c ORDER BY name COLLATE NOCASE",[])
 }
+/// One spelling per channel or playlist, however the link was written: host, tab, trailing
+/// slash and share parameters aside. Handles ignore case; channel and playlist ids keep it.
+pub fn source_key(url: &str) -> Option<String> {
+    let parsed = download::youtube_url(url).ok()?;
+    let path = parsed.path().trim_end_matches('/');
+    if path == "/playlist" {
+        let list = parsed.query_pairs().find(|(k, _)| k == "list")?.1.into_owned();
+        return Some(format!("playlist:{list}"));
+    }
+    let base = ["/videos", "/streams", "/shorts", "/featured", "/playlists"]
+        .iter()
+        .find_map(|tab| path.strip_suffix(tab))
+        .unwrap_or(path);
+    Some(if base.starts_with("/channel/") { format!("channel:{base}") } else { format!("channel:{}", base.to_lowercase()) })
+}
 /// Whether this source is the one a running check is working on. Others can change meanwhile.
 fn being_checked(root: &Path, control: &Control, id: Option<&str>) -> Result<bool> {
     let Some(id) = id else { return Ok(false) };
@@ -91,10 +106,8 @@ pub fn save(root: &Path, control: &Control, input: &Source) -> Result<String> {
             );
         }
         if input.kind == "youtube" && source["kind"] == "youtube" {
-            let old = download::scan_urls(source["url"].as_str().unwrap_or(""), false)
-                .unwrap_or_default();
             anyhow::ensure!(
-                old.first() != download::scan_urls(&address, false)?.first(),
+                source["url"].as_str().and_then(source_key) != source_key(&address),
                 "This YouTube source is already subscribed"
             );
         }
@@ -516,10 +529,10 @@ fn unique_name(root: &Path, base: &str) -> Result<String> {
 /// collection and updates its options.
 pub fn follow(root: &Path, control: &Control, url: &str, name: &str, category: &str, diarize: bool, shorts: bool) -> Result<String> {
     let address = download::youtube_url(url)?;
-    let key = |u: &str| u.trim_end_matches('/').trim_end_matches("/videos").to_lowercase();
+    let wanted = source_key(address.as_str());
     let existing = list(root)?
         .into_iter()
-        .find(|s| s["kind"] == "youtube" && key(s["url"].as_str().unwrap_or("")) == key(address.as_str()));
+        .find(|s| s["kind"] == "youtube" && s["url"].as_str().and_then(source_key) == wanted);
     let id = match existing {
         Some(s) => {
             let id = s["id"].as_str().context("Source missing")?.to_owned();

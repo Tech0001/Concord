@@ -143,13 +143,12 @@ fn lookup(root: &Path, cfg: &super::Config, raw: &str, kind: &Kind) -> Result<Va
         }
     })
 }
-/// Whether a followed source already points at this channel or playlist.
-fn followed(db: &rusqlite::Connection, url: &str) -> Result<bool> {
-    let key = |u: &str| u.trim_end_matches('/').trim_end_matches("/videos").to_lowercase();
-    let wanted = key(url);
-    Ok(db::rows(db, "SELECT url FROM channels WHERE kind='youtube' AND enabled=1", [])?
+/// Whether this channel or playlist is followed for new videos (older subscriptions aren't).
+pub(super) fn followed(db: &rusqlite::Connection, url: &str) -> Result<bool> {
+    let Some(wanted) = super::sources::source_key(url) else { return Ok(false) };
+    Ok(db::rows(db, "SELECT url FROM channels WHERE kind='youtube' AND enabled=1 AND since>0", [])?
         .iter()
-        .any(|r| key(r["url"].as_str().unwrap_or("")) == wanted))
+        .any(|r| r["url"].as_str().and_then(super::sources::source_key).as_ref() == Some(&wanted)))
 }
 
 /// Add previewed videos and queue each to download, then transcribe. Videos already in the

@@ -912,3 +912,28 @@ fn adding_files_while_paused_does_not_resume() {
     assert_eq!(import_and_queue(root, &c, &[file.to_string_lossy().into_owned()], "personal", "auto", true).unwrap(), 1);
     assert!(!overview(root).unwrap()["running"].as_bool().unwrap());
 }
+#[test]
+fn a_channel_or_playlist_is_recognised_however_its_link_is_written() {
+    let key = |u: &str| sources::source_key(u).unwrap();
+    let channel = key("https://www.youtube.com/@TuesdayStudy");
+    for same in ["https://youtube.com/@TuesdayStudy?si=share123", "https://m.youtube.com/@tuesdaystudy/videos", "https://www.youtube.com/@TuesdayStudy/streams/"] {
+        assert_eq!(key(same), channel, "{same}");
+    }
+    assert_eq!(key("https://www.youtube.com/playlist?list=PL1&si=x"), key("https://youtube.com/playlist?list=PL1"));
+    assert_ne!(key("https://www.youtube.com/playlist?list=PL1"), key("https://www.youtube.com/playlist?list=pl1"));
+    assert_ne!(key("https://www.youtube.com/@Other"), channel);
+    assert!(sources::source_key("https://example.com/@TuesdayStudy").is_none());
+}
+#[test]
+fn following_by_a_share_link_finds_the_channel_already_followed() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let first = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudy", "Tuesday Study", "personal", true, false).unwrap();
+    let again = sources::follow(root, &c, "https://m.youtube.com/@tuesdaystudy?si=share123", "Tuesday Study", "personal", true, false).unwrap();
+    assert_eq!(first, again);
+    let db = db::open(root).unwrap();
+    assert!(links::followed(&db, "https://youtube.com/@TuesdayStudy?si=x").unwrap());
+    // An older subscription isn't followed for new videos until someone follows it.
+    db.execute("UPDATE channels SET since=0 WHERE id=?1", [&first]).unwrap();
+    assert!(!links::followed(&db, "https://www.youtube.com/@TuesdayStudy").unwrap());
+}
