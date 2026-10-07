@@ -10,9 +10,15 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
-## One way in: Add, Following and Activity (branch `feature/adding`, not merged)
+## One way in: Add, Following and Activity (0.29.0, branch `feature/adding`, installed, not merged)
 
 Built by Claude from the approved canvas (claude.ai artifact "Concord adding redesign").
+Installed for the user to try on October 7, 2026: the 0.29.0 AppImage was byte-verified at
+`~/.local/opt/concord-next/Concord-Next.AppImage` (packaged with
+`PATH="$HOME/.cache/concord-build-tools:$PATH" pnpm --dir desktop package`). Pre-install backup:
+`~/.local/share/concord-next/backups/before-0.29.0-20261007-115554.db` (schema 15, `quick_check`
+OK). The first launch upgrades the library to schema 16; 0.28.2 still opens it but can't restore
+backups made after.
 It replaces the Pipeline → Sources → Save & scan → Start queue flow, the separate
 YouTube settings step and the Pipeline/Tools sidebar items. Not merged, versioned or
 installed; the user decides.
