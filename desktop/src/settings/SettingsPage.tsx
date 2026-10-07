@@ -73,10 +73,14 @@ export function SettingsPage({ section }: { section?: SettingsSection }) {
     if (!section) return;
     const el = document.getElementById(`settings-${section}`);
     if (!el) return;
-    el.scrollIntoView({ block: "start" });
+    // After the shell's scroll-to-top for a newly opened page, which runs after this effect.
+    const frame = requestAnimationFrame(() => el.scrollIntoView({ block: "start" }));
     el.classList.add("is-linked");
     const timer = setTimeout(() => el.classList.remove("is-linked"), 1600);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
   }, [section]);
   const fact = (ok: boolean | undefined, label: string) => (
     <span className="settings-fact">

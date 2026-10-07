@@ -26,13 +26,8 @@ export const RecordingCard = memo(function RecordingCard({
   const pct = jobProgress(media)?.pct;
   return (
     <article className={selected ? "rec-card is-selected" : "rec-card"}>
-      <Cover media={media} />
+      <Cover media={media} working={pct} />
       {onSelect && <SelectBox media={media} selected={selected} onSelect={onSelect} />}
-      {pct != null && (
-        <span className="rec-card-progress" role="progressbar" aria-label="Progress" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-          <span style={{ width: `${pct}%` }} />
-        </span>
-      )}
       <StarButton media={media} onToggle={onStar} className="rec-card-star" />
       <div className="rec-card-body">
         <div className="rec-card-title-row">

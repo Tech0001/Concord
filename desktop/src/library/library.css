@@ -486,13 +486,16 @@
 .recording-file-path { padding: 10px; border: 1px solid var(--border); border-radius: var(--r-2); overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--text-sm); }
 .recording-file-form small { color: var(--muted-foreground); }
 
-/* Download or transcription progress, between a card's cover and its text. */
-.rec-card-progress {
-  display: block;
-  height: 3px;
-  background: var(--muted);
+/* Download or transcription progress across the bottom of a cover, on a track so it reads as work, not a resume point. */
+.cover-working {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: color-mix(in oklab, var(--scrim) 70%, transparent);
 }
-.rec-card-progress > span {
+.cover-working > span {
   display: block;
   height: 100%;
   background: var(--primary);

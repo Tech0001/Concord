@@ -5,8 +5,11 @@ import { humanDuration } from "../lib/format.ts";
 import { cx } from "../lib/cx.ts";
 import type { Media } from "../lib/types.ts";
 
-/** Lazily loaded thumbnail with duration and resume progress. Audio recordings get a quiet cover. */
-export function Cover({ media, compact = false }: { media: Media; compact?: boolean }) {
+/**
+ * Lazily loaded thumbnail with duration and resume progress. Audio recordings get a quiet cover.
+ * While a download or transcription reports a percentage, that shows in place of the resume point.
+ */
+export function Cover({ media, compact = false, working = null }: { media: Media; compact?: boolean; working?: number | null }) {
   const element = useRef<HTMLDivElement>(null);
   const [source, setSource] = useState<string | null>(null);
   useEffect(() => {
@@ -43,7 +46,13 @@ export function Cover({ media, compact = false }: { media: Media; compact?: bool
         </span>
       )}
       {!compact && media.duration > 0 && <span className="cover-duration num">{humanDuration(media.duration)}</span>}
-      {progress > 0 && <span className="cover-progress" style={{ width: `${progress * 100}%` }} aria-hidden />}
+      {working != null ? (
+        <span className="cover-working" role="progressbar" aria-label="Progress" aria-valuenow={working} aria-valuemin={0} aria-valuemax={100}>
+          <span style={{ width: `${working}%` }} />
+        </span>
+      ) : (
+        progress > 0 && <span className="cover-progress" style={{ width: `${progress * 100}%` }} aria-hidden />
+      )}
     </div>
   );
 }

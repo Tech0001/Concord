@@ -228,7 +228,15 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
     );
   };
 
-  const note = !app.setup || app.setup.speech.installed
+  const dropMore = (
+    <div className="add-drop add-drop-compact">
+      <Upload size={16} aria-hidden className="add-drop-icon" />
+      <span>{files.length || folders.length ? "Drop more here, or" : "Drop recordings here, or"}</span>
+      <Button size="sm" variant="ghost" onClick={() => void chooseFiles()}>Choose files</Button>
+      <Button size="sm" variant="ghost" onClick={() => void chooseFolder()}>Choose folder</Button>
+    </div>
+  );
+  const note = toolPanel ? "" : !app.setup || app.setup.speech.installed
     ? videos.length && !files.length && !fromFolders
       ? "Each video is downloaded, then transcribed. You'll see its progress in your Library."
       : channels.length && !files.length && !fromFolders && !videos.length
@@ -244,14 +252,17 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
       className="add-dialog"
       footer={
         <>
-          <Segmented size="sm" label="Add to" value={category} onChange={setCategory} options={[{ value: "personal", label: "Personal" }, { value: "work", label: "Work" }]} />
-          <Switch checked={diarize} onChange={setDiarize}>Identify speakers</Switch>
-          <span className="spacer" />
-          <Button variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
-          <Button variant="primary" icon={busy || waiting ? LoaderCircle : undefined} className={busy || waiting ? "is-spinning" : undefined} disabled={busy || waiting || label === "Add"} onClick={() => void submit()}>
-            {label}
-          </Button>
-          {!empty && <p className="add-note">{note}</p>}
+          <span className="add-options">
+            <Segmented size="sm" label="Add to" value={category} onChange={setCategory} options={[{ value: "personal", label: "Personal" }, { value: "work", label: "Work" }]} />
+            <Switch checked={diarize} onChange={setDiarize}>Identify speakers</Switch>
+          </span>
+          <span className="add-actions">
+            <Button variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
+            <Button variant="primary" icon={busy || waiting ? LoaderCircle : undefined} className={busy || waiting ? "is-spinning" : undefined} disabled={busy || waiting || label === "Add"} onClick={() => void submit()}>
+              {label}
+            </Button>
+          </span>
+          {!empty && note && <p className="add-note">{note}</p>}
         </>
       }
     >
@@ -290,12 +301,7 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
             {skipped.length > 0 && (
               <p className="add-warning"><CircleAlert size={15} aria-hidden />{skipped.length === 1 ? `${skipped[0]} isn't an audio or video file. It will be skipped.` : `${count(skipped.length, "item")} aren't audio or video files and will be skipped: ${skipped.slice(0, 3).join(", ")}${skipped.length > 3 ? "…" : ""}`}</p>
             )}
-            <div className="add-drop add-drop-compact">
-              <Upload size={16} aria-hidden className="add-drop-icon" />
-              <span>Drop more here, or</span>
-              <Button size="sm" variant="ghost" onClick={() => void chooseFiles()}>Choose files</Button>
-              <Button size="sm" variant="ghost" onClick={() => void chooseFolder()}>Choose folder</Button>
-            </div>
+            {(files.length > 0 || folders.length > 0) && dropMore}
           </>
         )}
 
@@ -328,6 +334,7 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
           )
         )}
         {splitLinks(text).length > MAX_LINKS && <p className="add-warning"><CircleAlert size={15} aria-hidden />Only the first {MAX_LINKS} links are added at once.</p>}
+        {!empty && !files.length && !folders.length && dropMore}
       </div>
     </Dialog>
   );

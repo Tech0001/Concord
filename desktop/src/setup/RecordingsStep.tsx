@@ -86,7 +86,7 @@ export function RecordingsStep({ status, next, skip, back, detour }: StepProps) 
                   <AudioLines size={18} aria-hidden />
                   <span className="setup-added-text">
                     <b>{count(recordings, "recording")}</b>
-                    <span className="setup-path">{speechReady ? "Transcribed one after another as they arrive" : "Waiting for the speech engine"}</span>
+                    <small className="muted">{speechReady ? "Transcribed one after another as they arrive" : "Waiting for the speech engine"}</small>
                   </span>
                 </div>
               )}
@@ -97,7 +97,7 @@ export function RecordingsStep({ status, next, skip, back, detour }: StepProps) 
                     <Icon size={18} aria-hidden />
                     <span className="setup-added-text">
                       <b>{s.name}</b>
-                      <span className="setup-path">{s.kind === "folder" ? tildify(s.url) : "New videos are added as they're posted"}</span>
+                      {s.kind === "folder" ? <span className="setup-path">{tildify(s.url)}</span> : <small className="muted">New videos are added as they're posted</small>}
                     </span>
                     <span className="setup-added-meta">{s.kind === "folder" ? "Watching" : "Following"}</span>
                     <Chip>{s.category === "work" ? "Work" : "Personal"}</Chip>

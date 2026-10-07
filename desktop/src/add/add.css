@@ -7,8 +7,15 @@
   justify-content: flex-start;
   gap: 10px 12px;
 }
-.add-dialog .spacer {
-  flex: 1;
+.add-options,
+.add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+.add-actions {
+  margin-left: auto;
 }
 .add-dialog .is-spinning svg {
   animation: spin 0.9s linear infinite;
@@ -339,10 +346,10 @@
 }
 
 @media (max-width: 639px) {
-  .add-dialog .dialog-foot .spacer {
-    display: none;
+  .add-actions {
+    width: 100%;
   }
-  .add-dialog .dialog-foot .btn {
+  .add-actions .btn {
     flex: 1;
   }
 }

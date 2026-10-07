@@ -76,7 +76,6 @@ export function FollowingHeader({ source }: { source: Source }) {
     {
       label: folder ? "Stop watching" : followed ? "Stop following" : "Remove",
       danger: true,
-      hint: "Recordings already added stay in your library.",
       onSelect: () => setStopping(true),
     },
   ];

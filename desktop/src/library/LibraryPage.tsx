@@ -229,7 +229,7 @@ export function LibraryPage() {
       {!blank && <Toolbar
         filter={filter}
         update={update}
-        channels={(data?.channels ?? []).map((c) => c.channel)}
+        channels={collection ? [] : (data?.channels ?? []).map((c) => c.channel)}
         view={view}
         setView={setView}
         showView={!phone}

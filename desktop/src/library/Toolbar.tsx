@@ -54,12 +54,14 @@ export function Toolbar({
           onKeyDown={(e) => e.key === "Escape" && update({ query: "" })}
         />
       </label>
-      <Select
-        label="Collection"
-        value={filter.channel}
-        onChange={(channel) => update({ channel })}
-        options={[{ value: "", label: "All collections" }, ...channels.map((c) => ({ value: c, label: c }))]}
-      />
+      {channels.length > 0 && (
+        <Select
+          label="Collection"
+          value={filter.channel}
+          onChange={(channel) => update({ channel })}
+          options={[{ value: "", label: "All collections" }, ...channels.map((c) => ({ value: c, label: c }))]}
+        />
+      )}
       <Panel
         title="Filters"
         open={open}
