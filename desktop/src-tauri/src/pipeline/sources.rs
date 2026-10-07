@@ -86,7 +86,8 @@ pub fn save(root: &Path, control: &Control, input: &Source) -> Result<String> {
             let new = Path::new(&address);
             anyhow::ensure!(
                 !old.starts_with(new) && !new.starts_with(old),
-                "This folder overlaps an existing recording source"
+                "This folder is inside, or contains, {}, which Concord already has as a folder",
+                source["name"].as_str().unwrap_or("another folder")
             );
         }
         if input.kind == "youtube" && source["kind"] == "youtube" {
@@ -163,7 +164,18 @@ pub(super) fn local(root: &Path, control: &Control, source: &Value) -> Result<us
 }
 /// Scan a folder source with its own cancel switch, so a stopped check elsewhere can't stop it.
 fn local_with(root: &Path, cancel: &crate::speech::Control, source: &Value) -> Result<usize> {
-    let folder = Path::new(source["url"].as_str().unwrap());
+    scan_into(
+        root,
+        cancel,
+        Path::new(source["url"].as_str().context("Source missing its folder")?),
+        source["id"].as_str(),
+        source["name"].as_str().unwrap_or("Recordings"),
+        source["category"].as_str().unwrap_or("personal"),
+        source["diarize"] != 0,
+    )
+}
+/// Import a folder's new recordings (subfolders included) and queue them to transcribe.
+fn scan_into(root: &Path, cancel: &crate::speech::Control, folder: &Path, source_id: Option<&str>, channel: &str, category: &str, diarize: bool) -> Result<usize> {
     let mut paths = vec![];
     files(folder, &mut paths, cancel)?;
     paths.sort();
@@ -183,15 +195,8 @@ fn local_with(root: &Path, cancel: &crate::speech::Control, source: &Value) -> R
         }
         let id = uuid::Uuid::new_v4().to_string();
         let title = path.file_stem().unwrap_or_default().to_string_lossy();
-        tx.execute("INSERT INTO media(id,title,path,channel,source_id,category,date) VALUES (?1,?2,?3,?4,?5,?6,date('now','localtime'))",params![id,title,path.to_string_lossy(),source["name"].as_str(),source["id"].as_str(),source["category"].as_str()])?;
-        queue::insert(
-            &tx,
-            &id,
-            &title,
-            "transcribe",
-            &device,
-            source["diarize"] != 0,
-        )?;
+        tx.execute("INSERT INTO media(id,title,path,channel,source_id,category,date) VALUES (?1,?2,?3,?4,?5,?6,date('now','localtime'))",params![id,title,path.to_string_lossy(),channel,source_id,category])?;
+        queue::insert(&tx, &id, &title, "transcribe", &device, diarize)?;
         added += 1;
     }
     tx.commit()?;
@@ -442,27 +447,61 @@ pub fn folder_preview(root: &Path, folder: &Path) -> Result<Value> {
     Ok(json!({"name": folder_name(folder), "path": folder, "files": paths.len(), "existing": existing, "bytes": bytes}))
 }
 /// Add a folder's recordings now. With `watch`, the folder is followed for new recordings.
+/// Add a folder's recordings now. Adding once imports them and leaves nothing behind; with
+/// `watch`, the folder becomes a followed source (reusing one already set up for it).
 pub fn add_folder(root: &Path, control: &Control, folder: &Path, watch: bool, category: &str, diarize: bool) -> Result<Value> {
-    let name = unique_name(root, &folder_name(folder))?;
-    let id = save(root, control, &Source {
-        id: None,
-        name: name.clone(),
-        kind: "folder".into(),
-        url: folder.to_string_lossy().into_owned(),
-        enabled: watch,
-        diarize,
-        include_shorts: false,
-        category: category.into(),
-    })?;
-    if watch {
-        start_following(root, &id)?;
-    }
-    let added = local_with(root, &crate::speech::Control::default(), &source(root, &id)?)?;
+    anyhow::ensure!(folder.is_dir(), "That folder is unavailable");
+    let path = folder.canonicalize()?;
+    let cancel = crate::speech::Control::default();
+    let existing = list(root)?
+        .into_iter()
+        .find(|s| s["kind"] == "folder" && s["url"].as_str().is_some_and(|u| Path::new(u) == path));
+    let id = match (existing, watch) {
+        (Some(s), _) => {
+            let id = s["id"].as_str().context("Source missing")?.to_owned();
+            if watch {
+                save(root, control, &Source {
+                    id: Some(id.clone()),
+                    name: s["name"].as_str().unwrap_or("Recordings").to_owned(),
+                    kind: "folder".into(),
+                    url: s["url"].as_str().unwrap_or("").to_owned(),
+                    enabled: true,
+                    diarize,
+                    include_shorts: false,
+                    category: category.into(),
+                })?;
+                if s["since"].as_i64().unwrap_or(0) == 0 {
+                    start_following(root, &id)?;
+                }
+            }
+            id
+        }
+        (None, true) => {
+            let id = save(root, control, &Source {
+                id: None,
+                name: unique_name(root, &folder_name(&path))?,
+                kind: "folder".into(),
+                url: path.to_string_lossy().into_owned(),
+                enabled: true,
+                diarize,
+                include_shorts: false,
+                category: category.into(),
+            })?;
+            start_following(root, &id)?;
+            id
+        }
+        (None, false) => {
+            let added = scan_into(root, &cancel, &path, None, &folder_name(&path), category, diarize)?;
+            return Ok(json!({"id": null, "name": folder_name(&path), "added": added}));
+        }
+    };
+    let source = source(root, &id)?;
+    let added = local_with(root, &cancel, &source)?;
     db::open(root)?.execute(
         "UPDATE channels SET check_status='complete',check_message=?1,last_check=?2 WHERE id=?3",
         params![format!("{added} new recordings queued"), now(), id],
     )?;
-    Ok(json!({"id": id, "name": name, "added": added}))
+    Ok(json!({"id": id, "name": source["name"], "added": added}))
 }
 /// A source name not already used, adding " (2)" and so on when needed.
 fn unique_name(root: &Path, base: &str) -> Result<String> {

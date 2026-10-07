@@ -217,7 +217,7 @@ export const api = {
   addInspectPaths: (paths: string[]) => call<Inspected>("add_inspect_paths", { paths }),
   addFolderPreview: (path: string) => call<FolderPreview>("add_folder_preview", { path }),
   addFolder: (path: string, watch: boolean, category: string, diarize: boolean) =>
-    call<{ id: string; name: string; added: number }>("add_folder", { path, watch, category, diarize }),
+    call<{ id: string | null; name: string; added: number }>("add_folder", { path, watch, category, diarize }),
   addPreviewLinks: (urls: string[]) => call<LinkPreview[]>("add_preview_links", { urls }),
   addVideos: (videos: LinkVideo[], category: string, diarize: boolean, device: string) =>
     call<{ added: number; existing: number; ids: string[] }>("add_videos", { videos, category, diarize, device }),

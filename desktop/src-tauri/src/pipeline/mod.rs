@@ -129,7 +129,8 @@ pub fn import_and_queue(root: &Path, control: &Control, paths: &[String], catego
     validate_device(device)?;
     let ids = crate::db::import_media_ids(root, paths, category)?;
     if !ids.is_empty() {
-        let queued = enqueue(root, control, &Batch { ids: ids.clone(), device: device.into(), ..Default::default() }, true)?;
+        // Queued work runs by itself; a pause stays a pause.
+        let queued = enqueue(root, control, &Batch { ids: ids.clone(), device: device.into(), ..Default::default() }, false)?;
         if !diarize {
             let db = crate::db::open(root)?;
             for job in queued["ids"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str) {

@@ -699,13 +699,14 @@ fn a_folder_is_added_once_with_or_without_watching() {
     std::fs::write(folder.join("notes.txt"), b"text").unwrap();
     let preview = sources::folder_preview(root, &folder).unwrap();
     assert_eq!((preview["name"].as_str(), preview["files"].as_u64(), preview["existing"].as_u64()), (Some("Interviews"), Some(2), Some(0)));
+    // Adding once imports what is there; it leaves no hidden source behind.
     let added = sources::add_folder(root, &c, &folder, false, "work", true).unwrap();
     assert_eq!(added["added"], 2);
-    let source = sources::source(root, added["id"].as_str().unwrap()).unwrap();
-    assert_eq!((source["enabled"].as_i64(), source["since"].as_i64()), (Some(0), Some(0)));
-    let channels: Vec<String> = db::rows(&db::open(root).unwrap(), "SELECT DISTINCT channel FROM media WHERE source_id=?1", [added["id"].as_str()]).unwrap()
-        .iter().map(|r| r["channel"].as_str().unwrap().to_owned()).collect();
-    assert_eq!(channels, ["Interviews"]);
+    assert!(added["id"].is_null());
+    assert!(sources::list(root).unwrap().iter().all(|s| s["kind"] != "folder"));
+    let rows = db::rows(&db::open(root).unwrap(), "SELECT DISTINCT channel,category,source_id FROM media WHERE path LIKE ?1", [format!("{}%", folder.to_string_lossy())]).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0]["channel"].as_str(), rows[0]["category"].as_str(), rows[0]["source_id"].is_null()), (Some("Interviews"), Some("work"), true));
     let other = root.join("Sermons");
     std::fs::create_dir_all(&other).unwrap();
     std::fs::write(other.join("c.wav"), b"audio").unwrap();
@@ -878,4 +879,36 @@ fn removing_a_followed_source_forgets_what_it_had_seen() {
     sources::remove(root, &c, source["id"].as_str().unwrap()).unwrap();
     let left: i64 = db::open(root).unwrap().query_row("SELECT count(*) FROM source_seen WHERE source_id=?1", [source["id"].as_str()], |r| r.get(0)).unwrap();
     assert_eq!(left, 0);
+}
+#[test]
+fn a_folder_added_once_can_be_added_again_and_watched_later() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let folder = root.join("Interviews");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("a.m4a"), b"audio").unwrap();
+    assert_eq!(sources::add_folder(root, &c, &folder, false, "work", true).unwrap()["added"], 1);
+    std::fs::write(folder.join("b.m4a"), b"audio").unwrap();
+    assert_eq!(sources::add_folder(root, &c, &folder, false, "work", true).unwrap()["added"], 1);
+    std::fs::write(folder.join("c.m4a"), b"audio").unwrap();
+    let watched = sources::add_folder(root, &c, &folder, true, "work", true).unwrap();
+    assert_eq!(watched["added"], 1);
+    let source = sources::source(root, watched["id"].as_str().unwrap()).unwrap();
+    assert_eq!(source["enabled"], 1);
+    assert!(source["since"].as_i64().unwrap() > 0);
+    // Watching it again is the same collection, not "Interviews (2)".
+    let again = sources::add_folder(root, &c, &folder, true, "work", true).unwrap();
+    assert_eq!(again["id"], watched["id"]);
+    assert_eq!(again["name"], "Interviews");
+    assert_eq!(sources::list(root).unwrap().iter().filter(|s| s["kind"] == "folder").count(), 1);
+}
+#[test]
+fn adding_files_while_paused_does_not_resume() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    action(root, &c, "pause", None).unwrap();
+    let file = root.join("new.m4a");
+    std::fs::write(&file, b"fixture").unwrap();
+    assert_eq!(import_and_queue(root, &c, &[file.to_string_lossy().into_owned()], "personal", "auto", true).unwrap(), 1);
+    assert!(!overview(root).unwrap()["running"].as_bool().unwrap());
 }

@@ -180,7 +180,7 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
         done.recordings += result.added;
         if (folder.watch) {
           done.watching.push(result.name);
-          collection = result.id;
+          collection = result.id ?? undefined;
         }
         setFolders((old) => old.filter((f) => f.path !== folder.path));
       }
