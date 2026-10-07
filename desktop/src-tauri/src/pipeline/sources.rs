@@ -196,6 +196,11 @@ pub(super) fn ingest(
 ) -> Result<usize> {
     let mut db = db::open(root)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let added = ingest_tx(&tx, source, entries, device)?;
+    tx.commit()?;
+    Ok(added)
+}
+fn ingest_tx(tx: &rusqlite::Transaction, source: &Value, entries: &[Value], device: &str) -> Result<usize> {
     let mut added = 0;
     for e in entries {
         if source["include_shorts"] != 1
@@ -220,10 +225,9 @@ pub(super) fn ingest(
         }
         let title = e["title"].as_str().unwrap_or(remote);
         tx.execute("INSERT INTO media(id,title,url,channel,source_id,category,date,duration,status) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'pending')",params![id,title,url,source["name"].as_str(),source["id"].as_str(),source["category"].as_str(),e["upload_date"].as_str().unwrap_or(""),e["duration"].as_f64().unwrap_or(0.)])?;
-        queue::insert(&tx, &id, title, "download", device, source["diarize"] != 0)?;
+        queue::insert(tx, &id, title, "download", device, source["diarize"] != 0)?;
         added += 1;
     }
-    tx.commit()?;
     Ok(added)
 }
 fn missing_tab(error: &str) -> bool {
@@ -246,15 +250,47 @@ pub(super) fn listing(text: &str) -> Result<Vec<Value>> {
         },
     )
 }
+/// One listing of a channel tab or playlist. `listed` is false when YouTube didn't list it fully.
+pub struct Tab {
+    pub url: String,
+    pub entries: Vec<Value>,
+    pub listed: bool,
+}
+/// How much of a tab to list. A channel tab that already has its baseline only needs its newest
+/// entries; a first listing, and any playlist (often oldest first), is listed in full so nothing
+/// older can later look new.
+pub fn listing_limit(url: &str, baselined: bool) -> Option<u32> {
+    let tab = url::Url::parse(url).is_ok_and(|u| ["/videos", "/streams", "/shorts"].iter().any(|t| u.path().ends_with(t)));
+    (tab && baselined).then_some(20)
+}
+fn tab_marker(url: &str) -> String {
+    format!("tab:{url}")
+}
 fn youtube(root: &Path, control: &Control, source: &Value, full: bool) -> Result<usize> {
     let cfg = config(root)?;
-    let mut entries = vec![];
-    let mut seen = HashSet::new();
+    let id = source["id"].as_str().context("Source missing")?;
+    let followed = source["since"].as_i64().unwrap_or(0) > 0;
+    let baselined: HashSet<String> = if followed {
+        db::rows(&db::open(root)?, "SELECT video_id FROM source_seen WHERE source_id=?1 AND video_id LIKE 'tab:%'", [id])?
+            .iter()
+            .filter_map(|r| r["video_id"].as_str().map(str::to_owned))
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    let mut tabs = vec![];
     let mut failures = vec![];
     for url in download::scan_urls(
         source["url"].as_str().unwrap_or(""),
         source["include_shorts"] == 1,
     )? {
+        let limit = if followed {
+            listing_limit(&url, baselined.contains(&tab_marker(&url)))
+        } else if full {
+            None
+        } else {
+            Some(20)
+        };
         let mut cmd = download::command(root, &cfg)?;
         cmd.args([
             "--flat-playlist",
@@ -262,33 +298,32 @@ fn youtube(root: &Path, control: &Control, source: &Value, full: bool) -> Result
             "--skip-download",
             "--ignore-errors",
         ]);
-        if !full {
-            cmd.args(["--playlist-end", "20"]);
+        if let Some(n) = limit {
+            cmd.arg("--playlist-end").arg(n.to_string());
         }
         cmd.arg("--").arg(&url);
+        let mut tab = Tab { url: url.clone(), entries: vec![], listed: false };
         match subprocess::capture(
             root,
             &control.scanner,
             cmd,
             None,
-            Duration::from_secs(if full { 1800 } else { 180 }),
+            Duration::from_secs(if limit.is_none() { 1800 } else { 180 }),
         ) {
             Ok(output) => {
+                if !output.success && missing_tab(&output.error) {
+                    // An absent tab is a real, empty listing: its first entry later is new.
+                    tab.listed = true;
+                    tabs.push(tab);
+                    continue;
+                }
                 if !output.success {
-                    if missing_tab(&output.error) {
-                        continue;
-                    }
                     failures.push(output.error.clone());
                 }
                 match listing(&output.text) {
                     Ok(list) => {
-                        for entry in list {
-                            if let Some(id) = download::video_id(&entry) {
-                                if seen.insert(id.to_owned()) {
-                                    entries.push(entry);
-                                }
-                            }
-                        }
+                        tab.entries = list.into_iter().filter(|e| download::video_id(e).is_some()).collect();
+                        tab.listed = output.success;
                     }
                     Err(e) if output.success => failures.push(format!("{e:#}")),
                     Err(_) => {}
@@ -301,13 +336,21 @@ fn youtube(root: &Path, control: &Control, source: &Value, full: bool) -> Result
                 failures.push(format!("{e:#}"));
             }
         }
+        tabs.push(tab);
     }
-    // Flat playlist dates can be absent. Reversing YouTube's newest-first listing
-    // processes older entries first without inventing dates; download fills real metadata.
-    entries.reverse();
-    let added = if source["since"].as_i64().unwrap_or(0) > 0 {
-        follow_ingest(root, source, &entries, &cfg.device)?
+    let added = if followed {
+        follow_ingest(root, source, &tabs, &cfg.device)?
     } else {
+        let mut seen = HashSet::new();
+        let mut entries: Vec<Value> = tabs
+            .iter()
+            .flat_map(|t| t.entries.iter())
+            .filter(|e| download::video_id(e).is_some_and(|id| seen.insert(id.to_owned())))
+            .cloned()
+            .collect();
+        // Flat playlist dates can be absent. Reversing YouTube's newest-first listing
+        // processes older entries first without inventing dates; download fills real metadata.
+        entries.reverse();
         ingest(root, source, &entries, &cfg.device)?
     };
     if !failures.is_empty() {
@@ -323,32 +366,50 @@ pub fn start_following(root: &Path, id: &str) -> Result<()> {
     db::open(root)?.execute("UPDATE channels SET since=?1 WHERE id=?2", params![now(), id])?;
     Ok(())
 }
-/// For a followed channel, the first check records what already exists without adding it;
-/// later checks add only videos not seen before.
-pub fn follow_ingest(root: &Path, source: &Value, entries: &[Value], device: &str) -> Result<usize> {
+/// For a followed channel, each tab's first full listing records what already exists without
+/// adding it; later listings add only videos not seen before. A tab that couldn't be listed
+/// records nothing, so a failed check never becomes the baseline. All of it commits together.
+pub fn follow_ingest(root: &Path, source: &Value, tabs: &[Tab], device: &str) -> Result<usize> {
     let id = source["id"].as_str().context("Source missing")?;
-    let db = db::open(root)?;
-    let baseline: bool = !db.query_row("SELECT EXISTS(SELECT 1 FROM source_seen WHERE source_id=?1)", [id], |r| r.get(0))?;
+    let mut db = db::open(root)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let seen = |tx: &rusqlite::Transaction, video: &str| -> Result<bool> {
+        Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM source_seen WHERE source_id=?1 AND video_id=?2)", params![id, video], |r| r.get(0))?)
+    };
+    let mark = |tx: &rusqlite::Transaction, video: &str| -> Result<()> {
+        tx.execute("INSERT OR IGNORE INTO source_seen(source_id,video_id) VALUES (?1,?2)", params![id, video])?;
+        Ok(())
+    };
+    let mut first = HashSet::new();
+    for tab in tabs.iter().filter(|t| t.listed) {
+        if !seen(&tx, &tab_marker(&tab.url))? {
+            first.insert(tab.url.as_str());
+        }
+    }
+    // Baselines first, so a video a new tab shares with an older one is never called new.
+    for tab in tabs.iter().filter(|t| first.contains(t.url.as_str())) {
+        for video in tab.entries.iter().filter_map(download::video_id) {
+            mark(&tx, video)?;
+        }
+        mark(&tx, &tab_marker(&tab.url))?;
+    }
     let mut fresh = vec![];
-    for e in entries {
-        let Some(video) = download::video_id(e) else { continue };
-        let seen: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source_seen WHERE source_id=?1 AND video_id=?2)", params![id, video], |r| r.get(0))?;
-        if !seen && !baseline {
-            fresh.push(e.clone());
+    for tab in tabs.iter().filter(|t| !first.contains(t.url.as_str())) {
+        if !seen(&tx, &tab_marker(&tab.url))? {
+            continue;
+        }
+        for entry in &tab.entries {
+            let Some(video) = download::video_id(entry) else { continue };
+            if !seen(&tx, video)? {
+                mark(&tx, video)?;
+                fresh.push(entry.clone());
+            }
         }
     }
-    drop(db);
-    let added = if fresh.is_empty() { 0 } else { ingest(root, source, &fresh, device)? };
-    let db = db::open(root)?;
-    for e in entries {
-        if let Some(video) = download::video_id(e) {
-            db.execute("INSERT OR IGNORE INTO source_seen(source_id,video_id) VALUES (?1,?2)", params![id, video])?;
-        }
-    }
-    // An empty first listing still marks the follow as started.
-    if baseline && entries.is_empty() {
-        db.execute("INSERT OR IGNORE INTO source_seen(source_id,video_id) VALUES (?1,'')", [id])?;
-    }
+    // Newest first from YouTube; add the oldest of the new ones first.
+    fresh.reverse();
+    let added = ingest_tx(&tx, source, &fresh, device)?;
+    tx.commit()?;
     Ok(added)
 }
 fn folder_name(path: &Path) -> String {

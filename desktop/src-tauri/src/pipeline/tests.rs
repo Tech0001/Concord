@@ -561,25 +561,109 @@ fn channel(root: &Path, c: &Control) -> Value {
     sources::start_following(root, &id).unwrap();
     sources::source(root, &id).unwrap()
 }
+const VIDEOS: &str = "https://www.youtube.com/@TuesdayStudy/videos";
+const STREAMS: &str = "https://www.youtube.com/@TuesdayStudy/streams";
+const SHORTS: &str = "https://www.youtube.com/@TuesdayStudy/shorts";
+fn tab(url: &str, ids: &[&str], listed: bool) -> sources::Tab {
+    sources::Tab { url: url.into(), entries: ids.iter().map(|id| serde_json::json!({"id": id, "title": format!("Video {id}")})).collect(), listed }
+}
+fn followed_titles(root: &Path, source: &Value) -> Vec<String> {
+    db::rows(&db::open(root).unwrap(), "SELECT title FROM media WHERE source_id=?1 ORDER BY title", [source["id"].as_str()]).unwrap()
+        .iter().map(|r| r["title"].as_str().unwrap().to_owned()).collect()
+}
 #[test]
 fn following_a_channel_adds_only_videos_posted_after_following() {
     let (dir, c) = fixture();
     let root = dir.path();
     let source = channel(root, &c);
     assert!(source["since"].as_i64().unwrap() > 0);
-    let older = vec![
-        serde_json::json!({"id": "aaaaaaaaaaa", "title": "Week 4"}),
-        serde_json::json!({"id": "bbbbbbbbbbb", "title": "Week 5"}),
-    ];
     // The first check after following only records what already exists.
-    assert_eq!(sources::follow_ingest(root, &source, &older, "auto").unwrap(), 0);
-    let mut newer = vec![serde_json::json!({"id": "ccccccccccc", "title": "Week 6"})];
-    newer.extend(older);
+    assert_eq!(sources::follow_ingest(root, &source, &[tab(VIDEOS, &["aaaaaaaaaaa", "bbbbbbbbbbb"], true)], "auto").unwrap(), 0);
+    let newer = [tab(VIDEOS, &["ccccccccccc", "aaaaaaaaaaa", "bbbbbbbbbbb"], true)];
     assert_eq!(sources::follow_ingest(root, &source, &newer, "auto").unwrap(), 1);
     assert_eq!(sources::follow_ingest(root, &source, &newer, "auto").unwrap(), 0);
-    let titles: Vec<String> = db::rows(&db::open(root).unwrap(), "SELECT title FROM media WHERE source_id=?1", [source["id"].as_str()]).unwrap()
-        .iter().map(|r| r["title"].as_str().unwrap().to_owned()).collect();
-    assert_eq!(titles, ["Week 6"]);
+    assert_eq!(followed_titles(root, &source), ["Video ccccccccccc"]);
+}
+#[test]
+fn a_check_that_could_not_list_a_channel_does_not_count_as_its_baseline() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let source = channel(root, &c);
+    // YouTube refused (offline, sign-in wall): nothing is recorded as seen.
+    assert_eq!(sources::follow_ingest(root, &source, &[tab(VIDEOS, &[], false), tab(STREAMS, &[], false)], "auto").unwrap(), 0);
+    // The first listing that works is the baseline, so older videos are never added.
+    let old = [tab(VIDEOS, &["aaaaaaaaaaa", "bbbbbbbbbbb"], true), tab(STREAMS, &["sssssssssss"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &old, "auto").unwrap(), 0);
+    assert!(followed_titles(root, &source).is_empty());
+}
+#[test]
+fn a_tab_that_failed_once_starts_from_its_own_baseline() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let source = channel(root, &c);
+    assert_eq!(sources::follow_ingest(root, &source, &[tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(STREAMS, &[], false)], "auto").unwrap(), 0);
+    // Streams list for the first time: what they hold predates the follow.
+    let later = [tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(STREAMS, &["sssssssssss", "ttttttttttt"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &later, "auto").unwrap(), 0);
+    let live = [tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(STREAMS, &["uuuuuuuuuuu", "sssssssssss", "ttttttttttt"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &live, "auto").unwrap(), 1);
+    assert_eq!(followed_titles(root, &source), ["Video uuuuuuuuuuu"]);
+}
+#[test]
+fn turning_on_shorts_later_does_not_add_old_shorts() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let mut source = channel(root, &c);
+    sources::follow_ingest(root, &source, &[tab(VIDEOS, &["aaaaaaaaaaa"], true)], "auto").unwrap();
+    source["include_shorts"] = serde_json::json!(1);
+    let with_shorts = [tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(SHORTS, &["hhhhhhhhhhh", "iiiiiiiiiii"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &with_shorts, "auto").unwrap(), 0);
+    let new_short = [tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(SHORTS, &["jjjjjjjjjjj", "hhhhhhhhhhh", "iiiiiiiiiii"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &new_short, "auto").unwrap(), 1);
+}
+#[test]
+fn a_channel_without_a_streams_tab_adds_its_first_stream() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let source = channel(root, &c);
+    // "This channel does not have a streams tab" lists as empty, which is a real baseline.
+    sources::follow_ingest(root, &source, &[tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(STREAMS, &[], true)], "auto").unwrap();
+    let first_stream = [tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(STREAMS, &["sssssssssss"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &first_stream, "auto").unwrap(), 1);
+}
+#[test]
+fn a_tab_is_listed_in_full_until_it_has_a_baseline_and_playlists_always() {
+    assert_eq!(sources::listing_limit(VIDEOS, false), None);
+    assert_eq!(sources::listing_limit(VIDEOS, true), Some(20));
+    assert_eq!(sources::listing_limit(SHORTS, true), Some(20));
+    assert_eq!(sources::listing_limit("https://www.youtube.com/playlist?list=PL123", true), None);
+}
+#[test]
+fn videos_posted_before_following_are_recognised_at_download() {
+    let since = 1_790_000_000; // 2026-09-21
+    assert!(download::posted_before(&serde_json::json!({"timestamp": since - 10 * 86400}), since));
+    assert!(!download::posted_before(&serde_json::json!({"timestamp": since + 3600}), since));
+    // A day either side is allowed for time zones and premieres.
+    assert!(!download::posted_before(&serde_json::json!({"timestamp": since - 3600}), since));
+    assert!(download::posted_before(&serde_json::json!({"upload_date": "20260901"}), since));
+    assert!(!download::posted_before(&serde_json::json!({"upload_date": "20260920"}), since));
+    assert!(!download::posted_before(&serde_json::json!({}), since));
+    assert!(!download::posted_before(&serde_json::json!({"upload_date": "20200101"}), 0));
+}
+#[test]
+fn an_unwanted_download_leaves_no_trace_in_the_library() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    {
+        let db = db::open(root).unwrap();
+        db.execute("INSERT INTO media(id,title,url,status) VALUES ('old','Old video','https://www.youtube.com/watch?v=ooooooooooo','pending')", []).unwrap();
+        queue::insert(&db, "old", "Old video", "download", "auto", true).unwrap();
+    }
+    let job: String = db::open(root).unwrap().query_row("SELECT id FROM jobs WHERE media_id='old'", [], |r| r.get(0)).unwrap();
+    queue::discard(root, &job, "Skipped a video posted before following").unwrap();
+    let db = db::open(root).unwrap();
+    let left: i64 = db.query_row("SELECT (SELECT count(*) FROM media WHERE id='old')+(SELECT count(*) FROM jobs WHERE id=?1)+(SELECT count(*) FROM pipeline_work WHERE id=?1)", [&job], |r| r.get(0)).unwrap();
+    assert_eq!(left, 0);
 }
 #[test]
 fn video_links_are_added_once_and_queued_for_download() {

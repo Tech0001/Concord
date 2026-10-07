@@ -1,7 +1,7 @@
 use super::{subprocess, Config};
 use crate::{db, speech};
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -182,6 +182,33 @@ pub fn daily_count(db: &Connection) -> Result<u32> {
 pub enum Outcome {
     File(PathBuf),
     Waiting,
+    /// Not wanted after all; the reason is for the log.
+    Skipped(String),
+}
+/// Days since 1970-01-01 for a calendar date (Howard Hinnant's days_from_civil).
+fn days(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468
+}
+/// Whether a video was posted before a channel was followed (unix seconds), allowing a day
+/// either side for time zones and premieres. Unknown dates count as new.
+pub fn posted_before(metadata: &Value, since: i64) -> bool {
+    if since <= 0 {
+        return false;
+    }
+    let posted = metadata["timestamp"].as_i64().or_else(|| metadata["release_timestamp"].as_i64()).or_else(|| {
+        let date = metadata["upload_date"].as_str()?;
+        if date.len() != 8 || !date.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let part = |r: std::ops::Range<usize>| date[r].parse::<i64>().ok();
+        // A bare date could be any time that day; count it from the day's end.
+        Some((days(part(0..4)?, part(4..6)?, part(6..8)?) + 1) * 86_400)
+    });
+    posted.is_some_and(|t| t < since - 86_400)
 }
 pub fn fetch(root: &Path, control: &speech::Control, row: &Value, cfg: &Config) -> Result<Outcome> {
     if let Some(path) = row["path"]
@@ -235,6 +262,20 @@ fn fetch_using(
             .contains(&metadata["live_status"].as_str().unwrap_or(""))
     {
         return Ok(Outcome::Waiting);
+    }
+    // A followed channel only adds what was posted after following; anything older that slipped
+    // into a listing (a removed newer video, a tab that failed to list before) is dropped here.
+    if let Some(source) = row["source_id"].as_str() {
+        let since: i64 = db::open(root)?
+            .query_row("SELECT since FROM channels WHERE id=?1", [source], |r| r.get(0))
+            .optional()?
+            .unwrap_or(0);
+        if posted_before(&metadata, since) {
+            return Ok(Outcome::Skipped(format!(
+                "Skipped {} from a followed channel: it was posted before following",
+                metadata["title"].as_str().unwrap_or("a video")
+            )));
+        }
     }
     let remote = video_id(&metadata).context("YouTube did not return a valid recording ID")?;
     let base = if cfg.download_directory.is_empty() {

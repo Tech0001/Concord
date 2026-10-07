@@ -1,7 +1,7 @@
 use super::{config, now, running, set_running, validate_device, Control};
 use crate::db;
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::HashSet, path::Path, sync::atomic::Ordering};
@@ -125,6 +125,26 @@ pub fn snapshot(root: &Path) -> Result<Value> {
         "jobs":db::rows(&db,"SELECT j.*,p.kind,p.diarize,p.device,p.attempts,p.retry_at,p.finished_at,p.cancelled,m.channel,m.path FROM pipeline_work p JOIN jobs j ON j.id=p.id JOIN media m ON m.id=j.media_id ORDER BY CASE j.status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'retry' THEN 2 ELSE 3 END,j.rowid",[])?,
         "channels":db::rows(&db,"SELECT DISTINCT channel FROM media ORDER BY channel",[])?}),
     )
+}
+/// Drop a queued download that turned out not to be wanted, as if it had never been added:
+/// its job, and its recording when nothing was downloaded or transcribed for it.
+pub fn discard(root: &Path, id: &str, reason: &str) -> Result<()> {
+    let mut db = db::open(root)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let media: Option<String> = tx
+        .query_row("SELECT media_id FROM jobs WHERE id=?1", [id], |r| r.get(0))
+        .optional()?;
+    tx.execute("DELETE FROM pipeline_work WHERE id=?1", [id])?;
+    tx.execute("DELETE FROM jobs WHERE id=?1", [id])?;
+    if let Some(media) = media {
+        tx.execute(
+            "DELETE FROM media WHERE id=?1 AND path IS NULL AND transcript IS NULL AND NOT EXISTS(SELECT 1 FROM jobs WHERE media_id=?1)",
+            [media],
+        )?;
+    }
+    tx.commit()?;
+    crate::runtime_log::push("info", reason);
+    Ok(())
 }
 pub fn action(root: &Path, control: &Control, action: &str, id: Option<&str>) -> Result<()> {
     let active = control.gate.lock().unwrap();

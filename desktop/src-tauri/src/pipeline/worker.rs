@@ -79,6 +79,7 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                     Ordering::SeqCst,
                 );
                 drop(active);
+                let mut skipped = None;
                 let result = (|| -> anyhow::Result<bool> {
                     let cfg = super::config(&root)?;
                     let path = if row["kind"] == "download" {
@@ -87,6 +88,10 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                         match result? {
                             super::download::Outcome::File(path) => path,
                             super::download::Outcome::Waiting => return Ok(false),
+                            super::download::Outcome::Skipped(reason) => {
+                                skipped = Some(reason);
+                                return Ok(true);
+                            }
                         }
                     } else {
                         PathBuf::from(row["path"].as_str().unwrap_or_default())
@@ -109,6 +114,7 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                 control.downloading.store(false, Ordering::SeqCst);
                 let mut active = control.gate.lock().unwrap();
                 let saved = match result {
+                    Ok(true) if skipped.is_some() => queue::discard(&root, id, &skipped.unwrap_or_default()),
                     Ok(false) if !control.speech.is_cancelled() => {
                         queue::wait_for_live(&root, id, queue::tick_time())
                     }
