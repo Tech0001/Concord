@@ -441,7 +441,7 @@ fn files_added_during_setup_are_queued_for_transcription() {
     let root = dir.path();
     let file = root.join("new.m4a");
     std::fs::write(&file, b"fixture").unwrap();
-    let added = import_and_queue(root, &c, &[file.to_string_lossy().into_owned()], "work", "auto").unwrap();
+    let added = import_and_queue(root, &c, &[file.to_string_lossy().into_owned()], "work", "auto", true).unwrap();
     assert_eq!(added, 1);
     let queued = db::rows(&db::open(root).unwrap(), "SELECT m.category,j.status FROM jobs j JOIN media m ON m.id=j.media_id WHERE m.path LIKE '%new.m4a'", []).unwrap();
     assert_eq!(queued.len(), 1);
@@ -668,4 +668,14 @@ fn following_the_same_channel_twice_reuses_its_collection() {
     let other = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudyClips", "Tuesday Study", "personal", true, false).unwrap();
     assert_ne!(other, first);
     assert_eq!(sources::source(root, &other).unwrap()["name"], "Tuesday Study (2)");
+}
+#[test]
+fn files_can_skip_speaker_identification() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let file = root.join("solo.m4a");
+    std::fs::write(&file, b"fixture").unwrap();
+    import_and_queue(root, &c, &[file.to_string_lossy().into_owned()], "personal", "auto", false).unwrap();
+    let rows = db::rows(&db::open(root).unwrap(), "SELECT p.diarize FROM pipeline_work p JOIN jobs j ON j.id=p.id JOIN media m ON m.id=j.media_id WHERE m.path LIKE '%solo.m4a'", []).unwrap();
+    assert_eq!(rows[0]["diarize"], 0);
 }

@@ -125,11 +125,17 @@ pub fn save_config(root: &Path, value: &Config) -> Result<()> {
     Ok(())
 }
 /// Import files and queue them for transcription. They wait in the queue until speech is ready.
-pub fn import_and_queue(root: &Path, control: &Control, paths: &[String], category: &str, device: &str) -> Result<usize> {
+pub fn import_and_queue(root: &Path, control: &Control, paths: &[String], category: &str, device: &str, diarize: bool) -> Result<usize> {
     validate_device(device)?;
     let ids = crate::db::import_media_ids(root, paths, category)?;
     if !ids.is_empty() {
-        enqueue(root, control, &Batch { ids: ids.clone(), device: device.into(), ..Default::default() }, true)?;
+        let queued = enqueue(root, control, &Batch { ids: ids.clone(), device: device.into(), ..Default::default() }, true)?;
+        if !diarize {
+            let db = crate::db::open(root)?;
+            for job in queued["ids"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str) {
+                db.execute("UPDATE pipeline_work SET diarize=0 WHERE id=?1", [job])?;
+            }
+        }
     }
     Ok(ids.len())
 }
