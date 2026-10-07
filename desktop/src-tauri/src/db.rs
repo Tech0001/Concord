@@ -134,6 +134,8 @@ fn migrate(db: &mut Connection) -> Result<()> {
         crate::pipeline::migrate_sources(&tx)?;
         if version > 0 {
             crate::pipeline::keep_old_work_paused(&tx)?;
+            // An enabled folder source was set up to bring recordings in: it's a watched folder now.
+            tx.execute("UPDATE channels SET since=CAST(strftime('%s','now') AS INTEGER) WHERE kind='folder' AND enabled=1 AND since=0", [])?;
         }
     }
     tx.execute_batch("PRAGMA user_version=16")?;

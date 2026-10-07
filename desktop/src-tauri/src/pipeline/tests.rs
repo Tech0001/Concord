@@ -937,3 +937,15 @@ fn following_by_a_share_link_finds_the_channel_already_followed() {
     db.execute("UPDATE channels SET since=0 WHERE id=?1", [&first]).unwrap();
     assert!(!links::followed(&db, "https://www.youtube.com/@TuesdayStudy").unwrap());
 }
+#[test]
+fn upgrading_turns_enabled_folder_sources_into_watched_folders() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let watched = folder_source(root, &c, "Sermons");
+    let off = folder_source(root, &c, "Old");
+    db::open(root).unwrap().execute("UPDATE channels SET enabled=0 WHERE id=?1", [&off]).unwrap();
+    as_schema_15(root);
+    db::open(root).unwrap();
+    assert!(sources::source(root, &watched).unwrap()["since"].as_i64().unwrap() > 0);
+    assert_eq!(sources::source(root, &off).unwrap()["since"], 0);
+}
