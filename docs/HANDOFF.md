@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 2, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.28.1**
+Updated October 7, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.28.2**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,44 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Terminal Activity / Debug (0.28.2)
+
+Status & Health → Terminal now offers **Activity / Debug**. Activity contains readable
+progress, warnings and errors. Debug also includes source scan counts and skipped files,
+source duration, queue claims, download progress and subprocess exit/timing, selected speech
+and voice-matching devices, model download/resume/verification, native GPU/model-loading
+diagnostics, and semantic indexing batch/commit progress. This is a view filter, not an
+on/off capture switch: opening it after an operation shows the retained lead-up.
+
+Two separate memory rings retain up to 2,000 activity entries and 2,000 debug entries;
+verbose processing cannot evict the activity history. Each entry is capped at 3,000
+characters. The UI uses the same retention policy during Pause; Resume snapshots its
+buffer before scheduling the React update. Filter and Copy use the selected view, Clear
+clears that local terminal view, and the detail preference lasts for the window session.
+There is no new persistent terminal file or database write. Existing speech diagnostic
+files remain in the data root's `logs/` and active `work/` folders.
+
+New diagnostics are structured and never mirror subprocess stdout, AI request/response
+bodies, prompts, or command arguments. Native output uses an explicit diagnostic-prefix
+allowlist and bounded incremental reads. The common log writer also omits credential-
+bearing lines and URLs. Existing error messages can still contain local paths or tool
+failure details; this terminal is a local troubleshooting view, not a promise that every
+third-party error is anonymous. Help-chat diagnostics remain separately allowlisted and
+do not include this log. No schema or source/download behavior changed.
+
+Validation: 165 Rust tests pass (9 existing opt-in tests ignored), 60 interface tests pass,
+Clippy clean, frontend/native builds pass. `desktop/scripts/native-terminal-test.py` runs
+in real WebKitGTK against two synthetic WAV files and a new scratch library; verifies
+mode separation/retention, startup and live scan diagnostics, paused processing queue,
+pause/resume buffering, filtering and Clear. Latest successful root:
+`/tmp/concord-terminal-native-kcqks8t_`. No real archive/provider requests were used.
+Logs: `/tmp/concord-0282-{rust,ts,clippy,native-test,package}.log`.
+Installed and byte-verified the 0.28.2 AppImage at
+`~/.local/opt/concord-next/Concord-Next.AppImage`; user’s running app was left open.
+Close and reopen to load the new Terminal toggle. Verified pre-install backup:
+`~/.local/share/concord-next/backups/before-0.28.2-20261007-085404.db` (schema 15,
+`quick_check` OK). Final credential-redaction fixtures also passed after the full run.
 
 ## Stable SQLite connection lifetime (0.28.1)
 

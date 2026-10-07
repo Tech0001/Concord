@@ -68,6 +68,7 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                     return Ok(());
                 };
                 let id = row["id"].as_str().unwrap();
+                runtime_log::debug("Queue", &format!("Claimed {id}; kind {}; requested device {}; diarization {}", row["kind"].as_str().unwrap_or(""), row["device"].as_str().unwrap_or("auto"), row["diarize"] != 0));
                 *active = Some(id.into());
                 control.speech.begin();
                 control.downloading.store(

@@ -665,6 +665,7 @@ pub fn run() {
         if let Err(e)=legacy_research::seed(&root){runtime_log::push("warn",&format!("Extended research import: {e:#}"));}
         db.execute("UPDATE maintenance_jobs SET status='interrupted',message='Concord closed before the repair finished. Run it again to resume.' WHERE status='running'",[])?;
         runtime_log::push("info",concat!("Concord Next ",env!("CARGO_PKG_VERSION")," started"));
+        runtime_log::debug("Database", "SQLite WAL connection retained for app lifetime; background worker connections remain independent");
         db.execute("UPDATE jobs SET status='interrupted',message='Concord closed before processing finished; the previous transcript is preserved.' WHERE status='running'", [])?;
         ai::summary::recover(&db)?;
         ai::builtin::initialize(app.path().resource_dir()?);

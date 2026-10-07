@@ -4,8 +4,12 @@ import { api } from "../lib/ipc.ts";
 import { Button } from "../ui/Button.tsx";
 import { useToast } from "../ui/Toasts.tsx";
 import type { LogEntry } from "./types.ts";
+import { retainLogs } from "./logs.ts";
 export function Terminal() {
   const [entries, setEntries] = useState<LogEntry[]>([]),
+    [debug, setDebug] = useState(
+      () => sessionStorage.getItem("concord.terminal.debug") === "true",
+    ),
     [paused, setPaused] = useState(false),
     [filter, setFilter] = useState(""),
     [follow, setFollow] = useState(true),
@@ -19,7 +23,8 @@ export function Terminal() {
   useEffect(() => {
     pauseRef.current = paused;
     if (!paused && buffer.current.length) {
-      setEntries((e) => [...e, ...buffer.current].slice(-2000));
+      const pendingEntries = buffer.current;
+      setEntries((e) => retainLogs([...e, ...pendingEntries]));
       buffer.current = [];
       setPending(0);
     }
@@ -35,9 +40,9 @@ export function Terminal() {
         if (incoming.length) {
           cursor.current = incoming.at(-1)!.id;
           if (pauseRef.current) {
-            buffer.current = [...buffer.current, ...incoming].slice(-2000);
+            buffer.current = retainLogs([...buffer.current, ...incoming]);
             setPending(buffer.current.length);
-          } else setEntries((e) => [...e, ...incoming].slice(-2000));
+          } else setEntries((e) => retainLogs([...e, ...incoming]));
         }
       } catch {
         if (alive) setConnected(false);
@@ -50,27 +55,47 @@ export function Terminal() {
       clearTimeout(timer);
     };
   }, []);
-  const shown = entries.filter((e) =>
+  const visible = entries.filter((e) => debug || e.level !== "debug");
+  const shown = visible.filter((e) =>
     `${e.level} ${e.message}`.toLowerCase().includes(filter.toLowerCase()),
   );
   useEffect(() => {
     if (follow && !paused && viewport.current)
       viewport.current.scrollTop = viewport.current.scrollHeight;
-  }, [entries, filter, follow, paused]);
+  }, [entries, filter, follow, paused, debug]);
   return (
     <section className="archive-terminal" aria-label="Application terminal">
       <header>
         <div>
           <h3>Application terminal</h3>
           <p className="muted">
-            Read-only output from Concord and its background tools.
+            {debug
+              ? "Detailed source checks, downloads, speech and search diagnostics."
+              : "Readable progress, warnings and errors from Concord."}
           </p>
         </div>
         <span className={connected ? "terminal-connected" : "is-error"}>
-          {connected ? "Connected" : "Reconnecting…"} · {entries.length} lines
+          {connected ? "Connected" : "Reconnecting…"} · {shown.length}{" "}
+          {shown.length === 1 ? "line" : "lines"}
         </span>
       </header>
       <div className="terminal-controls">
+        <div className="segmented" role="group" aria-label="Log detail">
+          {([false, true] as const).map((value) => (
+            <button
+              type="button"
+              key={String(value)}
+              className={`segment ${debug === value ? "is-on" : ""}`}
+              aria-pressed={debug === value}
+              onClick={() => {
+                setDebug(value);
+                sessionStorage.setItem("concord.terminal.debug", String(value));
+              }}
+            >
+              {value ? "Debug" : "Activity"}
+            </button>
+          ))}
+        </div>
         <label className="search-field">
           <Search size={14} />
           <input
@@ -126,6 +151,10 @@ export function Terminal() {
           Clear
         </Button>
       </div>
+      <p className="terminal-disclosure muted">
+        Recent activity from this app session. Debug adds processing details;
+        saved speech logs are in your library’s logs folder.
+      </p>
       <div
         className="terminal-output"
         ref={viewport}

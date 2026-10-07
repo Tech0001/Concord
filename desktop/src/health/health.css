@@ -336,6 +336,10 @@
 .level-warn b {
   color: var(--warning, var(--primary));
 }
+.level-debug b { color: var(--muted-foreground); }
+.level-error b { color: var(--destructive, #e87373); }
+.terminal-disclosure { font-size: 12px; margin: -5px 0 12px; }
+.terminal-controls .segmented { flex-shrink: 0; }
 @media (max-width: 800px) {
   .archive-coverage-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

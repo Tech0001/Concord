@@ -221,6 +221,10 @@ fn run_process(
     }
     let mut child = command.spawn().context("Cannot start speech dependency")?;
     control.pid.store(child.id() as i32, Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    let stage = if log.file_name().is_some_and(|p| p == "audio.log") { "Audio preparation" } else { "Speech runtime" };
+    crate::runtime_log::debug(stage, &format!("Started process {} for job {job}", child.id()));
+    let mut diagnostics = crate::runtime_log::DiagnosticTail::default();
     let mut ticks = 0;
     let status = loop {
         if control.cancelled.load(Ordering::SeqCst) {
@@ -235,20 +239,20 @@ fn run_process(
             break s;
         }
         if ticks % 4 == 0 {
+            diagnostics.poll(log, stage);
             if let Ok(text) = fs::read_to_string(log) {
                 if let Some(last) = text.lines().rev().find(|l| !l.trim().is_empty()) {
-                    let _ = message(
-                        root,
-                        job,
-                        "running",
-                        &last.chars().take(220).collect::<String>(),
-                    );
+                    // Raw native output stays in the local job detail, not the
+                    // shared terminal: it can include recognized speech.
+                    let _ = db::open(root).and_then(|db| Ok(db.execute("UPDATE jobs SET message=?1 WHERE id=?2", params![last.chars().take(220).collect::<String>(), job])?));
                 }
             }
         }
         ticks += 1;
         std::thread::sleep(Duration::from_millis(250));
     };
+    diagnostics.poll(log, stage);
+    crate::runtime_log::debug(stage, &format!("Process finished: {status}; elapsed {:.2}s", started.elapsed().as_secs_f64()));
     control.pid.store(0, Ordering::SeqCst);
     if control.cancelled.load(Ordering::SeqCst) {
         bail!("Cancelled");
@@ -352,6 +356,7 @@ pub(crate) fn process_options(root:&Path,runtime:&Runtime,control:&Control,job:&
     } else {
         device
     };
+    crate::runtime_log::debug("Speech", &format!("Job {job}; model Nemotron 3.5 multilingual; selected device {device}; diarization {}", options.diarize));
     let work = root.join("work").join(job);
     fs::create_dir_all(&work)?;
     let outcome = (|| -> Result<()> {
@@ -383,6 +388,7 @@ pub(crate) fn process_options(root:&Path,runtime:&Runtime,control:&Control,job:&
             let mut probe=Command::new(&runtime.python);runtime.isolate(&mut probe);
             probe.args(["-c","import torch; print('cuda' if torch.cuda.is_available() else 'cpu')"]).output().is_ok_and(|o|o.status.success()&&String::from_utf8_lossy(&o.stdout).trim()=="cuda")
         } else {false};
+        crate::runtime_log::debug("Voice matching", if !options.diarize { "Disabled for this job" } else if embedding_gpu { "TitaNet device: CUDA" } else { "TitaNet device: CPU" });
         let raw = work.join("transcript.json");
         let diar = work.join("diar.json");
         let mut cmd = Command::new(&runtime.python);

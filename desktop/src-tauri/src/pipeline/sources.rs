@@ -160,6 +160,8 @@ pub(super) fn local(root: &Path, control: &Control, source: &Value) -> Result<us
     let mut paths = vec![];
     files(folder, &mut paths, control)?;
     paths.sort();
+    let found = paths.len();
+    runtime_log::debug("Source scan", &format!("Found {found} supported media files (recursive, hidden files and symlinks excluded)"));
     let device = config(root)?.device;
     let mut db = db::open(root)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -186,6 +188,7 @@ pub(super) fn local(root: &Path, control: &Control, source: &Value) -> Result<us
         added += 1;
     }
     tx.commit()?;
+    runtime_log::debug("Source scan", &format!("Queued {added}; skipped {} already imported or removed files", found - added));
     Ok(added)
 }
 pub(super) fn ingest(
@@ -349,6 +352,8 @@ pub fn start_filtered(root: PathBuf, control: Arc<Control>, id: Option<String>, 
                 }
                 let id = source["id"].as_str().unwrap();
                 db::open(&root)?.execute("UPDATE channels SET check_status='checking',check_message='Checking for recordings' WHERE id=?1",[id])?;
+                let started = std::time::Instant::now();
+                runtime_log::debug("Source check", &format!("Starting {} source; full history: {full}", source["kind"].as_str().unwrap_or("unknown")));
                 let result = if source["kind"] == "folder" {
                     local(&root, &control, &source)
                 } else {
@@ -370,6 +375,7 @@ pub fn start_filtered(root: PathBuf, control: Arc<Control>, id: Option<String>, 
                     Err(e) => ("failed", format!("{e:#}")),
                 };
                 db::open(&root)?.execute("UPDATE channels SET check_status=?1,check_message=?2,last_check=?3 WHERE id=?4",params![status,message,now(),id])?;
+                runtime_log::debug("Source check", &format!("Finished: {status}; elapsed {:.2}s", started.elapsed().as_secs_f64()));
                 runtime_log::push(
                     if status == "failed" { "error" } else { "info" },
                     &format!(

@@ -263,6 +263,7 @@ fn build_filtered(
             .collect()
     };
     let signature = provider.signature();
+    crate::runtime_log::debug("Semantic index", &format!("Job {job}: {} sources; embedding batches of 8; {} execution", list.len(), if provider.kind == "builtin" || provider.kind == "local" { "local" } else { "configured provider" }));
     let client = provider.client()?;
     db.execute(
         "UPDATE ai_jobs SET total=?2 WHERE id=?1",
@@ -288,7 +289,8 @@ fn build_filtered(
                 ],
             )?;
             let mut vectors = Vec::new();
-            for batch in source.chunks(8) {
+            for (batch_index, batch) in source.chunks(8).enumerate() {
+                crate::runtime_log::debug("Semantic index", &format!("Source {}/{} ({kind}); batch {}/{}; {} passages", i + 1, list.len(), batch_index + 1, source.len().div_ceil(8), batch.len()));
                 ensure!(!control.cancel_index.load(Ordering::SeqCst), "Cancelled");
                 vectors.extend(provider.embed(
                     &client,
@@ -337,6 +339,9 @@ fn build_filtered(
                 tx.execute("INSERT INTO ai_chunks(signature,kind,source_id,position,text,start,end,vector) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![signature,kind,id,position,c.text,c.start,c.end,bytes])?;
             }
             tx.commit()?;
+            crate::runtime_log::debug("Semantic index", &format!("Source {}/{} committed: {} passages, {dimensions} dimensions", i + 1, list.len(), source.len()));
+        } else {
+            crate::runtime_log::debug("Semantic index", &format!("Source {}/{} skipped: {}", i + 1, list.len(), if source.is_empty() { "no text" } else { "already up to date" }));
         }
         db.execute(
             "UPDATE ai_jobs SET done=?2 WHERE id=?1",

@@ -68,6 +68,7 @@ pub fn capture(
         .context("Cannot start download dependency")?;
     control.set_pid(child.id() as i32);
     let started = Instant::now();
+    crate::runtime_log::debug("Download tool", &format!("Started process {}; timeout {}s; {}", child.id(), timeout.as_secs(), if job.is_some() { "recording metadata/download" } else { "source listing" }));
     let mut last = String::new();
     let mut tick = 0;
     let mut failure = None;
@@ -106,6 +107,7 @@ pub fn capture(
                     let text = line.trim_start_matches("CONCORD_PROGRESS:").trim();
                     if text != last {
                         last = text.to_owned();
+                        crate::runtime_log::debug("Download", text);
                         let _ = db::open(root).and_then(|db| {
                             Ok(db.execute(
                                 "UPDATE jobs SET message=?1 WHERE id=?2",
@@ -120,6 +122,7 @@ pub fn capture(
         std::thread::sleep(Duration::from_millis(250));
     };
     control.set_pid(0);
+    crate::runtime_log::debug("Download tool", &format!("Process finished: {status}; elapsed {:.2}s{}", started.elapsed().as_secs_f64(), failure.map(|f| format!("; {f}")).unwrap_or_default()));
     let output = fs::read_to_string(&out).unwrap_or_default();
     let _ = fs::remove_file(&out);
     if let Some(f) = failure {
