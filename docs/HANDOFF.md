@@ -10,6 +10,69 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
+## One way in: Add, Following and Activity (branch `feature/adding`, not merged)
+
+Built by Claude from the approved canvas (claude.ai artifact "Concord adding redesign").
+It replaces the Pipeline → Sources → Save & scan → Start queue flow, the separate
+YouTube settings step and the Pipeline/Tools sidebar items. Not merged, versioned or
+installed; the user decides.
+
+**What a person sees**
+- **Add** (top bar, empty Library, palette, Setup's Recordings step): one dialog for files,
+  folders and links. Dropping files or folders anywhere in the window opens it
+  (`getCurrentWebview().onDragDropEvent` through the Transport); pasting a link outside a
+  text field opens it too. The button says what will happen ("Add 3 recordings",
+  "Add 23 and keep watching", "Follow Tuesday Study", "Add all").
+- Folders add what they hold now; **Keep watching this folder** follows it for new files.
+- A **video link** adds that video (download, then transcribe). A **channel or playlist link
+  can only be followed for new videos**: the first check records what exists, later checks
+  add only videos not seen before. No back catalogue, at the user's request. After adding
+  videos from one unfollowed channel, the confirmation toast offers "Follow ‹channel›".
+- yt-dlp installs inline the first time a link needs it ("Install and continue").
+- **Nothing to start**: the queue runs unless paused (`pipeline.running` defaults to true).
+  Cards and rows show Downloading · 45%, Waiting to download/transcribe, Transcribing,
+  Needs attention. Download/transcribe percentage replaces the resume bar on the cover.
+- **Following** (sidebar group between Archive and Analysis) lists followed channels and
+  watched folders; each opens as `#/library?collection=<source id>` with last check,
+  Check now and Options (Personal/Work, Identify speakers, Include Shorts, Rename, Stop
+  following).
+- **Library multi-select** (check on each card/row, shift for ranges): Transcribe (re-run;
+  does not un-pause, toast offers Resume), Move to Work/Personal.
+- **Activity** (`#/activity`; `#/pipeline` redirects, `?tab=setup` goes to Settings) replaces
+  Pipeline: Now, Needs attention (Retry, Ask for help, Remove), Up next, Following (older
+  subscriptions get "Follow for new videos"), history, Health & repair (opens Status &
+  Health), one Pause/Resume. The sidebar footer item summarises it ("Transcribing · 4
+  waiting", "Pausing after this one", "Paused · 3 waiting").
+- **Settings → Processing & downloads** (`section=processing`; old `section=youtube` maps
+  here) holds the old Pipeline Setup tab, after-transcription AI and the yt-dlp toggle.
+- Tools left the sidebar: Record is in Add and the palette; Extract audio stays on each
+  recording's menu.
+
+**Backend** (`pipeline/links.rs` new; `pipeline/sources.rs`, `pipeline/mod.rs`, `db.rs`, `lib.rs`)
+- Commands: `sources_list`, `add_inspect_paths`, `add_folder_preview`, `add_folder`,
+  `add_preview_links`, `add_videos`, `add_follow`, `pipeline_overview` (cheap counts plus
+  `activeKind`, polled with jobs); `import_and_queue` takes optional `diarize`.
+- Schema: `channels.since` (unix seconds; > 0 means followed under the new model) and
+  `source_seen(source_id, video_id)`. Followed sources are checked on schedule without the
+  old `automatic_checks` toggle, which now only governs older subscriptions ("Also check
+  older subscriptions" in Settings).
+- Library rows carry `job_message`/`job_kind`; `LibraryFilter.source` filters a collection.
+- Help diagnostics now read the queue state through `pipeline::running` (they reported a
+  fresh library as paused). `ai/help-guide.md` describes Add/Following/Activity.
+
+**Decisions worth checking** (full list in the build ledger): Following is its own sidebar
+group (the canvas nested it under Library); older subscriptions stay off the sidebar until
+followed; bulk "Remove from library" from the canvas was left out; native drag-and-drop was
+verified by emitting Tauri's `tauri://drag-drop`, so one real file-manager drag is still worth
+doing. Codex's Terminal "Activity / Debug" filter shares the word Activity with the new page;
+reconcile the naming when merging.
+
+Validation: 179 Rust tests (9 ignored), 74 interface tests, Clippy clean, `tsc` and Vite
+build pass. Mock screenshots of every canvas board at desktop and phone width. Native
+WebKitGTK run against a scratch library (three synthetic recordings, a watched folder,
+pasted links, collection header, Pause/Resume, selection → Work, Settings deep link): all
+steps pass; scripts were scratch files, not committed.
+
 ## Terminal Activity / Debug (0.28.2)
 
 Status & Health → Terminal now offers **Activity / Debug**. Activity contains readable
