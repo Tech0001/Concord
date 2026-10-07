@@ -223,8 +223,11 @@ pub fn overview(root: &Path) -> Result<serde_json::Value> {
     };
     let config = config(root)?;
     let daily = download::daily_count(&db)?;
+    let active_kind: Option<String> = db
+        .query_row("SELECT p.kind FROM jobs j JOIN pipeline_work p ON p.id=j.id WHERE j.status='running' LIMIT 1", [], |r| r.get(0))
+        .optional()?;
     Ok(
-        serde_json::json!({"running":running(&db)?,"active":count("running"),"queued":count("queued"),"retry":count("retry"),"waitingLive":count("waiting_live"),"failed":count("failed"),"dailyDownloads":daily,"dailyLimit":config.daily_limit,"atDailyLimit":daily>=config.daily_limit}),
+        serde_json::json!({"running":running(&db)?,"active":count("running"),"activeKind":active_kind,"queued":count("queued"),"retry":count("retry"),"waitingLive":count("waiting_live"),"failed":count("failed"),"dailyDownloads":daily,"dailyLimit":config.daily_limit,"atDailyLimit":daily>=config.daily_limit}),
     )
 }
 fn now() -> i64 {

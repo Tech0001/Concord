@@ -3,7 +3,8 @@ import { prettyDate } from "../lib/format.ts";
 import type { Media } from "../lib/types.ts";
 import type { MenuEntry } from "../ui/Menu.tsx";
 import { Cover } from "./Cover.tsx";
-import { MoreMenu, SpeakerChips, StarButton, StatusChips } from "./parts.tsx";
+import { MoreMenu, SelectBox, SpeakerChips, StarButton, StatusChips } from "./parts.tsx";
+import { jobProgress } from "./model.ts";
 
 export const RecordingCard = memo(function RecordingCard({
   media,
@@ -11,16 +12,27 @@ export const RecordingCard = memo(function RecordingCard({
   menu,
   onOpen,
   onStar,
+  selected = false,
+  onSelect,
 }: {
   media: Media;
   transcribing: boolean;
   menu: () => MenuEntry[];
   onOpen: () => void;
   onStar: () => void;
+  selected?: boolean;
+  onSelect?: (range: boolean) => void;
 }) {
+  const pct = jobProgress(media)?.pct;
   return (
-    <article className="rec-card">
+    <article className={selected ? "rec-card is-selected" : "rec-card"}>
       <Cover media={media} />
+      {onSelect && <SelectBox media={media} selected={selected} onSelect={onSelect} />}
+      {pct != null && (
+        <span className="rec-card-progress" role="progressbar" aria-label="Progress" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+          <span style={{ width: `${pct}%` }} />
+        </span>
+      )}
       <StarButton media={media} onToggle={onStar} className="rec-card-star" />
       <div className="rec-card-body">
         <div className="rec-card-title-row">

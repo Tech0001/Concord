@@ -1,0 +1,348 @@
+.dialog-center.add-dialog {
+  width: min(92vw, 640px);
+}
+.add-dialog .dialog-foot {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px 12px;
+}
+.add-dialog .spacer {
+  flex: 1;
+}
+.add-dialog .is-spinning svg {
+  animation: spin 0.9s linear infinite;
+}
+.add-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+.add-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Where files go: a large target while empty, one line once something is there. */
+.add-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 26px 20px 22px;
+  border: 1.5px dashed color-mix(in oklab, var(--primary) 45%, var(--border));
+  border-radius: var(--r-3);
+  background: color-mix(in oklab, var(--primary) 4%, transparent);
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: var(--text-md);
+}
+.add-drop strong {
+  color: var(--foreground);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.add-drop-icon {
+  color: var(--primary);
+}
+.add-drop-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.add-drop-compact {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 4px 6px;
+  padding: 8px 10px;
+  font-size: var(--text-sm);
+}
+.add-drop-compact > span {
+  margin: 0 2px 0 4px;
+}
+
+.add-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.add-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 8px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--card);
+}
+.add-row-pending {
+  color: var(--muted-foreground);
+}
+.add-row-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-2);
+  background: var(--muted);
+  color: var(--primary);
+}
+.add-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.add-row-text b {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.add-row-text small {
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+.add-path {
+  overflow: hidden;
+  font-family: var(--font-code);
+  font-size: var(--text-xs) !important;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.add-duration {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  min-width: 64px;
+  height: 36px;
+  padding: 0 6px;
+  border-radius: var(--r-1);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-family: var(--font-code);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.add-status {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+.add-status.is-ready {
+  color: color-mix(in oklab, var(--chart-3) 80%, var(--foreground));
+  font-weight: 500;
+}
+.add-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-2);
+  background: color-mix(in oklab, var(--destructive) 7%, transparent);
+  color: var(--secondary-foreground);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+.add-warning > svg {
+  margin-top: 1px;
+  color: var(--destructive);
+}
+.add-error {
+  margin: 0;
+  color: var(--destructive) !important;
+}
+.add-muted {
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+.add-link-button {
+  color: var(--primary);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.add-folder,
+.add-channel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  background: var(--card);
+}
+.add-channel .add-row {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.add-folder-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.add-folder-watch,
+.add-follow {
+  padding: 10px 12px;
+  border-radius: var(--r-2);
+  background: var(--muted);
+}
+.add-follow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.add-follow-icon {
+  margin-right: 6px;
+  vertical-align: -2px;
+  color: var(--primary);
+}
+.add-avatar {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--primary) 16%, var(--muted));
+  color: var(--primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.add-following {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+.add-following > svg {
+  color: color-mix(in oklab, var(--chart-3) 80%, var(--foreground));
+}
+
+.add-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+.add-links textarea {
+  color: var(--foreground);
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.add-tool {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in oklab, var(--primary) 35%, var(--border));
+  border-radius: var(--r-3);
+  background: color-mix(in oklab, var(--primary) 6%, var(--card));
+}
+.add-tool-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--primary) 16%, transparent);
+  color: var(--primary);
+}
+.add-tool-text {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.add-tool-text p {
+  margin: 0;
+  color: var(--secondary-foreground);
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+.add-tool-text small {
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+.add-tool-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.add-tool-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--text-sm);
+}
+.add-tool-progress progress {
+  width: 100%;
+  accent-color: var(--primary);
+}
+
+/* Shown over the window while files are dragged in from outside. */
+.drop-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in oklab, var(--background) 78%, transparent);
+  pointer-events: none;
+  animation: ui-fade-in var(--dur) var(--ease);
+}
+.drop-veil-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(100%, 520px);
+  padding: 40px 24px;
+  border: 2px dashed var(--primary);
+  border-radius: var(--r-3);
+  background: var(--popover);
+  box-shadow: var(--shadow-float);
+  text-align: center;
+}
+.drop-veil-card svg {
+  color: var(--primary);
+}
+.drop-veil-card strong {
+  font-size: var(--text-xl);
+  font-weight: 600;
+}
+.drop-veil-card span {
+  color: var(--muted-foreground);
+  font-size: var(--text-md);
+}
+
+@media (max-width: 639px) {
+  .add-dialog .dialog-foot .spacer {
+    display: none;
+  }
+  .add-dialog .dialog-foot .btn {
+    flex: 1;
+  }
+}

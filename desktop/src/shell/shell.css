@@ -549,3 +549,30 @@
 .job-actions { display:flex; align-items:center; gap:8px; }
 
 .health-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.health-console{margin:12px 0 18px;font-size:var(--text-sm)}.health-console summary{cursor:pointer}.health-console pre{padding:14px;border:1px solid var(--border);background:var(--background);border-radius:var(--r-2);font:12px/1.7 var(--font-code);white-space:pre-wrap;overflow-wrap:anywhere;margin-top:10px}
+.nav-following {
+  min-height: 30px;
+  padding-left: 14px;
+  font-size: var(--text-sm);
+}
+.nav-following .nav-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-following > svg:first-child {
+  color: var(--muted-foreground);
+}
+.nav-following.is-active > svg:first-child {
+  color: inherit;
+}
+.nav-following-busy {
+  color: var(--sidebar-primary);
+}
+.activity-item.is-paused > svg,
+.activity-item.is-wait > svg {
+  color: var(--muted-foreground);
+}
+.activity-item.is-bad > svg,
+.activity-item.is-bad .activity-text small {
+  color: var(--destructive);
+}

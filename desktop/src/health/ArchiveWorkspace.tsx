@@ -311,7 +311,7 @@ export function ArchiveWorkspace({
     setIssue(undefined);
   };
   const linked = (
-    page: "ai" | "speakers" | "documents" | "pipeline",
+    page: "ai" | "speakers" | "documents" | "activity",
     text: string,
   ) => (
     <Button
@@ -405,7 +405,7 @@ export function ArchiveWorkspace({
                 waiting to retry · {number(status.pipeline?.failed ?? 0)}{" "}
                 processing failures
               </span>
-              {linked("pipeline", "Open Pipeline")}
+              {linked("activity", "Open Activity")}
             </div>
             <Jobs {...jobs} onHelp={onClose} onChange={() => void reload().catch(toast.error)} />
             <div className="archive-coverage-grid">

@@ -1,8 +1,10 @@
 import * as D from "@radix-ui/react-dialog";
-import { Check, LoaderCircle, PanelLeftClose, PanelLeftOpen, Settings2 } from "lucide-react";
+import { Activity, CircleAlert, Folder, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pause, Rss, Settings2 } from "lucide-react";
 import { cx } from "../lib/cx.ts";
 import type { Route } from "../lib/router.ts";
-import { ANALYSIS, ARCHIVE, OPERATIONS, sectionOf, type NavItem } from "./nav.ts";
+import { ANALYSIS, ARCHIVE, sectionOf, type NavItem } from "./nav.ts";
+import { activitySummary } from "./activity.ts";
+import { isFollowed } from "../library/following.ts";
 import { Brand } from "./Brand.tsx";
 import { useApp } from "./AppContext.tsx";
 import { formatBytes, speechPercent } from "../setup/model.ts";
@@ -36,28 +38,36 @@ export function setupActivity(setup?: SetupStatus): { title: string; detail: str
 export type SidebarMode = "full" | "rail" | "drawer";
 
 export function Sidebar({ mode, onToggle, onNavigate }: { mode: SidebarMode; onToggle: () => void; onNavigate?: () => void }) {
-  const { route, navigate, overview, activeJob, openActivity, setup } = useApp();
+  const { route, navigate, overview, activeJob, setup, queue, sources } = useApp();
   const installing = activeJob ? null : setupActivity(setup);
   const rail = mode === "rail";
   const current = sectionOf(route.page);
+  const collection = route.page === "library" ? route.collection : undefined;
+  const following = sources.filter(isFollowed);
   const go = (r: Route) => {
     navigate(r);
     onNavigate?.();
   };
-  const item = (n: NavItem) => (
-    <button
-      key={n.page}
-      type="button"
-      className={cx("nav-item", current === n.page && "is-active")}
-      aria-current={current === n.page ? "page" : undefined}
-      data-tip={rail ? n.label : undefined}
-      onClick={() => go(n.route)}
-    >
-      <n.icon size={18} aria-hidden />
-      <span className="nav-label">{n.label}</span>
-      {n.page === "library" && overview && !rail && <span className="nav-count num">{overview.media.toLocaleString("en-US")}</span>}
-    </button>
-  );
+  const item = (n: NavItem) => {
+    const active = current === n.page && !(n.page === "library" && collection);
+    return (
+      <button
+        key={n.page}
+        type="button"
+        className={cx("nav-item", active && "is-active")}
+        aria-current={active ? "page" : undefined}
+        data-tip={rail ? n.label : undefined}
+        onClick={() => go(n.route)}
+      >
+        <n.icon size={18} aria-hidden />
+        <span className="nav-label">{n.label}</span>
+        {n.page === "library" && overview && !rail && <span className="nav-count num">{overview.media.toLocaleString("en-US")}</span>}
+      </button>
+    );
+  };
+  const summary = activitySummary(queue);
+  const activityActive = route.page === "activity";
+  const ActivityIcon = activeJob || installing ? LoaderCircle : summary.tone === "paused" ? Pause : summary.tone === "bad" ? CircleAlert : Activity;
   const settingsActive = route.page === "settings";
   const toggleLabel = mode === "full" ? "Collapse sidebar" : mode === "rail" ? "Open sidebar" : "Close sidebar";
   return (
@@ -73,36 +83,52 @@ export function Sidebar({ mode, onToggle, onNavigate }: { mode: SidebarMode; onT
       <nav className="sidebar-nav">
         {!rail && <div className="nav-group">Archive</div>}
         {ARCHIVE.map(item)}
+        {!rail && following.length > 0 && (
+          <>
+            <div className="nav-group">Following</div>
+            {following.map((s) => {
+              const active = collection === s.id;
+              const Icon = s.kind === "folder" ? Folder : Rss;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  className={cx("nav-item nav-following", active && "is-active")}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => go({ page: "library", collection: s.id })}
+                >
+                  <Icon size={16} aria-hidden />
+                  <span className="nav-label">{s.name}</span>
+                  {s.check_status === "checking" && <LoaderCircle size={13} className="spin nav-following-busy" aria-label="Checking" />}
+                </button>
+              );
+            })}
+          </>
+        )}
         {rail ? <div className="nav-divider" /> : <div className="nav-group">Analysis</div>}
         {ANALYSIS.map(item)}
-        {rail ? <div className="nav-divider" /> : <div className="nav-group">Processing</div>}
-        {OPERATIONS.map(item)}
       </nav>
       <div className="sidebar-foot">
         <button
           type="button"
-          className={cx("nav-item activity-item", (activeJob || installing) && "is-busy", installing && "is-installing")}
-          onClick={() => {
-            onNavigate?.();
-            openActivity();
-          }}
-          data-tip={rail ? (activeJob ? `Transcribing ${activeJob.title}` : installing ? `${installing.title} · ${installing.detail}` : "Status & Health") : undefined}
+          className={cx("nav-item activity-item", activityActive && "is-active", (activeJob || installing) && "is-busy", installing && "is-installing", `is-${summary.tone}`)}
+          aria-current={activityActive ? "page" : undefined}
+          onClick={() => go({ page: "activity" })}
+          data-tip={rail ? (installing ? `${installing.title} · ${installing.detail}` : `Activity${summary.detail ? ` · ${summary.detail}` : ""}`) : undefined}
         >
-          {activeJob || installing ? <LoaderCircle size={18} className="spin" aria-hidden /> : <Check size={18} aria-hidden />}
+          <ActivityIcon size={18} className={activeJob || installing ? "spin" : undefined} aria-hidden />
           <span className="nav-label activity-text">
-            {activeJob ? (
-              <>
-                <b>{activeJob.title}</b>
-                <small>{activeJob.message || "Processing"}</small>
-              </>
-            ) : installing ? (
+            {installing ? (
               <>
                 <b>{installing.title}</b>
                 <small>{installing.detail}</small>
                 <Bar pct={installing.pct} thin />
               </>
             ) : (
-              "Status & Health"
+              <>
+                <b>Activity</b>
+                {summary.detail && <small>{summary.detail}</small>}
+              </>
             )}
           </span>
         </button>

@@ -12,17 +12,18 @@ export type DialogProps = {
   footer?: ReactNode;
   size?: "sm" | "md" | "lg";
   variant?: "center" | "side" | "sheet";
+  className?: string;
   children?: ReactNode;
 };
 
-export function Dialog({ open, onOpenChange, title, description, footer, size = "md", variant = "center", children }: DialogProps) {
+export function Dialog({ open, onOpenChange, title, description, footer, size = "md", variant = "center", className, children }: DialogProps) {
   return (
     <D.Root open={open} onOpenChange={onOpenChange}>
       <D.Portal>
         <D.Overlay className="overlay" />
         {/* Radix expects aria-describedby={undefined} when there is no description. */}
         <D.Content
-          className={cx("dialog", `dialog-${variant}`, `dialog-${size}`)}
+          className={cx("dialog", `dialog-${variant}`, `dialog-${size}`, className)}
           {...(!description ? { "aria-describedby": undefined } : {})}
         >
           <header className="dialog-head">

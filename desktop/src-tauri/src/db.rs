@@ -263,6 +263,8 @@ pub struct LibraryFilter {
     pub status: String,
     pub query: String,
     pub channel: String,
+    /// One followed channel or folder (a source id), or all.
+    pub source: String,
     pub kind: String,
     pub transcribed: String,
     pub starred: bool,
@@ -308,21 +310,22 @@ pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
          AND (?5 = '' OR (?5 = 'yes') = (m.transcript IS NOT NULL))
          AND (?6 = 0 OR m.starred = 1)
          AND (?7 = '' OR m.review_state = ?7)
-         AND (?8 = '' OR m.category = ?8) AND (?9 = '' OR m.processing_status = ?9)"
+         AND (?8 = '' OR m.category = ?8) AND (?9 = '' OR m.processing_status = ?9)
+         AND (?10 = '' OR m.source_id = ?10)"
     );
-    let args: [&dyn rusqlite::ToSql; 9] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status];
+    let args: [&dyn rusqlite::ToSql; 10] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status, &f.source];
     let (total, transcribed): (i64, i64) = db.query_row(
         &format!("{cte} SELECT count(*), coalesce(sum(m.transcript IS NOT NULL), 0) FROM library_media m WHERE {filter}"),
         &args[..],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let limit = if [60, 120, 240].contains(&f.limit) { f.limit } else { 60 };
-    let paged: [&dyn rusqlite::ToSql; 10] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status, &f.offset];
+    let paged: [&dyn rusqlite::ToSql; 11] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status, &f.source, &f.offset];
     let mut items = rows(
         &db,
         &format!(
             "{cte} SELECT m.*, {kind} AS kind, (SELECT count(*) FROM assignments a WHERE a.media_id = m.id) AS speaker_count
-             FROM library_media m WHERE {filter} ORDER BY {},m.id LIMIT {limit} OFFSET ?10",
+             FROM library_media m WHERE {filter} ORDER BY {},m.id LIMIT {limit} OFFSET ?11",
             order_by(&f.sort)
         ),
         &paged[..],
@@ -818,6 +821,17 @@ mod tests {
         assert!(set_review(&root, "b", "archived").is_err());
         assert!(set_starred(&root, "missing", true).is_err());
         assert!(save_position(&root, "b", f64::NAN).is_err());
+    }
+
+    #[test]
+    fn the_library_can_show_one_followed_collection() {
+        let (_tmp, root) = library_fixture();
+        open(&root).unwrap().execute("UPDATE media SET source_id='src-1' WHERE id IN ('a','c')", []).unwrap();
+        let filtered = |f: LibraryFilter| ids(&library(&root, &f).unwrap());
+        assert_eq!(filtered(LibraryFilter { source: "src-1".into(), sort: "title".into(), ..Default::default() }).len(), 2);
+        assert!(filtered(LibraryFilter { source: "src-1".into(), ..Default::default() }).iter().all(|id| id != "b"));
+        assert_eq!(filtered(LibraryFilter { source: "elsewhere".into(), ..Default::default() }).len(), 0);
+        assert_eq!(filtered(LibraryFilter::default()).len(), 3);
     }
 
     #[test]

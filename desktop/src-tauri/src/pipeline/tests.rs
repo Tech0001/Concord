@@ -530,6 +530,22 @@ fn added_work_runs_without_a_start_step_until_paused() {
     queue::insert(&db::open(root).unwrap(), "two", "two", "transcribe", "auto", true).unwrap();
     assert!(queue::claim(root, 2).unwrap().is_none());
 }
+#[test]
+fn the_overview_says_what_kind_of_work_is_running() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    {
+        let db = db::open(root).unwrap();
+        queue::insert(&db, "one", "one", "download", "auto", true).unwrap();
+        queue::insert(&db, "two", "two", "transcribe", "auto", true).unwrap();
+    }
+    assert_eq!(overview(root).unwrap()["activeKind"], Value::Null);
+    assert!(queue::claim(root, 1).unwrap().is_some());
+    let now = overview(root).unwrap();
+    assert_eq!(now["activeKind"], "download");
+    assert_eq!(now["active"], 1);
+    assert_eq!(now["queued"], 1);
+}
 fn channel(root: &Path, c: &Control) -> Value {
     let id = sources::save(root, c, &sources::Source {
         id: None,

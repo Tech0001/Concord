@@ -1,4 +1,4 @@
-import { DownloadSettings } from "./DownloadSettings.tsx";
+import { ProcessingSettings } from "./ProcessingSettings.tsx";
 import { useEffect, useState } from "react";
 import { AudioLines, Check, CircleAlert, Cpu, FolderOpen, HardDrive, Info, Palette, RefreshCw } from "lucide-react";
 import { api } from "../lib/ipc.ts";
@@ -137,9 +137,7 @@ export function SettingsPage({ section }: { section?: SettingsSection }) {
       <div id="settings-ai" className="settings-anchor">
         <ProviderSettings />
       </div>
-      <div id="settings-youtube" className="settings-anchor">
-        <DownloadSettings />
-      </div>
+      <ProcessingSettings />
       <Section id="speech" icon={AudioLines} title="Speech">
         <Row label="Status">
           <Chip tone={runtime ? (runtime.ready ? "success" : "warn") : "neutral"}>{runtime ? (runtime.ready ? "Ready" : "Setup needed") : "Checking…"}</Chip>

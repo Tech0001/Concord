@@ -17,7 +17,7 @@ export function checklistOnLibrary(s: SetupStatus): boolean {
 }
 
 export function SetupChecklist({ variant, onNavigate }: { variant: "library" | "health"; onNavigate?: () => void }) {
-  const { setup, navigate, refreshSetup, device, refresh, openActivity, category } = useApp();
+  const { setup, navigate, refreshSetup, openActivity, openAdd } = useApp();
   const toast = useToast();
   if (!setup || (variant === "library" && !checklistOnLibrary(setup))) return null;
   const items = checklist(setup);
@@ -31,18 +31,10 @@ export function SetupChecklist({ variant, onNavigate }: { variant: "library" | "
     void work()
       .then(refreshSetup)
       .catch(toast.error);
-  const addFiles = run(async () => {
-    const paths = await api.pickMedia();
-    if (!paths.length) return;
-    const n = await api.importAndQueue(paths, category || "personal", device);
-    refresh();
-    toast.success(n === 1 ? "1 recording added and queued" : `${n} recordings added and queued`);
-  });
   const hide = run(() => api.setupSave({ checklistHidden: !setup.progress.checklistHidden }));
   const actions = (item: ChecklistItem) => {
     if (item.id === "recordings" && item.state === "done") return (
       <>
-        {setup.sources.sources > 0 && <Button size="sm" onClick={() => open({ page: "pipeline", tab: "sources" })}>View sources</Button>}
         {setup.sources.documentFolders > 0 && <Button size="sm" onClick={() => open({ page: "documents" })}>Open Docs</Button>}
       </>
     );
@@ -73,11 +65,8 @@ export function SetupChecklist({ variant, onNavigate }: { variant: "library" | "
       case "recordings":
         return (
           <>
-            <Button size="sm" variant="primary" onClick={addFiles}>
-              Add files
-            </Button>
-            <Button size="sm" onClick={() => setupStep("recordings")}>
-              More sources
+            <Button size="sm" variant="primary" onClick={() => openAdd()}>
+              Add recordings
             </Button>
           </>
         );

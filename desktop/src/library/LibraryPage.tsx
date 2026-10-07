@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, AudioLines, Library } from "lucide-react";
+import { ArrowLeft, ArrowRight, AudioLines, Library, RefreshCw, X } from "lucide-react";
 import { api } from "../lib/ipc.ts";
 import { count } from "../lib/format.ts";
 import { copyText } from "../lib/clipboard.ts";
@@ -7,7 +7,7 @@ import { setLibraryOrder } from "../lib/session.ts";
 import { useStoredState } from "../lib/storage.ts";
 import { PHONE, TABLET, useMediaQuery } from "../lib/media-query.ts";
 import type { LibraryFilter, LibraryPage as Page, LibrarySort, Media, ReviewState } from "../lib/types.ts";
-import { Button } from "../ui/Button.tsx";
+import { Button, IconButton } from "../ui/Button.tsx";
 import { Empty } from "../ui/Empty.tsx";
 import { PageHeader } from "../ui/PageHeader.tsx";
 import { Select } from "../ui/Select.tsx";
@@ -21,17 +21,22 @@ import { RecordingCard } from "./RecordingCard.tsx";
 import { RecordingRow } from "./RecordingRow.tsx";
 import { activeFilterCount, Toolbar } from "./Toolbar.tsx";
 import { SetupChecklist } from "../setup/SetupChecklist.tsx";
+import { FollowingHeader } from "./FollowingHeader.tsx";
+import { LibraryStart } from "./LibraryStart.tsx";
 import "./library.css";
 
 let savedScroll = 0;
 
 export function LibraryPage() {
-  const { overview, revision, navigate, transcribe, activeJob, jobs, category, setCategory, refresh, addRecordings } = useApp();
+  const { overview, revision, navigate, transcribe, activeJob, jobs, category, setCategory, refresh, route, sources, device, queue } = useApp();
+  const collection = route.page === "library" ? route.collection : undefined;
+  const source = collection ? sources.find((s) => s.id === collection) : undefined;
   const toast = useToast();
   const phone = useMediaQuery(PHONE);
   const narrow = useMediaQuery(TABLET);
   const [stored, setFilter] = useStoredState<LibraryFilter>("library-filter-v1", DEFAULT_FILTER);
-  const filter = { ...normalizeFilter(stored), category };
+  // A collection shows everything it holds, whichever archive category is in view.
+  const filter = collection ? { ...normalizeFilter(stored), category: "" as const, channel: "", source: collection } : { ...normalizeFilter(stored), category };
   const lastCategory = useRef(category);
   useEffect(() => {
     if (lastCategory.current !== category) {
@@ -71,6 +76,66 @@ export function LibraryPage() {
     // The filter is compared by value through `key`.
   }, [key, revision, toast]);
   useEffect(() => () => void (savedScroll = window.scrollY), []);
+
+  // Several recordings chosen at once, for transcribing again or moving between Personal and Work.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const lastPicked = useRef<number | null>(null);
+  useEffect(() => {
+    setSelected(new Set());
+    lastPicked.current = null;
+  }, [key]);
+  useEffect(() => {
+    if (!selected.size) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSelected(new Set());
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected.size]);
+  const pick = (index: number, range: boolean) => {
+    const list = data?.items ?? [];
+    const id = list[index]?.id;
+    if (!id) return;
+    setSelected((old) => {
+      const next = new Set(old);
+      const on = !old.has(id);
+      const from = range && lastPicked.current != null ? Math.min(lastPicked.current, index) : index;
+      const to = range && lastPicked.current != null ? Math.max(lastPicked.current, index) : index;
+      for (const m of list.slice(from, to + 1)) on ? next.add(m.id) : next.delete(m.id);
+      return next;
+    });
+    lastPicked.current = index;
+  };
+  const [acting, setActing] = useState(false);
+  const transcribeSelected = async () => {
+    setActing(true);
+    try {
+      const result = await api.pipelineEnqueue({ ids: [...selected], device }, false);
+      const extra = [result.alreadyQueued && `${result.alreadyQueued} already queued`, result.unavailable && `${result.unavailable} unavailable`].filter(Boolean).join(" · ");
+      const paused = queue && !queue.running;
+      toast.success(
+        `${count(result.added, "recording")} queued${extra ? ` · ${extra}` : ""}${paused ? " · processing is paused" : ""}`,
+        paused ? { label: "Resume", run: () => void api.pipelineAction("start").then(refresh).catch(toast.error) } : undefined,
+      );
+      setSelected(new Set());
+      refresh();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setActing(false);
+    }
+  };
+  const moveSelected = async (to: "personal" | "work") => {
+    setActing(true);
+    try {
+      await Promise.all([...selected].map((id) => api.setCategory(id, to)));
+      toast.success(`${count(selected.size, "recording")} moved to ${to === "work" ? "Work" : "Personal"}`);
+      setSelected(new Set());
+      refresh();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setActing(false);
+    }
+  };
 
   const update = useCallback(
     (patch: Partial<LibraryFilter>) => {
@@ -131,13 +196,18 @@ export function LibraryPage() {
     );
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const filtered = overview?.media !== 0 && (activeFilterCount(filter) > 0 || !!filter.query.trim() || !!filter.channel || !!category);
+  const filtered = overview?.media !== 0 && (activeFilterCount(filter) > 0 || !!filter.query.trim() || !!filter.channel || (!collection && !!category));
+  const blank = overview?.media === 0;
   const effectiveView = phone ? "list" : view;
   const Item = effectiveView === "grid" ? RecordingCard : RecordingRow;
   const sortBy = (sort: LibrarySort) => update({ sort });
   return (
     <>
       {fileAction && <RecordingFileDialog media={fileAction.media} action={fileAction.action} onClose={()=>setFileAction(undefined)} onSaved={refresh}/>}
+      {collection ? (
+        source && <FollowingHeader source={source} />
+      ) : (
+        <>
       <PageHeader
         title="Library"
         meta={
@@ -153,8 +223,10 @@ export function LibraryPage() {
         }
       />
       <SetupChecklist variant="library" />
-      <SavedViews filter={filter} layout={view} onApply={saved => { lastCategory.current = saved.filter.category; setCategory(saved.filter.category); setFilter({ ...saved.filter, offset: 0 }); setView(saved.layout); window.scrollTo(0, 0); }}/>
-      <Toolbar
+      {!blank && <SavedViews filter={filter} layout={view} onApply={saved => { lastCategory.current = saved.filter.category; setCategory(saved.filter.category); setFilter({ ...saved.filter, offset: 0 }); setView(saved.layout); window.scrollTo(0, 0); }}/>}
+        </>
+      )}
+      {!blank && <Toolbar
         filter={filter}
         update={update}
         channels={(data?.channels ?? []).map((c) => c.channel)}
@@ -162,9 +234,10 @@ export function LibraryPage() {
         setView={setView}
         showView={!phone}
         compact={narrow}
-      />
+      />}
       {effectiveView === "list" && items.length > 0 && (
         <div className="rec-head" role="row">
+          <span />
           <span />
           <span className="rec-row-thumb" />
           <button type="button" className="rec-head-sort" onClick={() => sortBy(filter.sort === "newest" ? "oldest" : "newest")}>
@@ -184,8 +257,12 @@ export function LibraryPage() {
           <span />
         </div>
       )}
-      <div className={effectiveView === "grid" ? "rec-grid" : "rec-list"} role={effectiveView === "list" ? "table" : undefined}>
-        {items.map((m) => (
+      <div
+        className={`${effectiveView === "grid" ? "rec-grid" : "rec-list"}${selected.size ? " is-selecting" : ""}`}
+        role={effectiveView === "list" ? "table" : undefined}
+        aria-multiselectable={effectiveView === "list" ? true : undefined}
+      >
+        {items.map((m, index) => (
           <Item
             key={m.id}
             media={m}
@@ -193,17 +270,50 @@ export function LibraryPage() {
             menu={menuFor(m)}
             onOpen={() => navigate({ page: "recording", id: m.id })}
             onStar={() => void star(m)}
+            selected={selected.has(m.id)}
+            onSelect={(range) => pick(index, range)}
           />
         ))}
       </div>
-      {data && !items.length && (
+      {selected.size > 0 && (
+        <div className="selection-bar" role="toolbar" aria-label="Selected recordings">
+          <span className="selection-bar-count">{selected.size} selected</span>
+          {selected.size < items.length && (
+            <Button size="sm" variant="ghost" onClick={() => setSelected(new Set(items.map((m) => m.id)))}>
+              Select all {items.length}
+            </Button>
+          )}
+          <Button size="sm" variant="primary" icon={RefreshCw} disabled={acting} onClick={() => void transcribeSelected()}>
+            Transcribe
+          </Button>
+          {items.some((m) => selected.has(m.id) && m.category !== "work") && (
+            <Button size="sm" disabled={acting} onClick={() => void moveSelected("work")}>
+              Move to Work
+            </Button>
+          )}
+          {items.some((m) => selected.has(m.id) && m.category === "work") && (
+            <Button size="sm" disabled={acting} onClick={() => void moveSelected("personal")}>
+              Move to Personal
+            </Button>
+          )}
+          <IconButton size="sm" icon={X} label="Clear selection" onClick={() => setSelected(new Set())} />
+        </div>
+      )}
+      {data && !items.length && (blank && !collection ? (
+        <LibraryStart />
+      ) : collection && !filtered ? (
+        <Empty
+          icon={Library}
+          title="Nothing here yet"
+          text={source?.kind === "folder" ? "Recordings saved in this folder appear here." : "New videos appear here after they're posted."}
+        />
+      ) : (
         <Empty
           icon={Library}
           title={filtered ? "No recordings match" : "No recordings yet"}
-          text={filtered ? "Try a different filter or clear the search." : "Add recordings to start your archive."}
-          action={!filtered ? <Button variant="primary" onClick={() => void addRecordings()}>Add recordings</Button> : undefined}
+          text={filtered ? "Try a different filter or clear the search." : "Drop recordings anywhere in the window, or use Add."}
         />
-      )}
+      ))}
       {total > 0 && (
         <footer className="pagination">
           <Button size="sm" icon={ArrowLeft} disabled={!filter.offset} onClick={() => update({ offset: Math.max(0, filter.offset - filter.limit) })}>

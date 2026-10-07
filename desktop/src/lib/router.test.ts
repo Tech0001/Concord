@@ -36,10 +36,22 @@ test("setup keeps its step, where to return, and a preselected chat provider", (
   assert.deepEqual(parseRoute("#/setup?step=nowhere&return=recording&chat=fax"), { page: "setup" });
 });
 
-test("settings sections and pipeline tabs can be linked to", () => {
+test("settings sections can be linked to; old Pipeline links land on Activity or Settings", () => {
   assert.deepEqual(parseRoute(formatRoute({ page: "settings", section: "speech" })), { page: "settings", section: "speech" });
   assert.deepEqual(parseRoute("#/settings?section=elsewhere"), { page: "settings" });
   assert.equal(formatRoute({ page: "settings" }), "#/settings");
-  assert.deepEqual(parseRoute(formatRoute({ page: "pipeline", tab: "sources" })), { page: "pipeline", tab: "sources" });
-  assert.deepEqual(parseRoute("#/pipeline"), { page: "pipeline" });
+  assert.deepEqual(parseRoute("#/settings?section=youtube"), { page: "settings", section: "processing" });
+  assert.equal(formatRoute({ page: "activity" }), "#/activity");
+  assert.deepEqual(parseRoute("#/activity"), { page: "activity" });
+  assert.deepEqual(parseRoute("#/pipeline"), { page: "activity" });
+  assert.deepEqual(parseRoute("#/pipeline?tab=sources"), { page: "activity" });
+  assert.deepEqual(parseRoute("#/pipeline?tab=setup"), { page: "settings", section: "processing" });
+});
+
+test("the library can open on one followed collection", () => {
+  const route: Route = { page: "library", collection: "src:1/x" };
+  assert.equal(formatRoute(route), "#/library?collection=src%3A1%2Fx");
+  assert.deepEqual(parseRoute(formatRoute(route)), route);
+  assert.deepEqual(parseRoute("#/library"), { page: "library" });
+  assert.equal(formatRoute({ page: "library" }), "#/library");
 });

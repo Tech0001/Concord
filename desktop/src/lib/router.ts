@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ChatChoice, SetupStep } from "../setup/types.ts";
 
-export const SETTINGS_SECTIONS = ["appearance", "ai", "youtube", "speech", "library", "about"] as const;
+export const SETTINGS_SECTIONS = ["appearance", "ai", "processing", "speech", "library", "about"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
-export const PIPELINE_TABS = ["queue", "batch", "sources", "setup"] as const;
-export type PipelineTab = (typeof PIPELINE_TABS)[number];
 const SETUP_STEPS: SetupStep[] = ["library", "speech", "recordings", "ai", "look", "ready"];
 /** Pages that setup can return to when it was opened from somewhere else. */
 const RETURNS = ["library", "ai", "search", "settings"] as const;
@@ -16,14 +14,14 @@ const defined = <T extends object>(value: T): T =>
   Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 
 export type Route =
-  | { page: "library" }
+  | { page: "library"; collection?: string }
+  | { page: "activity" }
   | { page: "recording"; id: string; at?: number }
   | { page: "search"; q: string }
   | { page: "documents"; id?: string }
   | { page: "speakers"; id?: string }
   | { page: "notes" }
   | { page: "map" }
-  | { page: "pipeline"; tab?: PipelineTab }
   | { page: "ai"; context?: "archive" | "help" | "none"; question?: string }
   | { page: "settings"; section?: SettingsSection }
   | { page: "setup"; step?: SetupStep; returnTo?: (typeof RETURNS)[number]; chat?: ChatChoice }
@@ -53,10 +51,18 @@ export function parseRoute(hash: string): Route {
       return tail ? { page: "documents", id: decodeURIComponent(tail) } : { page: "documents" };
     case "speakers":
       return tail ? { page: "speakers", id: decodeURIComponent(tail) } : { page: "speakers" };
-    case "settings":
-      return defined({ page: "settings", section: pick(SETTINGS_SECTIONS, params.get("section")) });
+    case "settings": {
+      // Download settings were called "youtube" before they joined processing.
+      const section = params.get("section") === "youtube" ? "processing" : params.get("section");
+      return defined({ page: "settings", section: pick(SETTINGS_SECTIONS, section) });
+    }
+    case "library":
+      return defined({ page: "library", collection: params.get("collection") || undefined });
+    // Pipeline became Activity; its settings tab moved to Settings.
     case "pipeline":
-      return defined({ page: "pipeline", tab: pick(PIPELINE_TABS, params.get("tab")) });
+      return params.get("tab") === "setup" ? { page: "settings", section: "processing" } : { page: "activity" };
+    case "activity":
+      return { page: "activity" };
     case "setup":
       return defined({
         page: "setup",
@@ -92,8 +98,8 @@ export function formatRoute(route: Route): string {
       return route.id ? `#/documents/${encodeURIComponent(route.id)}` : "#/documents";
     case "settings":
       return route.section ? `#/settings?section=${route.section}` : "#/settings";
-    case "pipeline":
-      return route.tab ? `#/pipeline?tab=${route.tab}` : "#/pipeline";
+    case "library":
+      return route.collection ? `#/library?${new URLSearchParams({ collection: route.collection })}` : "#/library";
     case "setup": {
       const params = new URLSearchParams();
       if (route.step) params.set("step", route.step);

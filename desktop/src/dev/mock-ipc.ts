@@ -4,6 +4,7 @@ import type { LibraryFilter, Note, ReviewState } from "../lib/types.ts";
 import * as fx from "./fixtures.ts";
 import {chatHandlers} from "./mock-chat.ts";
 import { setupHandlers, setupState } from "./mock-setup.ts";
+import { addingHandlers, overview as queueOverview, sources, withJobs } from "./mock-adding.ts";
 
 const delay = <T>(value: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(value), ms));
 const emptyLibrary = new URLSearchParams(location.search).has("empty-library") || !setupState.library.started || setupState.library.media === 0;
@@ -34,7 +35,8 @@ function library(f: LibraryFilter) {
       (!f.kind || m.kind === f.kind) &&
       (!f.transcribed || (f.transcribed === "yes") === !!m.transcript) &&
       (!f.starred || !!m.starred) &&
-      (!f.review || m.review_state === f.review),
+      (!f.review || m.review_state === f.review) &&
+      (!f.source || m.channel.endsWith(sources.find((s) => s.id === f.source)?.name ?? "\u0000")),
   );
   type M = (typeof items)[number];
   const by: Record<string, (a: M, b: M) => number> = {
@@ -47,7 +49,7 @@ function library(f: LibraryFilter) {
   };
   items = [...items].sort(by[f.sort] ?? by.newest);
   return {
-    items: items.slice(f.offset, f.offset + f.limit),
+    items: withJobs(items.slice(f.offset, f.offset + f.limit)),
     total: items.length,
     transcribed: items.filter((m) => m.transcript).length,
     channels: [...new Set(fx.mediaList.map((m) => m.channel))].sort().map((channel) => ({ channel })),
@@ -82,7 +84,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   recording_file_action: () => undefined,
   set_recording_title: ({id,title}) => { const m=find(id);if(m)m.title=title; },
   set_category: ({id,category}) => { const m=find(id); if(m) m.category=category; },
-  pipeline_state: () => ({ running: false, checking:false, overview:{dailyDownloads:9,dailyLimit:200,atDailyLimit:false}, sources:[{id:"mock-source",name:"Tuesday Study",kind:"youtube",url:"https://www.youtube.com/@TuesdayStudy",enabled:1,diarize:1,include_shorts:0,category:"personal",last_check:0,check_status:"complete",check_message:"2 new recordings queued",recordings:48}], config: {device:"auto",retries:2,retryMinutes:5,downloadDirectory:"",quality:"1080",codec:"any",audioLanguage:"en",audioOnly:false,speed:"conservative",rateMib:3,dailyLimit:200,checkMinutes:1440,automaticChecks:false,cookiesFile:"",cookiesBrowser:"",speechLanguage:"en-US"}, channels:[{channel:"Tuesday Study"}], jobs:fx.mediaList.slice(0,2).map((m,i)=>({id:`queue-${i}`,media_id:m.id,title:m.title,channel:m.channel,path:m.path,status:i?"retry":"queued",message:i?"The media drive disconnected. Reconnect it to resume.":"Waiting in the processing queue",kind:"transcribe",device:"auto",attempts:i,retry_at:Date.now()/1000+300,cancelled:0})) }),
+  pipeline_state: () => ({ running: queueOverview().running, checking:false, overview:queueOverview(), sources, config: {device:"auto",retries:2,retryMinutes:5,downloadDirectory:"",quality:"1080",codec:"any",audioLanguage:"en",audioOnly:false,speed:"conservative",rateMib:3,dailyLimit:200,checkMinutes:1440,automaticChecks:false,cookiesFile:"",cookiesBrowser:"",speechLanguage:"en-US"}, channels:[{channel:"Tuesday Study"}], jobs:addingHandlers.pipeline_state_jobs({}) }),
   pipeline_candidates: () => ({total:fx.mediaList.length,eligible:fx.mediaList.length,unavailable:0,alreadyQueued:0,hours:24,items:fx.mediaList}),
   pipeline_enqueue: () => ({added:2,ids:["test"],unavailable:0,alreadyQueued:0}),
   pipeline_action: () => undefined,
@@ -214,6 +216,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   import_media: () => 0,
   ...setupHandlers,
   ...chatHandlers,
+  ...addingHandlers,
 };
 
 export function installMock(): void {
@@ -238,6 +241,31 @@ export function installMock(): void {
     pickFiles: async () => [],
     pickSavePath: async ({ defaultPath }) => `/home/you/Exports/${defaultPath}`,
     version: async () => "0.2.0-dev",
+    pickFolder: async () => "/home/you/Recordings/Interviews",
+    // The browser has no file paths; dropped files get stand-in ones under ~/Recordings.
+    onDragDrop: async (handler) => {
+      let depth = 0;
+      const files = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
+      const enter = (e: DragEvent) => { if (files(e)) { e.preventDefault(); depth++; handler({ type: "enter", paths: [] }); } };
+      const over = (e: DragEvent) => { if (files(e)) e.preventDefault(); };
+      const leave = (e: DragEvent) => { if (files(e) && --depth <= 0) { depth = 0; handler({ type: "leave", paths: [] }); } };
+      const drop = (e: DragEvent) => {
+        if (!files(e)) return;
+        e.preventDefault();
+        depth = 0;
+        handler({ type: "drop", paths: [...(e.dataTransfer?.files ?? [])].map((f) => `/home/you/Recordings/${f.name}`) });
+      };
+      window.addEventListener("dragenter", enter);
+      window.addEventListener("dragover", over);
+      window.addEventListener("dragleave", leave);
+      window.addEventListener("drop", drop);
+      return () => {
+        window.removeEventListener("dragenter", enter);
+        window.removeEventListener("dragover", over);
+        window.removeEventListener("dragleave", leave);
+        window.removeEventListener("drop", drop);
+      };
+    },
   };
   setTransport(transport);
   Object.assign(window, { __concordMockApi: api });
