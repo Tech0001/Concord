@@ -21,7 +21,8 @@ const VIDEO_FILES = ["mp4", "mkv", "webm", "mov"];
 const MAX_LINKS = 50;
 
 /** The one way in: files, folders and links, with what will happen spelled out on the button. */
-export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () => void }) {
+/** `onClose` gets any drops or pastes that arrived while adding, so Add can open again with them. */
+export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: (leftover?: AddSeed[]) => void }) {
   const app = useApp();
   const toast = useToast();
   const [files, setFiles] = useState<DroppedFile[]>([]);
@@ -29,7 +30,7 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
   const [skipped, setSkipped] = useState<string[]>([]);
   const [text, setText] = useState("");
   const [previews, setPreviews] = useState<Record<string, LinkPreview>>({});
-  const [looking, setLooking] = useState(0);
+  const [retries, setRetries] = useState(0);
   const [follow, setFollow] = useState<Record<string, Follow>>({});
   const [category, setCategory] = useState<"personal" | "work">(app.category || "personal");
   const [diarize, setDiarize] = useState(true);
@@ -57,9 +58,13 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
     [toast],
   );
 
-  // Each drop, pick or paste while the dialog is open arrives as another seed.
+  // Each drop, pick or paste while the dialog is open arrives as another seed. While adding,
+  // they wait, and are handed back on close.
   const handled = useRef(0);
+  const seedsRef = useRef(seeds);
+  seedsRef.current = seeds;
   useEffect(() => {
+    if (busy) return;
     const fresh = seeds.slice(handled.current);
     handled.current = seeds.length;
     for (const seed of fresh) {
@@ -67,7 +72,7 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
       const pasted = seed.text?.trim();
       if (pasted) setText((old) => (old.trim() ? `${old.trimEnd()}\n${pasted}` : pasted));
     }
-  }, [seeds, addPaths]);
+  }, [seeds, addPaths, busy]);
 
   const links = useMemo(() => splitLinks(text).slice(0, MAX_LINKS), [text]);
   const wantsTool = needsDownloader(links);
@@ -115,7 +120,6 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
     if (!ask.length) return;
     const timer = window.setTimeout(async () => {
       ask.forEach((l) => asked.current.add(l));
-      setLooking((n) => n + 1);
       try {
         const items = await api.addPreviewLinks(ask);
         setPreviews((old) => ({ ...old, ...Object.fromEntries(items.map((i) => [i.input, i])) }));
@@ -124,19 +128,22 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
       } catch (e) {
         const failed = ask.map((l): LinkPreview => ({ input: l, kind: "error", error: errorMessage(e) }));
         setPreviews((old) => ({ ...old, ...Object.fromEntries(failed.map((i) => [i.input, i])) }));
-      } finally {
-        setLooking((n) => n - 1);
       }
     }, 400);
     return () => clearTimeout(timer);
-  }, [links, usable]);
+  }, [links, usable, retries]);
+  const retry = (link: string) => {
+    asked.current.delete(link);
+    setPreviews(({ [link]: _, ...rest }) => rest);
+    setRetries((n) => n + 1);
+  };
 
   const shown = links.map((link) => ({ link, preview: previews[link] }));
   const videos = shown.flatMap(({ preview: p }) => (p?.kind === "video" && !p.existing ? [p] : []));
   const channels = shown.flatMap(({ link, preview: p }) => ((p?.kind === "channel" || p?.kind === "playlist") && !p.following && follow[link]?.on ? [p] : []));
   const fromFolders = folders.reduce((n, f) => n + Math.max(0, (f.preview?.files ?? 0) - (f.preview?.existing ?? 0)), 0);
   const watching = folders.some((f) => f.watch && f.preview);
-  const waiting = looking > 0 || links.some((l) => !previews[l] && usable(l)) || folders.some((f) => !f.preview && !f.error) || installing;
+  const waiting = links.some((l) => !previews[l] && usable(l)) || folders.some((f) => !f.preview && !f.error) || installing;
   const label = addLabel({ recordings: files.length + fromFolders, videos: videos.length, follows: channels.map((c) => c.name), watching });
   const empty = !files.length && !folders.length && !links.length && !skipped.length;
   const toolPanel = wantsTool && !toolReady && !toolSkipped && !!tool;
@@ -170,8 +177,9 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
     const addedVideos: VideoItem[] = [];
     try {
       if (files.length) {
-        done.recordings += await api.importAndQueue(files.map((f) => f.path), category, app.device, diarize);
-        setFiles([]);
+        const submitted = new Set(files.map((f) => f.path));
+        done.recordings += await api.importAndQueue([...submitted], category, app.device, diarize);
+        setFiles((old) => old.filter((f) => !submitted.has(f.path)));
       }
       for (const folder of folders) {
         const fresh = (folder.preview?.files ?? 0) - (folder.preview?.existing ?? 0);
@@ -196,12 +204,14 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
       }
     } catch (e) {
       toast.error(e);
+      if (done.recordings || done.videos || done.follows.length || done.watching.length)
+        toast.info(`${addedMessage(done)}. The rest is still in Add to try again.`);
       setBusy(false);
       app.refresh();
       return;
     }
     setBusy(false);
-    onClose();
+    onClose(seedsRef.current.slice(handled.current));
     app.refresh();
     const onlyFollowing = !done.recordings && !done.videos && (done.follows.length + done.watching.length === 1);
     // Setup keeps its place; everywhere else, show where the new recordings are.
@@ -257,7 +267,7 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
             <Switch checked={diarize} onChange={setDiarize}>Identify speakers</Switch>
           </span>
           <span className="add-actions">
-            <Button variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
+            <Button variant="ghost" disabled={busy} onClick={() => onClose()}>Cancel</Button>
             <Button variant="primary" icon={busy || waiting ? LoaderCircle : undefined} className={busy || waiting ? "is-spinning" : undefined} disabled={busy || waiting || label === "Add"} onClick={() => void submit()}>
               {label}
             </Button>
@@ -308,6 +318,7 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
         <label className="add-links">
           <span>{empty ? "Or paste links" : "Links"}</span>
           <textarea
+            disabled={busy}
             rows={links.length > 1 ? 3 : 2}
             value={text}
             placeholder="A video, channel or playlist link, or several, one per line"
@@ -327,7 +338,7 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: () =>
                     <span>{shortLink(link)} needs the download tool, so it will be skipped. <button type="button" className="add-link-button" onClick={() => setToolSkipped(false)}>Set it up</button></span>
                   </li>
                 ) : (
-                  <LinkRow key={link} link={link} preview={preview} follow={follow[link]} onFollow={(next) => setFollow((old) => ({ ...old, [link]: next }))} />
+                  <LinkRow key={link} link={link} preview={preview} follow={follow[link]} onFollow={(next) => setFollow((old) => ({ ...old, [link]: next }))} onRetry={() => retry(link)} />
                 ),
               )}
             </ul>
@@ -378,7 +389,7 @@ function FolderCard({ folder, onWatch, onRemove }: { folder: FolderItem; onWatch
   );
 }
 
-function LinkRow({ link, preview, follow, onFollow }: { link: string; preview?: LinkPreview; follow?: Follow; onFollow: (next: Follow) => void }) {
+function LinkRow({ link, preview, follow, onFollow, onRetry }: { link: string; preview?: LinkPreview; follow?: Follow; onFollow: (next: Follow) => void; onRetry: () => void }) {
   if (!preview)
     return (
       <li className="add-row add-row-pending">
@@ -390,7 +401,10 @@ function LinkRow({ link, preview, follow, onFollow }: { link: string; preview?: 
     return (
       <li className="add-warning">
         <CircleAlert size={15} aria-hidden />
-        <span>{preview.kind === "unsupported" ? `${shortLink(link)} isn't a video, channel or playlist Concord can add. It will be skipped.` : `Couldn't read ${shortLink(link)}: ${preview.error}`}</span>
+        <span>
+          {preview.kind === "unsupported" ? `${shortLink(link)} isn't a video, channel or playlist Concord can add. It will be skipped.` : `Couldn't read ${shortLink(link)}: ${preview.error} `}
+          {preview.kind === "error" && <button type="button" className="add-link-button" onClick={onRetry}>Try again</button>}
+        </span>
       </li>
     );
   if (preview.kind === "video") {

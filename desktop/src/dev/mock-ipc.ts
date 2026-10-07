@@ -122,6 +122,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     legacyDatabase: "/home/you/.local/share/concord/pipeline.db",
   }),
   library: ({ filter }) => library({ ...DEFAULT_FILTER, ...filter }),
+  library_ids: ({ filter }) => library({ ...DEFAULT_FILTER, ...filter, offset: 0, limit: 100000 as never }).items.map((m) => m.id),
   recording: ({ id }) => fx.recordingFor(id),
   media_file: () => fx.silentWav(600),
   thumbnail_file: ({ id }) => fx.thumbnailFor(id),

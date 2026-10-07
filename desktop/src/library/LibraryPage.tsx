@@ -35,8 +35,13 @@ export function LibraryPage() {
   const phone = useMediaQuery(PHONE);
   const narrow = useMediaQuery(TABLET);
   const [stored, setFilter] = useStoredState<LibraryFilter>("library-filter-v1", DEFAULT_FILTER);
-  // A collection shows everything it holds, whichever archive category is in view.
-  const filter = collection ? { ...normalizeFilter(stored), category: "" as const, channel: "", source: collection } : { ...normalizeFilter(stored), category };
+  // A collection shows everything it holds, whichever archive category is in view, and keeps
+  // its own page so it doesn't open partway through.
+  const [collectionOffset, setCollectionOffset] = useState(0);
+  useEffect(() => setCollectionOffset(0), [collection]);
+  const filter = collection
+    ? { ...normalizeFilter(stored), category: "" as const, channel: "", source: collection, offset: collectionOffset }
+    : { ...normalizeFilter(stored), category };
   const lastCategory = useRef(category);
   useEffect(() => {
     if (lastCategory.current !== category) {
@@ -78,15 +83,22 @@ export function LibraryPage() {
   useEffect(() => () => void (savedScroll = window.scrollY), []);
 
   // Several recordings chosen at once, for transcribing again or moving between Personal and Work.
+  // The choice survives paging; `allMatching` stands for everything the filter matches.
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [allMatching, setAllMatching] = useState(false);
   const lastPicked = useRef<number | null>(null);
-  useEffect(() => {
+  const clearSelection = useCallback(() => {
     setSelected(new Set());
+    setAllMatching(false);
+  }, []);
+  const selectionKey = JSON.stringify({ ...filter, offset: 0 });
+  useEffect(() => {
+    clearSelection();
     lastPicked.current = null;
-  }, [key]);
+  }, [selectionKey, clearSelection]);
   useEffect(() => {
     if (!selected.size) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSelected(new Set());
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && clearSelection();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selected.size]);
@@ -94,6 +106,7 @@ export function LibraryPage() {
     const list = data?.items ?? [];
     const id = list[index]?.id;
     if (!id) return;
+    setAllMatching(false);
     setSelected((old) => {
       const next = new Set(old);
       const on = !old.has(id);
@@ -108,14 +121,15 @@ export function LibraryPage() {
   const transcribeSelected = async () => {
     setActing(true);
     try {
-      const result = await api.pipelineEnqueue({ ids: [...selected], device }, false);
+      const ids = allMatching ? await api.libraryIds(filter) : [...selected];
+      const result = await api.pipelineEnqueue({ ids, device }, false);
       const extra = [result.alreadyQueued && `${result.alreadyQueued} already queued`, result.unavailable && `${result.unavailable} unavailable`].filter(Boolean).join(" · ");
       const paused = queue && !queue.running;
       toast.success(
         `${count(result.added, "recording")} queued${extra ? ` · ${extra}` : ""}${paused ? " · processing is paused" : ""}`,
         paused ? { label: "Resume", run: () => void api.pipelineAction("start").then(refresh).catch(toast.error) } : undefined,
       );
-      setSelected(new Set());
+      clearSelection();
       refresh();
     } catch (e) {
       toast.error(e);
@@ -128,7 +142,7 @@ export function LibraryPage() {
     try {
       await Promise.all([...selected].map((id) => api.setCategory(id, to)));
       toast.success(`${count(selected.size, "recording")} moved to ${to === "work" ? "Work" : "Personal"}`);
-      setSelected(new Set());
+      clearSelection();
       refresh();
     } catch (e) {
       toast.error(e);
@@ -139,10 +153,17 @@ export function LibraryPage() {
 
   const update = useCallback(
     (patch: Partial<LibraryFilter>) => {
-      setFilter((prev) => ({ ...normalizeFilter(prev), ...patch, offset: "offset" in patch ? patch.offset! : 0 }));
+      if (collection) {
+        // Paging and sorting a collection leave the Library's own page alone.
+        const { offset, ...rest } = patch;
+        setCollectionOffset(offset ?? 0);
+        if (Object.keys(rest).length) setFilter((prev) => ({ ...normalizeFilter(prev), ...rest }));
+      } else {
+        setFilter((prev) => ({ ...normalizeFilter(prev), ...patch, offset: "offset" in patch ? patch.offset! : 0 }));
+      }
       window.scrollTo(0, 0);
     },
-    [setFilter],
+    [setFilter, collection],
   );
   const patchItem = (id: string, patch: Partial<Media>) =>
     setData((d) => d && { ...d, items: d.items.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
@@ -277,26 +298,33 @@ export function LibraryPage() {
       </div>
       {selected.size > 0 && (
         <div className="selection-bar" role="toolbar" aria-label="Selected recordings">
-          <span className="selection-bar-count">{selected.size} selected</span>
-          {selected.size < items.length && (
-            <Button size="sm" variant="ghost" onClick={() => setSelected(new Set(items.map((m) => m.id)))}>
-              Select all {items.length}
+          <span className="selection-bar-count">{(allMatching ? total : selected.size).toLocaleString("en-US")} selected</span>
+          {!allMatching && items.some((m) => !selected.has(m.id)) ? (
+            <Button size="sm" variant="ghost" onClick={() => setSelected((old) => new Set([...old, ...items.map((m) => m.id)]))}>
+              Select all {items.length} here
             </Button>
+          ) : (
+            !allMatching &&
+            total > selected.size && (
+              <Button size="sm" variant="ghost" onClick={() => setAllMatching(true)}>
+                Select all {total.toLocaleString("en-US")} matching
+              </Button>
+            )
           )}
           <Button size="sm" variant="primary" icon={RefreshCw} disabled={acting} onClick={() => void transcribeSelected()}>
             Transcribe
           </Button>
-          {items.some((m) => selected.has(m.id) && m.category !== "work") && (
+          {!allMatching && items.some((m) => selected.has(m.id) && m.category !== "work") && (
             <Button size="sm" disabled={acting} onClick={() => void moveSelected("work")}>
               Move to Work
             </Button>
           )}
-          {items.some((m) => selected.has(m.id) && m.category === "work") && (
+          {!allMatching && items.some((m) => selected.has(m.id) && m.category === "work") && (
             <Button size="sm" disabled={acting} onClick={() => void moveSelected("personal")}>
               Move to Personal
             </Button>
           )}
-          <IconButton size="sm" icon={X} label="Clear selection" onClick={() => setSelected(new Set())} />
+          <IconButton size="sm" icon={X} label="Clear selection" onClick={clearSelection} />
         </div>
       )}
       {data && !items.length && (blank && !collection ? (

@@ -245,6 +245,7 @@ function Shell() {
   );
   // Add collects every drop, pick and paste made while it is open.
   const [adding, setAdding] = useState<AddSeed[] | null>(null);
+  const [addKey, setAddKey] = useState(0);
   const openAdd = useCallback((seed: AddSeed = {}) => setAdding((old) => [...(old ?? []), seed]), []);
   const chooseToAdd = useCallback(
     async (kind: "files" | "folder") => {
@@ -345,7 +346,16 @@ function Shell() {
   const prompts = (
     <>
       {speechPrompt && <SpeechPrompt mediaId={speechPrompt} onClose={() => setSpeechPrompt(null)} />}
-      {adding && <AddDialog seeds={adding} onClose={() => setAdding(null)} />}
+      {adding && (
+        <AddDialog
+          key={addKey}
+          seeds={adding}
+          onClose={(leftover) => {
+            setAddKey((k) => k + 1);
+            setAdding(leftover?.length ? leftover : null);
+          }}
+        />
+      )}
       {dragging && <DropVeil />}
     </>
   );

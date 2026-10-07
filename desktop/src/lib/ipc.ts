@@ -193,6 +193,8 @@ export const api = {
   startLibrary: () => call<void>("start_library"),
   importLegacy: (path: string) => call<Overview>("import_legacy", { path }),
   library: (filter: LibraryFilter) => call<LibraryPage>("library", { filter }),
+  /** Every recording the filter matches, across all pages. */
+  libraryIds: (filter: LibraryFilter) => call<string[]>("library_ids", { filter }),
   recording: (id: string) => call<Recording>("recording", { id }),
   mediaUrl: (id: string) => call<string>("media_file", { id }),
   async thumbnail(id: string): Promise<string | null> {

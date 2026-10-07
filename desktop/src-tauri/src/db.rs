@@ -292,11 +292,11 @@ fn order_by(sort: &str) -> &'static str {
     }
 }
 
-pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
-    let db = open(root)?;
+/// The query and conditions a Library page uses, shared with choosing everything it matches.
+/// Parameters: ?1 query, ?2 LIKE pattern, ?3 channel, ?4 kind, ?5 transcribed, ?6 starred,
+/// ?7 review, ?8 category, ?9 status, ?10 source.
+fn library_query() -> (String, String) {
     let kind = kind_sql();
-    let query = f.query.trim();
-    let pattern = like_pattern(query);
     let cte = "WITH latest_job AS (
       SELECT j.media_id,j.status,j.message,p.kind,row_number() OVER (PARTITION BY j.media_id ORDER BY j.rowid DESC) AS position
       FROM jobs j LEFT JOIN pipeline_work p ON p.id=j.id
@@ -320,6 +320,14 @@ pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
          AND (?8 = '' OR m.category = ?8) AND (?9 = '' OR m.processing_status = ?9)
          AND (?10 = '' OR m.source_id = ?10)"
     );
+    (cte.to_owned(), filter)
+}
+pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
+    let db = open(root)?;
+    let kind = kind_sql();
+    let query = f.query.trim();
+    let pattern = like_pattern(query);
+    let (cte, filter) = library_query();
     let args: [&dyn rusqlite::ToSql; 10] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status, &f.source];
     let (total, transcribed): (i64, i64) = db.query_row(
         &format!("{cte} SELECT count(*), coalesce(sum(m.transcript IS NOT NULL), 0) FROM library_media m WHERE {filter}"),
@@ -346,6 +354,17 @@ pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
     }))
 }
 
+/// Every recording a Library filter matches, across all its pages, in the page order.
+pub fn library_ids(root: &Path, f: &LibraryFilter) -> Result<Vec<String>> {
+    let db = open(root)?;
+    let query = f.query.trim();
+    let pattern = like_pattern(query);
+    let (cte, filter) = library_query();
+    let args: [&dyn rusqlite::ToSql; 10] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status, &f.source];
+    let mut statement = db.prepare(&format!("{cte} SELECT m.id FROM library_media m WHERE {filter} ORDER BY {},m.id LIMIT 100000", order_by(&f.sort)))?;
+    let ids = statement.query_map(&args[..], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
 /// Named voices per recording, loudest first; the Library shows the top three.
 fn attach_speakers(db: &Connection, items: &mut [Value]) -> Result<()> {
     let ids: Vec<&str> = items.iter().filter_map(|m| m["id"].as_str()).collect();
@@ -830,6 +849,19 @@ mod tests {
         assert!(save_position(&root, "b", f64::NAN).is_err());
     }
 
+    #[test]
+    fn every_recording_matching_a_filter_can_be_chosen_at_once() {
+        let (_tmp, root) = library_fixture();
+        let all = library_ids(&root, &LibraryFilter { limit: 60, offset: 2, ..Default::default() }).unwrap();
+        assert_eq!(all.len(), 3, "paging doesn't limit the choice");
+        let page = ids(&library(&root, &LibraryFilter { sort: "title".into(), ..Default::default() }).unwrap());
+        let mut sorted = all.clone();
+        sorted.sort();
+        let mut expected: Vec<String> = page.iter().map(|s| s.to_string()).collect();
+        expected.sort();
+        assert_eq!(sorted, expected);
+        assert_eq!(library_ids(&root, &LibraryFilter { query: "no such recording".into(), ..Default::default() }).unwrap().len(), 0);
+    }
     #[test]
     fn the_library_can_show_one_followed_collection() {
         let (_tmp, root) = library_fixture();
