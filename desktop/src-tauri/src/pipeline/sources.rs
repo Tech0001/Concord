@@ -3,7 +3,7 @@ use crate::{db, runtime_log};
 use anyhow::{Context, Result};
 use rusqlite::{params, OptionalExtension};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -119,14 +119,18 @@ pub fn remove(root: &Path, control: &Control, id: &str) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
-fn source(root: &Path, id: &str) -> Result<Value> {
+pub fn source(root: &Path, id: &str) -> Result<Value> {
     db::rows(&db::open(root)?, "SELECT * FROM channels WHERE id=?1", [id])?
         .pop()
         .context("Source no longer exists")
 }
-fn files(folder: &Path, out: &mut Vec<PathBuf>, control: &Control) -> Result<()> {
+const MEDIA: [&str; 12] = ["mp4", "mkv", "webm", "mov", "ogg", "oga", "wav", "mp3", "m4a", "flac", "aac", "opus"];
+fn is_media(path: &Path) -> bool {
+    MEDIA.contains(&path.extension().unwrap_or_default().to_string_lossy().to_lowercase().as_str())
+}
+fn files(folder: &Path, out: &mut Vec<PathBuf>, cancel: &crate::speech::Control) -> Result<()> {
     for entry in std::fs::read_dir(folder)? {
-        anyhow::ensure!(!control.scanner.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
         let entry = entry?;
         let kind = entry.file_type()?;
         let path = entry.path();
@@ -134,20 +138,9 @@ fn files(folder: &Path, out: &mut Vec<PathBuf>, control: &Control) -> Result<()>
             continue;
         }
         if kind.is_dir() {
-            files(&path, out, control)?;
+            files(&path, out, cancel)?;
         } else if kind.is_file()
-            && [
-                "mp4", "mkv", "webm", "mov", "ogg", "oga", "wav", "mp3", "m4a", "flac", "aac",
-                "opus",
-            ]
-            .contains(
-                &path
-                    .extension()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .as_str(),
-            )
+            && is_media(&path)
             && entry.metadata()?.len() > 0
         {
             out.push(path.canonicalize()?);
@@ -156,9 +149,13 @@ fn files(folder: &Path, out: &mut Vec<PathBuf>, control: &Control) -> Result<()>
     Ok(())
 }
 pub(super) fn local(root: &Path, control: &Control, source: &Value) -> Result<usize> {
+    local_with(root, &control.scanner, source)
+}
+/// Scan a folder source with its own cancel switch, so a stopped check elsewhere can't stop it.
+fn local_with(root: &Path, cancel: &crate::speech::Control, source: &Value) -> Result<usize> {
     let folder = Path::new(source["url"].as_str().unwrap());
     let mut paths = vec![];
-    files(folder, &mut paths, control)?;
+    files(folder, &mut paths, cancel)?;
     paths.sort();
     let found = paths.len();
     runtime_log::debug("Source scan", &format!("Found {found} supported media files (recursive, hidden files and symlinks excluded)"));
@@ -308,7 +305,11 @@ fn youtube(root: &Path, control: &Control, source: &Value, full: bool) -> Result
     // Flat playlist dates can be absent. Reversing YouTube's newest-first listing
     // processes older entries first without inventing dates; download fills real metadata.
     entries.reverse();
-    let added = ingest(root, source, &entries, &cfg.device)?;
+    let added = if source["since"].as_i64().unwrap_or(0) > 0 {
+        follow_ingest(root, source, &entries, &cfg.device)?
+    } else {
+        ingest(root, source, &entries, &cfg.device)?
+    };
     if !failures.is_empty() {
         anyhow::bail!(
             "Queued {added} recordings; some source tabs could not be checked: {}",
@@ -316,6 +317,163 @@ fn youtube(root: &Path, control: &Control, source: &Value, full: bool) -> Result
         );
     }
     Ok(added)
+}
+/// Mark a source as followed from now on: only what appears after this moment is added.
+pub fn start_following(root: &Path, id: &str) -> Result<()> {
+    db::open(root)?.execute("UPDATE channels SET since=?1 WHERE id=?2", params![now(), id])?;
+    Ok(())
+}
+/// For a followed channel, the first check records what already exists without adding it;
+/// later checks add only videos not seen before.
+pub fn follow_ingest(root: &Path, source: &Value, entries: &[Value], device: &str) -> Result<usize> {
+    let id = source["id"].as_str().context("Source missing")?;
+    let db = db::open(root)?;
+    let baseline: bool = !db.query_row("SELECT EXISTS(SELECT 1 FROM source_seen WHERE source_id=?1)", [id], |r| r.get(0))?;
+    let mut fresh = vec![];
+    for e in entries {
+        let Some(video) = download::video_id(e) else { continue };
+        let seen: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source_seen WHERE source_id=?1 AND video_id=?2)", params![id, video], |r| r.get(0))?;
+        if !seen && !baseline {
+            fresh.push(e.clone());
+        }
+    }
+    drop(db);
+    let added = if fresh.is_empty() { 0 } else { ingest(root, source, &fresh, device)? };
+    let db = db::open(root)?;
+    for e in entries {
+        if let Some(video) = download::video_id(e) {
+            db.execute("INSERT OR IGNORE INTO source_seen(source_id,video_id) VALUES (?1,?2)", params![id, video])?;
+        }
+    }
+    // An empty first listing still marks the follow as started.
+    if baseline && entries.is_empty() {
+        db.execute("INSERT OR IGNORE INTO source_seen(source_id,video_id) VALUES (?1,'')", [id])?;
+    }
+    Ok(added)
+}
+fn folder_name(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.is_empty()).unwrap_or_else(|| "Recordings".into())
+}
+/// What adding a folder would bring in: its recordings and how many are already in the library.
+pub fn folder_preview(root: &Path, folder: &Path) -> Result<Value> {
+    anyhow::ensure!(folder.is_dir(), "That folder is unavailable");
+    let mut paths = vec![];
+    files(folder, &mut paths, &crate::speech::Control::default())?;
+    let db = db::open(root)?;
+    let mut existing = 0;
+    let mut bytes = 0u64;
+    for path in &paths {
+        bytes += std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        if db.query_row("SELECT EXISTS(SELECT 1 FROM media WHERE path=?1)", [path.to_string_lossy().as_ref()], |r| r.get::<_, bool>(0))? {
+            existing += 1;
+        }
+    }
+    Ok(json!({"name": folder_name(folder), "path": folder, "files": paths.len(), "existing": existing, "bytes": bytes}))
+}
+/// Add a folder's recordings now. With `watch`, the folder is followed for new recordings.
+pub fn add_folder(root: &Path, control: &Control, folder: &Path, watch: bool, category: &str, diarize: bool) -> Result<Value> {
+    let name = unique_name(root, &folder_name(folder))?;
+    let id = save(root, control, &Source {
+        id: None,
+        name: name.clone(),
+        kind: "folder".into(),
+        url: folder.to_string_lossy().into_owned(),
+        enabled: watch,
+        diarize,
+        include_shorts: false,
+        category: category.into(),
+    })?;
+    if watch {
+        start_following(root, &id)?;
+    }
+    let added = local_with(root, &crate::speech::Control::default(), &source(root, &id)?)?;
+    db::open(root)?.execute(
+        "UPDATE channels SET check_status='complete',check_message=?1,last_check=?2 WHERE id=?3",
+        params![format!("{added} new recordings queued"), now(), id],
+    )?;
+    Ok(json!({"id": id, "name": name, "added": added}))
+}
+/// A source name not already used, adding " (2)" and so on when needed.
+fn unique_name(root: &Path, base: &str) -> Result<String> {
+    let base = if base.trim().is_empty() { "Recordings" } else { base.trim() };
+    let taken: Vec<String> = list(root)?.iter().filter_map(|s| s["name"].as_str().map(str::to_lowercase)).collect();
+    Ok((1..)
+        .map(|n| if n == 1 { base.to_owned() } else { format!("{base} ({n})") })
+        .find(|n| !taken.contains(&n.to_lowercase()))
+        .unwrap())
+}
+/// Follow a channel or playlist for new videos. Following one already in the library reuses its
+/// collection and updates its options.
+pub fn follow(root: &Path, control: &Control, url: &str, name: &str, category: &str, diarize: bool, shorts: bool) -> Result<String> {
+    let address = download::youtube_url(url)?;
+    let key = |u: &str| u.trim_end_matches('/').trim_end_matches("/videos").to_lowercase();
+    let existing = list(root)?
+        .into_iter()
+        .find(|s| s["kind"] == "youtube" && key(s["url"].as_str().unwrap_or("")) == key(address.as_str()));
+    let id = match existing {
+        Some(s) => {
+            let id = s["id"].as_str().context("Source missing")?.to_owned();
+            save(root, control, &Source {
+                id: Some(id.clone()),
+                name: s["name"].as_str().unwrap_or(name).to_owned(),
+                kind: "youtube".into(),
+                url: s["url"].as_str().unwrap_or(url).to_owned(),
+                enabled: true,
+                diarize,
+                include_shorts: shorts,
+                category: category.into(),
+            })?;
+            if s["since"].as_i64().unwrap_or(0) == 0 {
+                start_following(root, &id)?;
+            }
+            id
+        }
+        None => {
+            let id = save(root, control, &Source {
+                id: None,
+                name: unique_name(root, name)?,
+                kind: "youtube".into(),
+                url: address.to_string(),
+                enabled: true,
+                diarize,
+                include_shorts: shorts,
+                category: category.into(),
+            })?;
+            start_following(root, &id)?;
+            id
+        }
+    };
+    Ok(id)
+}
+/// Sort dropped paths into recordings, folders, and what can't be added.
+pub fn inspect_paths(paths: &[String]) -> Value {
+    let (mut found, mut folders, mut skipped) = (vec![], vec![], vec![]);
+    for raw in paths {
+        let path = Path::new(raw);
+        if path.is_dir() {
+            folders.push(json!({"path": path, "name": folder_name(path)}));
+        } else if path.is_file() && is_media(path) {
+            let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            found.push(json!({"path": path, "name": path.file_name().map(|n| n.to_string_lossy()), "bytes": bytes}));
+        } else {
+            skipped.push(json!(raw));
+        }
+    }
+    json!({"files": found, "folders": folders, "skipped": skipped})
+}
+/// The next source to check: followed sources always, older subscriptions only with the
+/// automatic-checks setting, each once per interval.
+pub fn due(sources: &[Value], cfg: &super::Config, at: i64, youtube_ready: impl Fn(&Value) -> bool) -> Option<String> {
+    sources
+        .iter()
+        .find(|s| {
+            s["enabled"] == 1
+                && s["kind"] != "collection"
+                && (cfg.automatic_checks || s["since"].as_i64().unwrap_or(0) > 0)
+                && (s["kind"] != "youtube" || youtube_ready(s))
+                && s["last_check"].as_i64().unwrap_or(0) + i64::from(cfg.check_minutes) * 60 <= at
+        })
+        .and_then(|s| s["id"].as_str().map(str::to_owned))
 }
 pub fn start(root: PathBuf, control: Arc<Control>, id: Option<String>, full: bool) -> Result<()> {
     start_filtered(root,control,id,full,String::new())
@@ -400,24 +558,11 @@ pub fn monitor(root: PathBuf, control: Arc<Control>) {
             if !control.checking.load(Ordering::SeqCst) {
                 let result = (|| -> Result<()> {
                     let cfg = config(&root)?;
-                    if !cfg.automatic_checks || !running(&db::open(&root)?)? {
+                    if !running(&db::open(&root)?)? {
                         return Ok(());
                     }
-                    let due = list(&root)?.into_iter().find(|s| {
-                        s["enabled"] == 1
-                            && s["kind"] != "collection"
-                            && (s["kind"] != "youtube" || super::downloader::available(&root))
-                            && s["last_check"].as_i64().unwrap_or(0)
-                                + i64::from(cfg.check_minutes) * 60
-                                <= now()
-                    });
-                    if let Some(s) = due {
-                        start(
-                            root.clone(),
-                            control.clone(),
-                            Some(s["id"].as_str().unwrap().into()),
-                            false,
-                        )?;
+                    if let Some(id) = due(&list(&root)?, &cfg, now(), |_| super::downloader::available(&root)) {
+                        start(root.clone(), control.clone(), Some(id), false)?;
                     }
                     Ok(())
                 })();

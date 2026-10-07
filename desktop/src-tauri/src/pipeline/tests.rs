@@ -28,6 +28,8 @@ fn batch_is_deduplicated_pausable_and_preserves_previous_recordings() {
     let preview = candidates(root, &batch).unwrap();
     assert_eq!(preview["eligible"], 2);
     assert_eq!(preview["unavailable"], 1);
+    // Work runs by itself; only an explicit pause holds it.
+    action(root, &c, "pause", None).unwrap();
     let result = enqueue(root, &c, &batch, false).unwrap();
     assert_eq!(result["added"], 2);
     assert_eq!(result["unavailable"], 1);
@@ -254,7 +256,8 @@ fn folder_sources_preserve_files_metadata_and_labels_when_edited_or_removed() {
     assert_eq!(sources::local(root, &c, &source).unwrap(), 1);
     assert_eq!(sources::local(root, &c, &source).unwrap(), 0);
     let state = snapshot(root).unwrap();
-    assert_eq!(state["running"], false);
+    // Found recordings are processed without a separate start step.
+    assert_eq!(state["running"], true);
     assert_eq!(state["jobs"][0]["diarize"], 0);
     let media = state["jobs"][0]["media_id"].as_str().unwrap();
     let item = db::media(root, media).unwrap();
@@ -511,4 +514,158 @@ fn removed_recordings_stay_out_of_folder_and_youtube_scans() {
     let id=serde_json::to_string(&("yt","AbCdEfGhI12")).unwrap();
     crate::media_files::remove(root,&c,&ai,&id).unwrap();
     assert_eq!(sources::ingest(root,&remote,&entries,"cpu").unwrap(),0);
+}
+#[test]
+fn added_work_runs_without_a_start_step_until_paused() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let file = root.join("new.m4a");
+    std::fs::write(&file, b"fixture").unwrap();
+    {
+        let db = db::open(root).unwrap();
+        queue::insert(&db, "one", "one", "transcribe", "auto", true).unwrap();
+    }
+    assert!(queue::claim(root, 1).unwrap().is_some());
+    action(root, &c, "pause", None).unwrap();
+    queue::insert(&db::open(root).unwrap(), "two", "two", "transcribe", "auto", true).unwrap();
+    assert!(queue::claim(root, 2).unwrap().is_none());
+}
+fn channel(root: &Path, c: &Control) -> Value {
+    let id = sources::save(root, c, &sources::Source {
+        id: None,
+        name: "Tuesday Study".into(),
+        kind: "youtube".into(),
+        url: "https://www.youtube.com/@TuesdayStudy".into(),
+        enabled: true,
+        diarize: true,
+        include_shorts: false,
+        category: "personal".into(),
+    })
+    .unwrap();
+    sources::start_following(root, &id).unwrap();
+    sources::source(root, &id).unwrap()
+}
+#[test]
+fn following_a_channel_adds_only_videos_posted_after_following() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let source = channel(root, &c);
+    assert!(source["since"].as_i64().unwrap() > 0);
+    let older = vec![
+        serde_json::json!({"id": "aaaaaaaaaaa", "title": "Week 4"}),
+        serde_json::json!({"id": "bbbbbbbbbbb", "title": "Week 5"}),
+    ];
+    // The first check after following only records what already exists.
+    assert_eq!(sources::follow_ingest(root, &source, &older, "auto").unwrap(), 0);
+    let mut newer = vec![serde_json::json!({"id": "ccccccccccc", "title": "Week 6"})];
+    newer.extend(older);
+    assert_eq!(sources::follow_ingest(root, &source, &newer, "auto").unwrap(), 1);
+    assert_eq!(sources::follow_ingest(root, &source, &newer, "auto").unwrap(), 0);
+    let titles: Vec<String> = db::rows(&db::open(root).unwrap(), "SELECT title FROM media WHERE source_id=?1", [source["id"].as_str()]).unwrap()
+        .iter().map(|r| r["title"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(titles, ["Week 6"]);
+}
+#[test]
+fn video_links_are_added_once_and_queued_for_download() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let video = links::Video {
+        url: "https://www.youtube.com/watch?v=ccccccccccc".into(),
+        id: "ccccccccccc".into(),
+        title: "Community garden interview".into(),
+        channel: "Tuesday Study".into(),
+        channel_url: Some("https://www.youtube.com/@TuesdayStudy".into()),
+        duration: 3151.0,
+        date: "20260914".into(),
+    };
+    let first = links::add_videos(root, &c, std::slice::from_ref(&video), "work", true, "auto").unwrap();
+    assert_eq!((first["added"].as_u64(), first["existing"].as_u64()), (Some(1), Some(0)));
+    let again = links::add_videos(root, &c, &[video], "work", true, "auto").unwrap();
+    assert_eq!((again["added"].as_u64(), again["existing"].as_u64()), (Some(0), Some(1)));
+    let rows = db::rows(&db::open(root).unwrap(), "SELECT m.title,m.channel,m.category,m.url,p.kind FROM media m JOIN jobs j ON j.media_id=m.id JOIN pipeline_work p ON p.id=j.id WHERE m.url LIKE '%ccccccccccc'", []).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["channel"], "Tuesday Study");
+    assert_eq!(rows[0]["category"], "work");
+    assert_eq!(rows[0]["kind"], "download");
+}
+#[test]
+fn a_folder_is_added_once_with_or_without_watching() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let folder = root.join("Interviews");
+    std::fs::create_dir_all(folder.join("2025")).unwrap();
+    std::fs::write(folder.join("a.m4a"), b"audio").unwrap();
+    std::fs::write(folder.join("2025/b.mp4"), b"video").unwrap();
+    std::fs::write(folder.join("notes.txt"), b"text").unwrap();
+    let preview = sources::folder_preview(root, &folder).unwrap();
+    assert_eq!((preview["name"].as_str(), preview["files"].as_u64(), preview["existing"].as_u64()), (Some("Interviews"), Some(2), Some(0)));
+    let added = sources::add_folder(root, &c, &folder, false, "work", true).unwrap();
+    assert_eq!(added["added"], 2);
+    let source = sources::source(root, added["id"].as_str().unwrap()).unwrap();
+    assert_eq!((source["enabled"].as_i64(), source["since"].as_i64()), (Some(0), Some(0)));
+    let channels: Vec<String> = db::rows(&db::open(root).unwrap(), "SELECT DISTINCT channel FROM media WHERE source_id=?1", [added["id"].as_str()]).unwrap()
+        .iter().map(|r| r["channel"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(channels, ["Interviews"]);
+    let other = root.join("Sermons");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("c.wav"), b"audio").unwrap();
+    let watched = sources::add_folder(root, &c, &other, true, "personal", true).unwrap();
+    let source = sources::source(root, watched["id"].as_str().unwrap()).unwrap();
+    assert_eq!(source["enabled"], 1);
+    assert!(source["since"].as_i64().unwrap() > 0);
+}
+#[test]
+fn followed_sources_are_checked_on_schedule_without_the_old_toggle() {
+    let cfg = Config { automatic_checks: false, check_minutes: 60, ..Default::default() };
+    let followed = serde_json::json!({"id": "f", "kind": "youtube", "enabled": 1, "since": 100, "last_check": 0});
+    let legacy = serde_json::json!({"id": "l", "kind": "youtube", "enabled": 1, "since": 0, "last_check": 0});
+    let fresh = serde_json::json!({"id": "n", "kind": "folder", "enabled": 1, "since": 100, "last_check": 10_000});
+    let stopped = serde_json::json!({"id": "s", "kind": "folder", "enabled": 0, "since": 100, "last_check": 0});
+    let all = [legacy.clone(), stopped, fresh, followed];
+    assert_eq!(sources::due(&all, &cfg, 10_500, |_| true).as_deref(), Some("f"));
+    assert_eq!(sources::due(std::slice::from_ref(&legacy), &cfg, 10_500, |_| true), None);
+    let on = Config { automatic_checks: true, ..cfg };
+    assert_eq!(sources::due(&[legacy], &on, 10_500, |_| true).as_deref(), Some("l"));
+}
+#[test]
+fn library_items_carry_their_job_progress() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    enqueue(root, &c, &Batch { ids: vec!["one".into()], ..Default::default() }, true).unwrap();
+    db::open(root).unwrap().execute("UPDATE jobs SET message='45.2% · 3MiB/s · 00:20 remaining' WHERE media_id='one'", []).unwrap();
+    let page = db::library(root, &db::LibraryFilter::default()).unwrap();
+    let one = page["items"].as_array().unwrap().iter().find(|m| m["id"] == "one").unwrap().clone();
+    assert_eq!(one["job_message"], "45.2% · 3MiB/s · 00:20 remaining");
+    assert_eq!(one["job_kind"], "transcribe");
+}
+#[test]
+fn dropped_paths_are_sorted_into_recordings_and_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("Interviews");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("a.m4a"), b"audio").unwrap();
+    let file = dir.path().join("talk.mp3");
+    std::fs::write(&file, b"audio").unwrap();
+    let note = dir.path().join("notes.txt");
+    std::fs::write(&note, b"text").unwrap();
+    let paths = [file, folder.clone(), note].map(|p| p.to_string_lossy().into_owned());
+    let found = sources::inspect_paths(&paths);
+    assert_eq!(found["files"].as_array().unwrap().len(), 1);
+    assert_eq!(found["folders"][0]["path"], folder.to_string_lossy().as_ref());
+    assert_eq!(found["skipped"].as_array().unwrap().len(), 1);
+}
+#[test]
+fn following_the_same_channel_twice_reuses_its_collection() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let first = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudy", "Tuesday Study", "personal", true, false).unwrap();
+    let again = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudy/videos", "Tuesday Study", "work", true, false).unwrap();
+    assert_eq!(first, again);
+    let source = sources::source(root, &first).unwrap();
+    assert_eq!((source["enabled"].as_i64(), source["category"].as_str()), (Some(1), Some("work")));
+    assert!(source["since"].as_i64().unwrap() > 0);
+    // A different channel with the same display name still gets its own collection.
+    let other = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudyClips", "Tuesday Study", "personal", true, false).unwrap();
+    assert_ne!(other, first);
+    assert_eq!(sources::source(root, &other).unwrap()["name"], "Tuesday Study (2)");
 }

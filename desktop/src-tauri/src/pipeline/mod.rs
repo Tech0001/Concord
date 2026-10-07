@@ -1,6 +1,7 @@
 //! Durable, single-recording processing. Queue state survives application restarts.
 pub mod download;
 pub mod downloader;
+pub mod links;
 mod queue;
 pub mod sources;
 pub(crate) mod subprocess;
@@ -48,7 +49,7 @@ impl Default for Config {
             speed: "conservative".into(),
             rate_mib: 3,
             daily_limit: 200,
-            check_minutes: 1440,
+            check_minutes: 360,
             automatic_checks: false,
             cookies_file: String::new(),
             cookies_browser: String::new(),
@@ -175,6 +176,7 @@ pub fn migrate_sources(db: &Connection) -> Result<()> {
         ("channels", "check_message", "TEXT NOT NULL DEFAULT ''"),
         ("channels", "check_status", "TEXT NOT NULL DEFAULT ''"),
         ("pipeline_work", "diarize", "INTEGER NOT NULL DEFAULT 1"),
+        ("channels", "since", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         let exists: bool = db.query_row(
             &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1)"),
@@ -185,14 +187,16 @@ pub fn migrate_sources(db: &Connection) -> Result<()> {
             db.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {name} {kind}"))?;
         }
     }
-    db.execute_batch("CREATE TABLE IF NOT EXISTS pipeline_downloads(id INTEGER PRIMARY KEY,job_id TEXT NOT NULL,day TEXT NOT NULL);
+    db.execute_batch("CREATE TABLE IF NOT EXISTS source_seen(source_id TEXT NOT NULL,video_id TEXT NOT NULL,PRIMARY KEY(source_id,video_id));
+        CREATE TABLE IF NOT EXISTS pipeline_downloads(id INTEGER PRIMARY KEY,job_id TEXT NOT NULL,day TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS pipeline_download_day ON pipeline_downloads(day);
         UPDATE channels SET kind='collection' WHERE url='' AND kind='youtube';")?;
     Ok(())
 }
 fn running(db: &Connection) -> Result<bool> {
     Ok(db.query_row(
-        "SELECT COALESCE((SELECT value FROM settings WHERE key='pipeline.running'),'false')='true'",
+        // Work runs unless someone paused it.
+        "SELECT COALESCE((SELECT value FROM settings WHERE key='pipeline.running'),'true')='true'",
         [],
         |r| r.get(0),
     )?)

@@ -92,6 +92,44 @@ async fn pipeline_check(state:State<'_,AppState>,id:Option<String>,full:bool,cat
 #[tauri::command]
 fn pipeline_stop_check(state:State<'_,AppState>){state.pipeline.scanner.cancel();}
 #[tauri::command]
+async fn add_inspect_paths(paths: Vec<String>) -> Result<Value, String> {
+    work(move || Ok(pipeline::sources::inspect_paths(&paths))).await
+}
+#[tauri::command]
+async fn add_folder_preview(state: State<'_, AppState>, path: String) -> Result<Value, String> {
+    let root = state.root.clone();
+    work(move || pipeline::sources::folder_preview(&root, Path::new(&path))).await
+}
+#[tauri::command]
+async fn add_folder(state: State<'_, AppState>, path: String, watch: bool, category: String, diarize: bool) -> Result<Value, String> {
+    let (root, control) = (state.root.clone(), state.pipeline.clone());
+    work(move || pipeline::sources::add_folder(&root, &control, Path::new(&path), watch, &category, diarize)).await
+}
+#[tauri::command]
+async fn add_preview_links(state: State<'_, AppState>, urls: Vec<String>) -> Result<Vec<Value>, String> {
+    let root = state.root.clone();
+    work(move || pipeline::links::preview(&root, &urls)).await
+}
+#[tauri::command]
+async fn add_videos(state: State<'_, AppState>, videos: Vec<pipeline::links::Video>, category: String, diarize: bool, device: String) -> Result<Value, String> {
+    let (root, control) = (state.root.clone(), state.pipeline.clone());
+    work(move || pipeline::links::add_videos(&root, &control, &videos, &category, diarize, &device)).await
+}
+/// Follow a channel, then check it once so the videos already there are recorded as seen.
+#[tauri::command]
+async fn add_follow(state: State<'_, AppState>, url: String, name: String, category: String, diarize: bool, include_shorts: bool) -> Result<String, String> {
+    let (root, control) = (state.root.clone(), state.pipeline.clone());
+    work(move || {
+        let id = pipeline::sources::follow(&root, &control, &url, &name, &category, diarize, include_shorts)?;
+        if let Err(e) = pipeline::sources::start(root.clone(), control.clone(), Some(id.clone()), false) {
+            // The scheduler checks it shortly instead.
+            runtime_log::push("info", &format!("First check for a followed source is waiting: {e:#}"));
+        }
+        Ok(id)
+    })
+    .await
+}
+#[tauri::command]
 async fn pipeline_tools(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();work(move||Ok(pipeline::download::status(&root))).await}
 #[tauri::command]
 async fn downloader_status(state:State<'_,AppState>)->Result<Value,String>{let root=state.root.clone();let c=state.pipeline.downloader.clone();work(move||pipeline::downloader::status(&root,&c)).await}
@@ -707,7 +745,7 @@ pub fn run() {
         tauri::WebviewWindowBuilder::from_config(app, window_config)?.enable_clipboard_access().build()?;
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![popout::popout_state,popout::popout_open,popout::popout_update,popout::popout_command,popout::popout_close,popout::popout_focus,tools_state,tools_extract,tools_cancel_extract,recorder_live_start,recorder_live_stop,recorder_inputs,recorder_start,recorder_stop,recorder_save,recorder_discard,recorder_preview,recording_file_info,recording_file_action,remove_recording,set_recording_title,speech_setup_status,speech_setup_start,speech_setup_cancel,import_and_queue,setup_status,setup_save,setup_preflight,setup_probe_local,speech_device,set_speech_device,ai_builtin_status,ai_builtin_prepare,ai_builtin_cancel,pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,downloader_status,downloader_install,downloader_enable,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,pipeline_ai_state,pipeline_ai_save,pipeline_ai_action,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,chatgpt_status,chatgpt_start,chatgpt_cancel,chatgpt_sign_out,chatgpt_acknowledge,ai_config,ai_save_provider,ai_try_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_help_context,ai_help_prompt,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary_state,ai_summary_start,ai_summary_cancel,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,start_library,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_category,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
+      .invoke_handler(tauri::generate_handler![popout::popout_state,popout::popout_open,popout::popout_update,popout::popout_command,popout::popout_close,popout::popout_focus,tools_state,tools_extract,tools_cancel_extract,recorder_live_start,recorder_live_stop,recorder_inputs,recorder_start,recorder_stop,recorder_save,recorder_discard,recorder_preview,recording_file_info,recording_file_action,remove_recording,set_recording_title,speech_setup_status,speech_setup_start,speech_setup_cancel,import_and_queue,setup_status,setup_save,setup_preflight,setup_probe_local,speech_device,set_speech_device,ai_builtin_status,ai_builtin_prepare,ai_builtin_cancel,add_inspect_paths,add_folder_preview,add_folder,add_preview_links,add_videos,add_follow,pipeline_save_source,pipeline_remove_source,pipeline_check,pipeline_stop_check,downloader_status,downloader_install,downloader_enable,pipeline_tools,pipeline_state,pipeline_candidates,pipeline_enqueue,pipeline_action,pipeline_save_config,pipeline_ai_state,pipeline_ai_save,pipeline_ai_action,documents_state,documents_sync,add_document_root,edit_document_root,edit_document,document_asset,document_link,open_external,archive_status,archive_jobs,archive_audit,archive_last_audit,archive_repair,archive_cancel_repair,archive_verify_embedding,archive_create_backup,archive_validate_backup,archive_stage_restore,archive_cancel_restore,runtime_logs,chatgpt_status,chatgpt_start,chatgpt_cancel,chatgpt_sign_out,chatgpt_acknowledge,ai_config,ai_save_provider,ai_try_provider,ai_models,ai_check,ai_status,ai_index,ai_cancel_index,ai_clear_index,research_search,search_filters,ai_help_context,ai_help_prompt,ai_conversations,ai_create_chat,ai_read_chat,ai_edit_chat,ai_send,ai_cancel_chat,ai_star_message,ai_summary_state,ai_summary_start,ai_summary_cancel,ai_suggest_tags,unidentified_speakers,edit_speaker,delete_speaker,merge_speakers,rescan_speakers,label_speakers,overview,start_library,import_legacy,library,recording,media_file,thumbnail_file,search,palette,set_category,set_starred,set_review,save_position,speakers,speaker_appearances,set_speaker_notes,assign_speaker,import_media,speech_status,transcribe,cancel_transcription,jobs,clear_jobs,research,delete_note,set_note_link,replace_note_link,rename_note_tag,save_map_layout,document,import_documents,save_note,link_notes,transcript_text,export_transcript,export_media,cancel_export,waveform,reveal_path])
       .build(tauri::generate_context!()).expect("Cannot launch Concord Next")
       .run(move|app,event|{if matches!(event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit){closing.cancel();if let Some(state)=app.try_state::<AppState>() {tools::live_transcript::stop(&state.live_transcript);state.recorder.closing.store(true,Ordering::SeqCst);tools::recorder::stop(&state.recorder);state.extraction.cancel.store(true,Ordering::SeqCst);state.export.cancel.store(true,Ordering::SeqCst);state.pipeline.shutdown();ai::automation::shutdown(&state.ai);state.speech_setup.process.cancel();ai::chatgpt::cancel(&state.ai.chatgpt);state.ai.cancel_index.store(true,Ordering::SeqCst);state.maintenance.cancel.store(true,Ordering::SeqCst);for task in state.ai.summaries.lock().unwrap().values(){task.cancel.store(true,Ordering::SeqCst);}for cancel in state.ai.chats.lock().unwrap().values(){cancel.store(true,Ordering::SeqCst);}}ai::builtin::stop();}
         if matches!(event, tauri::RunEvent::Exit) {

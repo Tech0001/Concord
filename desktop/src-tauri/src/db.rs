@@ -289,9 +289,11 @@ pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
     let query = f.query.trim();
     let pattern = like_pattern(query);
     let cte = "WITH latest_job AS (
-      SELECT media_id,status,row_number() OVER (PARTITION BY media_id ORDER BY rowid DESC) AS position FROM jobs
+      SELECT j.media_id,j.status,j.message,p.kind,row_number() OVER (PARTITION BY j.media_id ORDER BY j.rowid DESC) AS position
+      FROM jobs j LEFT JOIN pipeline_work p ON p.id=j.id
     ), library_media AS (
-      SELECT m.*, CASE WHEN m.status='archived' THEN 'archived' ELSE CASE j.status WHEN 'running' THEN 'processing' WHEN 'queued' THEN 'pending'
+      SELECT m.*, CASE WHEN j.status IN ('running','queued','retry','waiting_live','failed') THEN j.message END AS job_message,
+        CASE WHEN j.status IN ('running','queued','retry','waiting_live','failed') THEN j.kind END AS job_kind, CASE WHEN m.status='archived' THEN 'archived' ELSE CASE j.status WHEN 'running' THEN 'processing' WHEN 'queued' THEN 'pending'
         WHEN 'retry' THEN 'pending' WHEN 'waiting_live' THEN 'live' WHEN 'failed' THEN 'failed'
         WHEN 'cancelled' THEN 'cancelled' ELSE CASE m.status
           WHEN 'live' THEN 'live' WHEN 'waiting_live' THEN 'live' WHEN 'failed' THEN 'failed'
