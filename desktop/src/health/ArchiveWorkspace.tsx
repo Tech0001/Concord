@@ -369,10 +369,10 @@ export function ArchiveWorkspace({
               </p>
               <span>
                 {status.pipeline?.active
-                  ? "Pipeline processing"
+                  ? "Processing recordings"
                   : status.pipeline?.running
-                    ? "Pipeline ready"
-                    : "Pipeline paused"}{" "}
+                    ? "Ready to process"
+                    : "Processing paused"}{" "}
                 · {runtime?.ready ? "Speech ready" : "Speech setup needed"} ·
                 Chat {status.chat.configured ? "configured" : "not configured"}
               </span>

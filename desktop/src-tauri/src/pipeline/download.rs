@@ -243,12 +243,12 @@ fn fetch_using(
         PathBuf::from(&cfg.download_directory)
     };
     if !cfg.download_directory.is_empty() {
-        anyhow::ensure!(base.is_dir(),"The download folder is unavailable. Reconnect its drive or choose a folder in Pipeline setup.");
+        anyhow::ensure!(base.is_dir(),"The download folder is unavailable. Reconnect its drive or choose a folder in Settings → Processing & downloads.");
     }
     let source = row["source_id"].as_str().unwrap_or("links");
     let folder = base.join(&format!("source-{:x}", Sha256::digest(source.as_bytes()))[..23]);
     std::fs::create_dir_all(&folder).context(
-        "Cannot create the download folder. Reconnect its drive or update Pipeline setup.",
+        "Cannot create the download folder. Reconnect its drive or choose another in Settings → Processing & downloads.",
     )?;
     let folder = folder.canonicalize()?;
     let mut cmd = command_using(root, cfg, executable);

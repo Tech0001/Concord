@@ -84,6 +84,10 @@ function Shell() {
       .sourcesList()
       .then((next) => setSources((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next)))
       .catch(toast.error);
+    api
+      .pipelineOverview()
+      .then((next) => setQueue((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next)))
+      .catch(toast.error);
   }, [available, revision, toast]);
 
   // A source check runs in the background; follow it until it finishes so its header and the sidebar update.
@@ -217,8 +221,8 @@ function Shell() {
       try {
         await api.transcribe(id, device);
         toast.info(ready && !ready.installed ? "Queued. It starts when the speech engine finishes installing." : "Recording added to the processing queue", {
-          label: "Status & Health",
-          run: () => setActivityOpen(true),
+          label: "Activity",
+          run: () => navigate({ page: "activity" }),
         });
         setJobs(await api.jobs());
         refresh();

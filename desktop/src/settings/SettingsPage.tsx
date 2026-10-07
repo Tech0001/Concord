@@ -73,13 +73,24 @@ export function SettingsPage({ section }: { section?: SettingsSection }) {
     if (!section) return;
     const el = document.getElementById(`settings-${section}`);
     if (!el) return;
-    // After the shell's scroll-to-top for a newly opened page, which runs after this effect.
-    const frame = requestAnimationFrame(() => el.scrollIntoView({ block: "start" }));
+    // Scroll after the shell's scroll-to-top for a newly opened page, and keep the section in place
+    // while sections above it finish loading, until the person scrolls themselves.
+    const go = () => el.scrollIntoView({ block: "start" });
+    const frame = requestAnimationFrame(go);
+    const grow = new ResizeObserver(go);
+    grow.observe(document.body);
+    const stop = () => grow.disconnect();
+    const settle = setTimeout(stop, 2000);
+    const events = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+    events.forEach((e) => window.addEventListener(e, stop, { once: true, passive: true }));
     el.classList.add("is-linked");
     const timer = setTimeout(() => el.classList.remove("is-linked"), 1600);
     return () => {
       cancelAnimationFrame(frame);
+      stop();
+      clearTimeout(settle);
       clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, stop));
     };
   }, [section]);
   const fact = (ok: boolean | undefined, label: string) => (

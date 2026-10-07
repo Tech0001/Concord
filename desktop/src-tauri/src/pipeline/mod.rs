@@ -199,7 +199,7 @@ pub fn migrate_sources(db: &Connection) -> Result<()> {
         UPDATE channels SET kind='collection' WHERE url='' AND kind='youtube';")?;
     Ok(())
 }
-fn running(db: &Connection) -> Result<bool> {
+pub(crate) fn running(db: &Connection) -> Result<bool> {
     Ok(db.query_row(
         // Work runs unless someone paused it.
         "SELECT COALESCE((SELECT value FROM settings WHERE key='pipeline.running'),'true')='true'",
