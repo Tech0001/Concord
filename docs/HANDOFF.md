@@ -67,7 +67,28 @@ verified by emitting Tauri's `tauri://drag-drop`, so one real file-manager drag 
 doing. Codex's Terminal "Activity / Debug" filter shares the word Activity with the new page;
 reconcile the naming when merging.
 
-Validation: 179 Rust tests (9 ignored), 74 interface tests, Clippy clean, `tsc` and Vite
+**After review** (fresh reviewer on the whole branch; all Critical and Important fixed with
+tests that failed first):
+- Schema **16**: existing libraries (15) get `channels.since`/`source_seen`; libraries with work
+  queued but never started, or automatic checks on, stay paused until Resume; enabled folder
+  sources become watched folders.
+- Follow baselines are **per tab** (`source_seen` row `tab:<url>`), written only when that tab
+  listed successfully, in one transaction with the ingest. A tab's first listing and any
+  playlist are listed in full. Download-time backstop: a followed channel's video posted more
+  than a day before `since` is discarded without a trace (`queue::discard`).
+- Only the source being checked is locked; Check now during another check waits in
+  `Control.waiting_checks`; Stop is back (collection header, Activity).
+- Adding a folder once imports without creating a source; watching reuses an existing one.
+- `sources::source_key` normalises channel/playlist links (host, tab, `?si=`, handle case).
+- Library: select across pages and "Select all N matching" (`library_ids`) for Transcribe;
+  collections page on their own. Adding files no longer resumes a pause.
+- Deferred (minor): Activity "Remove" removes the recording (dismiss-only is missing) and
+  Clear history also clears failures; Stop following detaches recordings (no reattach on
+  re-follow); old `kind='collection'` sources and source URL edits have no UI;
+  `desktop/scripts/native-{folder,terminal,ask,pipeline,subscriptions}-smoke.js` still drive the
+  old Pipeline/paused-queue flow and need updating before they are run again.
+
+Validation: 199 Rust tests (9 ignored), 74 interface tests, Clippy clean, `tsc` and Vite
 build pass. Mock screenshots of every canvas board at desktop and phone width. Native
 WebKitGTK run against a scratch library (three synthetic recordings, a watched folder,
 pasted links, collection header, Pause/Resume, selection → Work, Settings deep link): all
