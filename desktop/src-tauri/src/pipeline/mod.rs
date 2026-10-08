@@ -8,7 +8,7 @@ pub(crate) mod subprocess;
 #[cfg(test)]
 mod tests;
 mod worker;
-use anyhow::Result;
+use anyhow::{Context, Result};
 pub use queue::{action, candidates, enqueue, enqueue_one, recover, snapshot, Batch, WAITING_FOR_SPEECH};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -139,6 +139,23 @@ pub fn import_and_queue(root: &Path, control: &Control, paths: &[String], catego
         }
     }
     Ok(ids.len())
+}
+/// Where downloaded videos are saved (empty until chosen) and where Concord suggests.
+pub fn download_folder(root: &Path) -> Result<serde_json::Value> {
+    let suggested = directories::UserDirs::new()
+        .and_then(|d| d.video_dir().map(Path::to_path_buf).or_else(|| Some(d.home_dir().join("Videos"))))
+        .unwrap_or_else(|| root.join("media"))
+        .join("Concord");
+    Ok(serde_json::json!({"folder": config(root)?.download_directory, "suggested": suggested}))
+}
+/// Choose where downloaded videos are saved; each channel gets a folder inside it.
+pub fn set_download_folder(root: &Path, folder: &str) -> Result<()> {
+    let path = Path::new(folder.trim());
+    anyhow::ensure!(path.is_absolute(), "Choose a full folder path");
+    std::fs::create_dir_all(path).context("Can't create that folder. Check the drive is connected, or choose another")?;
+    let value = Config { download_directory: path.to_string_lossy().into_owned(), ..config(root)? };
+    crate::db::open(root)?.execute("INSERT INTO settings VALUES ('pipeline.config',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [serde_json::to_string(&value)?])?;
+    Ok(())
 }
 /// The one stored speech device preference, used by the queue and by manual transcription.
 pub fn device(root: &Path) -> Result<String> {

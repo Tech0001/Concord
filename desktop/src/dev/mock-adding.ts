@@ -19,6 +19,7 @@ const downloader = params.has("no-downloader")
   : { enabled: true, installed: true, version: "2026.09.20", install: { running: false, message: "", error: null as string | null, done: 0, total: 0 } };
 
 let paused = params.has("paused");
+let downloadFolder = "";
 /** Recordings with work in progress, shown on their cards and on Activity. */
 const busy = params.has("empty-library")
   ? []
@@ -124,6 +125,10 @@ export const addingHandlers: Record<string, (a: any) => unknown> = {
     return id;
   },
   import_and_queue: ({ paths }) => paths.length,
+  download_folder: () => ({ folder: downloadFolder, suggested: "/home/you/Videos/Concord" }),
+  set_download_folder: ({ folder }) => {
+    downloadFolder = folder;
+  },
   downloader_status: () => downloader,
   downloader_enable: ({ enabled }) => {
     downloader.enabled = enabled;

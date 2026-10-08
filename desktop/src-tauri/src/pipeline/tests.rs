@@ -949,3 +949,17 @@ fn upgrading_turns_enabled_folder_sources_into_watched_folders() {
     assert!(sources::source(root, &watched).unwrap()["since"].as_i64().unwrap() > 0);
     assert_eq!(sources::source(root, &off).unwrap()["since"], 0);
 }
+#[test]
+fn the_download_folder_is_suggested_then_kept_once_chosen() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    let folder = download_folder(root).unwrap();
+    assert_eq!(folder["folder"], "");
+    assert!(folder["suggested"].as_str().unwrap().ends_with("Concord"));
+    assert!(set_download_folder(root, "relative/videos").is_err());
+    let chosen = root.join("Videos/Concord");
+    set_download_folder(root, chosen.to_str().unwrap()).unwrap();
+    assert!(chosen.is_dir());
+    assert_eq!(download_folder(root).unwrap()["folder"], chosen.to_str().unwrap());
+    assert_eq!(config(root).unwrap().download_directory, chosen.to_str().unwrap());
+}

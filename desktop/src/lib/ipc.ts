@@ -217,6 +217,9 @@ export const api = {
   importAndQueue: (paths: string[], category: string, device: string, diarize = true) => call<number>("import_and_queue", { paths, category, device, diarize }),
   sourcesList: () => call<Source[]>("sources_list"),
   addInspectPaths: (paths: string[]) => call<Inspected>("add_inspect_paths", { paths }),
+  /** Where downloaded videos are saved ("" until chosen) and the suggested folder. */
+  downloadFolder: () => call<{ folder: string; suggested: string }>("download_folder"),
+  setDownloadFolder: (folder: string) => call<void>("set_download_folder", { folder }),
   addFolderPreview: (path: string) => call<FolderPreview>("add_folder_preview", { path }),
   addFolder: (path: string, watch: boolean, category: string, diarize: boolean) =>
     call<{ id: string | null; name: string; added: number }>("add_folder", { path, watch, category, diarize }),

@@ -3,6 +3,7 @@ import { AudioLines, Check, CircleAlert, Download, Folder, FolderOpen, LoaderCir
 import { api, type DownloaderStatus } from "../lib/ipc.ts";
 import { clock, count, extension, initials } from "../lib/format.ts";
 import { formatBytes } from "../setup/model.ts";
+import { tildify } from "../setup/parts.tsx";
 import { useApp } from "../shell/AppContext.tsx";
 import { Button, IconButton } from "../ui/Button.tsx";
 import { Dialog } from "../ui/Dialog.tsx";
@@ -38,6 +39,9 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: (left
   const [tool, setTool] = useState<DownloaderStatus>();
   const [toolSkipped, setToolSkipped] = useState(false);
   const [installing, setInstalling] = useState(false);
+  // Where downloaded videos go; asked the first time a video or channel is added.
+  const [saveIn, setSaveIn] = useState<{ folder: string; suggested: string }>();
+  const [chosenFolder, setChosenFolder] = useState("");
 
   const addPaths = useCallback(
     async (paths: string[]) => {
@@ -144,6 +148,26 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: (left
   const fromFolders = folders.reduce((n, f) => n + Math.max(0, (f.preview?.files ?? 0) - (f.preview?.existing ?? 0)), 0);
   const watching = folders.some((f) => f.watch && f.preview);
   const waiting = links.some((l) => !previews[l] && usable(l)) || folders.some((f) => !f.preview && !f.error) || installing;
+  const downloads = videos.length > 0 || channels.length > 0;
+  useEffect(() => {
+    if (!downloads || saveIn) return;
+    api
+      .downloadFolder()
+      .then((f) => {
+        setSaveIn(f);
+        setChosenFolder((old) => old || f.suggested);
+      })
+      .catch(toast.error);
+  }, [downloads, saveIn, toast]);
+  const askFolder = downloads && !!saveIn && !saveIn.folder;
+  const changeFolder = async () => {
+    try {
+      const path = await api.pickFolder("Choose where downloaded videos are saved");
+      if (path) setChosenFolder(path);
+    } catch (e) {
+      toast.error(e);
+    }
+  };
   const label = addLabel({ recordings: files.length + fromFolders, videos: videos.length, follows: channels.map((c) => c.name), watching });
   const empty = !files.length && !folders.length && !links.length && !skipped.length;
   const toolPanel = wantsTool && !toolReady && !toolSkipped && !!tool;
@@ -191,6 +215,10 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: (left
           collection = result.id ?? undefined;
         }
         setFolders((old) => old.filter((f) => f.path !== folder.path));
+      }
+      if (askFolder && chosenFolder) {
+        await api.setDownloadFolder(chosenFolder);
+        setSaveIn({ folder: chosenFolder, suggested: chosenFolder });
       }
       if (videos.length) {
         done.videos = (await api.addVideos(videos.map((v) => v.video), category, diarize, app.device)).added;
@@ -343,6 +371,17 @@ export function AddDialog({ seeds, onClose }: { seeds: AddSeed[]; onClose: (left
               )}
             </ul>
           )
+        )}
+        {askFolder && !toolPanel && (
+          <div className="add-save-in">
+            <FolderOpen size={16} aria-hidden />
+            <span>
+              Save videos in <b>{tildify(chosenFolder)}</b>, a folder for each channel
+            </span>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void changeFolder()}>
+              Change…
+            </Button>
+          </div>
         )}
         {splitLinks(text).length > MAX_LINKS && <p className="add-warning"><CircleAlert size={15} aria-hidden />Only the first {MAX_LINKS} links are added at once.</p>}
         {!empty && !files.length && !folders.length && dropMore}

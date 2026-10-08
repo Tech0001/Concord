@@ -353,3 +353,27 @@
     flex: 1;
   }
 }
+
+.add-save-in {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-2);
+  background: var(--muted);
+  color: var(--secondary-foreground);
+  font-size: var(--text-sm);
+}
+.add-save-in > svg {
+  color: var(--primary);
+}
+.add-save-in > span {
+  flex: 1;
+  min-width: 0;
+}
+.add-save-in b {
+  font-family: var(--font-code);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
