@@ -10,7 +10,18 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
-## One way in: Add, Following and Activity (0.29.0, branch `feature/adding`, installed, not merged)
+## One way in: Add, Following and Activity (0.29.1, branch `feature/adding`, installed, not merged)
+
+0.29.1 (October 8): downloads follow the Electron pipeline. Files go to
+`<download folder>/<Channel_Name>/<YYYY-MM-DD - Title>.<ext>` (Electron's `sanitizeFileName`
+rules; ` [id]` added only if another video's finished file has the name). Without a chosen
+folder they fall back to `<data>/media/<Channel_Name>/`. Add asks for the folder the first time
+a video is added or a channel followed (suggests `~/Videos/Concord`; `download_folder` /
+`set_download_folder`). On HTTP 403 the partials are cleaned and the download retries once with
+`--extractor-args youtube:player_client=tv_simply,mweb` (usually 360p); on HTTP 5xx / "Giving
+up after" it steps down the codec chain (av01 → avc1 → vp9; vp9 → avc1). The user hit the
+403 with yt-dlp 2026.08.19. Installed 0.29.1 after backup
+`backups/before-0.29.1-20261008-115930.db` (schema 16, quick_check OK).
 
 Built by Claude from the approved canvas (claude.ai artifact "Concord adding redesign").
 Installed for the user to try on October 7, 2026: the 0.29.0 AppImage was byte-verified at
