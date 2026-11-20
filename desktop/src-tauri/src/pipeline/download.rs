@@ -339,11 +339,14 @@ fn fetch_using(
             .optional()?
             .unwrap_or(0);
         // Only what a follow check added; a video asked for by hand downloads whatever its date.
-        let added: bool = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM source_seen WHERE source_id=?1 AND video_id=?2)",
-            params![source, format!("added:{}", video_id(&metadata).unwrap_or(""))],
-            |r| r.get(0),
-        )?;
+        // Keyed on the id the check stored in the recording's link, not on what YouTube reports now.
+        let listed = url.query_pairs().find(|(k, _)| k == "v").map(|(_, v)| v.into_owned()).unwrap_or_default();
+        let added: bool = !listed.is_empty()
+            && db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM source_seen WHERE source_id=?1 AND video_id=?2)",
+                params![source, format!("added:{listed}")],
+                |r| r.get(0),
+            )?;
         if added && posted_before(&metadata, since) {
             return Ok(Outcome::Skipped(format!(
                 "Skipped {} from a followed channel: it was posted before following",
