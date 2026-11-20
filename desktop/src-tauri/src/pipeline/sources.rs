@@ -150,7 +150,9 @@ pub fn source(root: &Path, id: &str) -> Result<Value> {
 }
 const MEDIA: [&str; 12] = ["mp4", "mkv", "webm", "mov", "ogg", "oga", "wav", "mp3", "m4a", "flac", "aac", "opus"];
 fn is_media(path: &Path) -> bool {
-    MEDIA.contains(&path.extension().unwrap_or_default().to_string_lossy().to_lowercase().as_str())
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+    // Electron Concord kept a playback copy beside each recording; it isn't a recording of its own.
+    MEDIA.contains(&path.extension().unwrap_or_default().to_string_lossy().to_lowercase().as_str()) && !name.ends_with(".playback.m4a")
 }
 fn files(folder: &Path, out: &mut Vec<PathBuf>, cancel: &crate::speech::Control) -> Result<()> {
     for entry in std::fs::read_dir(folder)? {
@@ -430,6 +432,7 @@ pub fn follow_ingest(root: &Path, source: &Value, tabs: &[Tab], device: &str) ->
             let Some(video) = download::video_id(entry) else { continue };
             if !seen(&tx, video)? {
                 mark(&tx, video)?;
+                mark(&tx, &format!("added:{video}"))?;
                 fresh.push(entry.clone());
             }
         }
@@ -439,6 +442,36 @@ pub fn follow_ingest(root: &Path, source: &Value, tabs: &[Tab], device: &str) ->
     let added = ingest_tx(&tx, source, &fresh, device)?;
     tx.commit()?;
     Ok(added)
+}
+/// What Electron kept checking keeps being checked: its channels are followed and its folders
+/// watched from now on (so nothing older is added), and the downloads it had waiting are queued.
+fn follow_imported(root: &Path, db: &rusqlite::Connection, old: &rusqlite::Connection) -> Result<()> {
+    // Electron's folder subscriptions came over as file:// links.
+    for c in db::rows(db, "SELECT id,url FROM channels WHERE url LIKE 'file://%'", [])? {
+        let path = url::Url::parse(c["url"].as_str().unwrap_or("")).ok().and_then(|u| u.to_file_path().ok());
+        if let Some(path) = path {
+            let path = path.to_string_lossy().trim_end_matches('/').to_owned();
+            db.execute("UPDATE channels SET kind='folder',url=?1 WHERE id=?2", params![path, c["id"].as_str()])?;
+        }
+    }
+    for c in db::rows(db, "SELECT id,url,kind FROM channels WHERE enabled=1 AND since=0 AND kind IN ('youtube','folder')", [])? {
+        if c["kind"] == "folder" || c["url"].as_str().and_then(source_key).is_some() {
+            db.execute("UPDATE channels SET since=?1 WHERE id=?2", params![now(), c["id"].as_str()])?;
+        }
+    }
+    let queued: bool = old.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='video_queue')", [], |r| r.get(0))?;
+    if !queued {
+        return Ok(());
+    }
+    let device = config(root)?.device;
+    for v in db::rows(old, "SELECT channel_id,video_id FROM video_queue WHERE status='pending' AND coalesce(video_path,'')=''", [])? {
+        let id = serde_json::to_string(&[v["channel_id"].as_str().unwrap_or(""), v["video_id"].as_str().unwrap_or("")])?;
+        let waiting = db::rows(db, "SELECT m.title,COALESCE(c.diarize,1) AS diarize FROM media m LEFT JOIN channels c ON c.id=m.source_id WHERE m.id=?1 AND m.path IS NULL AND m.transcript IS NULL AND m.url<>''", [&id])?;
+        if let Some(m) = waiting.first() {
+            queue::insert(db, &id, m["title"].as_str().unwrap_or(""), "download", &device, m["diarize"] != 0)?;
+        }
+    }
+    Ok(())
 }
 fn folder_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.is_empty()).unwrap_or_else(|| "Recordings".into())
@@ -746,7 +779,8 @@ pub fn seed(root: &Path) -> Result<()> {
     };
     let downloads = !marked("pipeline.downloadsImported")?;
     let transcripts = !marked("pipeline.transcriptsImported")?;
-    if !downloads && !transcripts {
+    let follow = !marked("pipeline.subscriptionsFollowed")?;
+    if !downloads && !transcripts && !follow {
         return Ok(());
     }
     let legacy: Option<String> = db
@@ -815,7 +849,10 @@ pub fn seed(root: &Path) -> Result<()> {
         }
         save_config(root, &cfg)?;
     }
-    for (key, wanted) in [("pipeline.downloadsImported", downloads), ("pipeline.transcriptsImported", transcripts)] {
+    if follow {
+        follow_imported(root, &db, &old)?;
+    }
+    for (key, wanted) in [("pipeline.downloadsImported", downloads), ("pipeline.transcriptsImported", transcripts), ("pipeline.subscriptionsFollowed", follow)] {
         if wanted {
             db.execute("INSERT OR IGNORE INTO settings VALUES (?1,'1')", [key])?;
         }

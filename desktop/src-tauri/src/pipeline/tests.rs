@@ -583,6 +583,11 @@ fn following_a_channel_adds_only_videos_posted_after_following() {
     assert_eq!(sources::follow_ingest(root, &source, &newer, "auto").unwrap(), 1);
     assert_eq!(sources::follow_ingest(root, &source, &newer, "auto").unwrap(), 0);
     assert_eq!(followed_titles(root, &source), ["Video ccccccccccc"]);
+    let marked = |video: &str| -> bool {
+        db::open(root).unwrap().query_row("SELECT EXISTS(SELECT 1 FROM source_seen WHERE source_id=?1 AND video_id=?2)", rusqlite::params![source["id"].as_str(), format!("added:{video}")], |r| r.get(0)).unwrap()
+    };
+    assert!(marked("ccccccccccc"), "a video a follow check added is marked as such");
+    assert!(!marked("aaaaaaaaaaa"), "videos that were already there are not");
 }
 #[test]
 fn a_check_that_could_not_list_a_channel_does_not_count_as_its_baseline() {
@@ -987,4 +992,93 @@ fn an_imported_library_keeps_saving_transcripts_where_concord_did() {
     sources::seed(root).unwrap();
     assert_eq!(config(root).unwrap().transcript_directory, "/home/you/Transcripts");
     assert!(save_config(root, &Config { transcript_directory: "relative/folder".into(), ..Config::default() }).is_err());
+}
+#[test]
+fn imported_subscriptions_keep_checking_and_waiting_downloads_come_over() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    let meetings = root.join("meetings");
+    std::fs::create_dir(&meetings).unwrap();
+    let legacy = root.join("pipeline.db");
+    rusqlite::Connection::open(&legacy).unwrap().execute_batch(
+        "CREATE TABLE app_config(key TEXT PRIMARY KEY,value TEXT);
+         CREATE TABLE video_queue(channel_id TEXT,video_id TEXT,status TEXT,video_path TEXT,md_path TEXT);
+         INSERT INTO video_queue VALUES ('ch-1','pend1234567','pending',NULL,NULL),('ch-1','done1234567','complete','/x.mp4','/x.md');",
+    ).unwrap();
+    {
+        let db = db::open(root).unwrap();
+        for key in ["pipeline.downloadsImported", "pipeline.transcriptsImported"] {
+            db.execute("INSERT INTO settings VALUES (?1,'1')", [key]).unwrap();
+        }
+        db.execute("INSERT INTO settings VALUES ('imported_from',?1)", [legacy.to_str()]).unwrap();
+        db.execute_batch(&format!(
+            "INSERT INTO channels(id,name,url,enabled) VALUES ('ch-1','LastDays','https://www.youtube.com/@lastdays247',1),
+               ('ch-2','Meetings','file://{}/',1),('ch-3','Off','https://www.youtube.com/@off',0),('ch-4','Odd','not a link',1);
+             INSERT INTO media(id,title,url,channel,source_id,status) VALUES
+               ('[\"ch-1\",\"pend1234567\"]','Waiting','https://www.youtube.com/watch?v=pend1234567','LastDays','ch-1','ready');
+             INSERT INTO media(id,title,url,channel,source_id,path,transcript,status) VALUES
+               ('[\"ch-1\",\"done1234567\"]','Done','https://www.youtube.com/watch?v=done1234567','LastDays','ch-1','/x.mp4','/x.md','complete');",
+            meetings.display()
+        )).unwrap();
+    }
+    sources::seed(root).unwrap();
+    let since = |id: &str| sources::source(root, id).unwrap()["since"].as_i64().unwrap();
+    assert!(since("ch-1") > 0, "a channel Electron checked keeps being checked");
+    assert_eq!((since("ch-3"), since("ch-4")), (0, 0), "switched off, or not a channel link");
+    let folder = sources::source(root, "ch-2").unwrap();
+    assert_eq!((folder["kind"].as_str(), folder["url"].as_str()), (Some("folder"), meetings.to_str()));
+    assert!(folder["since"].as_i64().unwrap() > 0, "a folder Electron watched is watched");
+    let jobs = |media: &str| db::rows(&db::open(root).unwrap(), "SELECT p.kind FROM jobs j JOIN pipeline_work p ON p.id=j.id WHERE j.media_id=?1", [media]).unwrap();
+    assert_eq!(jobs("[\"ch-1\",\"pend1234567\"]"), [serde_json::json!({"kind": "download"})], "Electron's waiting download is queued");
+    assert!(jobs("[\"ch-1\",\"done1234567\"]").is_empty());
+    sources::seed(root).unwrap();
+    assert_eq!(jobs("[\"ch-1\",\"pend1234567\"]").len(), 1, "and only once");
+}
+#[test]
+fn electrons_playback_copies_are_not_new_recordings() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let folder = root.join("meetings");
+    std::fs::create_dir(&folder).unwrap();
+    for name in ["2025-09-11.ogg", "2025-09-11.playback.m4a", "talk.mp3"] {
+        std::fs::write(folder.join(name), b"audio").unwrap();
+    }
+    assert_eq!(sources::folder_preview(root, &folder).unwrap()["files"], 2);
+    assert_eq!(sources::add_folder(root, &c, &folder, false, "personal", true).unwrap()["added"], 2);
+}
+fn never_downloaded(root: &Path) -> String {
+    let id = "[\"ch-1\",\"vvvvvvvvvvv\"]".to_owned();
+    db::open(root).unwrap().execute("INSERT INTO media(id,title,url,channel,status) VALUES (?1,'Waiting','https://www.youtube.com/watch?v=vvvvvvvvvvv','LastDays','ready')", [&id]).unwrap();
+    id
+}
+#[test]
+fn transcribing_a_recording_that_was_never_downloaded_downloads_it_first() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let id = never_downloaded(root);
+    let queued = enqueue(root, &c, &Batch { ids: vec![id.clone()], ..Default::default() }, false).unwrap();
+    assert_eq!((queued["added"].as_u64(), queued["unavailable"].as_u64()), (Some(1), Some(0)));
+    let kind: String = db::open(root).unwrap().query_row("SELECT p.kind FROM jobs j JOIN pipeline_work p ON p.id=j.id WHERE j.media_id=?1", [&id], |r| r.get(0)).unwrap();
+    assert_eq!(kind, "download");
+}
+#[test]
+fn pasting_the_link_of_a_recording_that_never_downloaded_downloads_it() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let id = never_downloaded(root);
+    let video = links::Video {
+        url: "https://www.youtube.com/watch?v=vvvvvvvvvvv".into(),
+        id: "vvvvvvvvvvv".into(),
+        title: "Waiting".into(),
+        channel: "Last Days".into(),
+        channel_url: None,
+        duration: 60.0,
+        date: "20261120".into(),
+    };
+    let added = links::add_videos(root, &c, std::slice::from_ref(&video), "personal", true, "auto").unwrap();
+    assert_eq!((added["added"].as_u64(), added["ids"][0].as_str()), (Some(1), Some(id.as_str())));
+    let again = links::add_videos(root, &c, &[video], "personal", true, "auto").unwrap();
+    assert_eq!((again["added"].as_u64(), again["existing"].as_u64()), (Some(0), Some(1)), "already on its way");
+    let rows: i64 = db::open(root).unwrap().query_row("SELECT count(*) FROM media WHERE url='https://www.youtube.com/watch?v=vvvvvvvvvvv'", [], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 1, "no second copy of the recording");
 }

@@ -333,11 +333,18 @@ fn fetch_using(
     // A followed channel only adds what was posted after following; anything older that slipped
     // into a listing (a removed newer video, a tab that failed to list before) is dropped here.
     if let Some(source) = row["source_id"].as_str() {
-        let since: i64 = db::open(root)?
+        let db = db::open(root)?;
+        let since: i64 = db
             .query_row("SELECT since FROM channels WHERE id=?1", [source], |r| r.get(0))
             .optional()?
             .unwrap_or(0);
-        if posted_before(&metadata, since) {
+        // Only what a follow check added; a video asked for by hand downloads whatever its date.
+        let added: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM source_seen WHERE source_id=?1 AND video_id=?2)",
+            params![source, format!("added:{}", video_id(&metadata).unwrap_or(""))],
+            |r| r.get(0),
+        )?;
+        if added && posted_before(&metadata, since) {
             return Ok(Outcome::Skipped(format!(
                 "Skipped {} from a followed channel: it was posted before following",
                 metadata["title"].as_str().unwrap_or("a video")
@@ -354,7 +361,7 @@ fn fetch_using(
         anyhow::ensure!(base.is_dir(),"The download folder is unavailable. Reconnect its drive or choose a folder in Settings → Processing & downloads.");
     }
     // Saved like Concord: a folder per channel, files named by date and title.
-    let channel = metadata["channel"].as_str().or_else(|| metadata["uploader"].as_str()).unwrap_or("");
+    let channel = row["channel"].as_str().filter(|c| !c.trim().is_empty()).or_else(|| metadata["channel"].as_str()).or_else(|| metadata["uploader"].as_str()).unwrap_or("");
     let folder = base.join(channel_folder(channel));
     std::fs::create_dir_all(&folder).context(
         "Cannot create the download folder. Reconnect its drive or choose another in Settings → Processing & downloads.",
@@ -549,6 +556,41 @@ print('CONCORD_FILE:'+json.dumps(str(out)))
         assert_eq!(codec_chain("av01"), ["av01", "avc1", "vp9"]);
         assert_eq!(codec_chain("vp9"), ["vp9", "avc1"]);
         assert_eq!(codec_chain("any"), ["any"]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn only_videos_a_follow_check_added_are_dropped_for_being_old() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let fake = root.join("yt-dlp-fixture.py");
+        std::fs::write(&fake,r#"#!/usr/bin/env python3
+import sys,json,pathlib
+args=sys.argv[1:]
+if '--dump-single-json' in args:
+ print(json.dumps({'id':'fixture1234','title':'Old talk','channel':'Last Days','upload_date':'20200101','live_status':'not_live'}))
+ sys.exit(0)
+out=pathlib.Path(args[args.index('--output')+1].replace('%(ext)s','mp4'))
+out.write_bytes(b'media')
+print('CONCORD_FILE:'+json.dumps(str(out)))
+"#).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let db = db::open(root).unwrap();
+        db.execute("INSERT INTO channels(id,name,url,kind,enabled,since) VALUES ('ch-1','LastDays','https://www.youtube.com/@lastdays247','youtube',1,?1)", [super::super::now()]).unwrap();
+        for (media, job) in [("one", "job1"), ("two", "job2")] {
+            db.execute("INSERT INTO media(id,title,url,channel,source_id) VALUES (?1,'Old talk','https://www.youtube.com/watch?v=fixture1234','LastDays','ch-1')", [media]).unwrap();
+            db.execute("INSERT INTO jobs(id,media_id,title,status) VALUES (?1,?2,'Old talk','running')", [job, media]).unwrap();
+        }
+        let row = |media: &str, job: &str| json!({"id": job, "media_id": media, "url": "https://www.youtube.com/watch?v=fixture1234", "source_id": "ch-1", "channel": "LastDays", "path": null});
+        let control = speech::Control::default();
+        // Asked for by hand, an old video from a followed channel still downloads, into that channel's folder.
+        let Outcome::File(path) = fetch_using(root, &control, &row("one", "job1"), &Config::default(), &fake).unwrap() else {
+            panic!("an old video asked for by hand was dropped");
+        };
+        assert!(path.starts_with(root.join("media/LastDays").canonicalize().unwrap()), "{}", path.display());
+        db.execute("INSERT INTO source_seen VALUES ('ch-1','added:fixture1234')", []).unwrap();
+        assert!(matches!(fetch_using(root, &control, &row("two", "job2"), &Config::default(), &fake).unwrap(), Outcome::Skipped(_)));
     }
 
     #[test]

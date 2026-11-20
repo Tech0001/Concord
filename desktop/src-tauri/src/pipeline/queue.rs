@@ -20,7 +20,7 @@ fn selected(db: &Connection, batch: &Batch) -> Result<Vec<Value>> {
     let ids: HashSet<_> = batch.ids.iter().collect();
     Ok(db::rows(
         db,
-        "SELECT m.id,m.title,m.channel,m.date,m.path,m.transcript,m.status,m.duration,COALESCE(c.diarize,1) AS diarize FROM media m LEFT JOIN channels c ON c.id=m.source_id
+        "SELECT m.id,m.title,m.channel,m.date,m.path,m.url,m.transcript,m.status,m.duration,COALESCE(c.diarize,1) AS diarize FROM media m LEFT JOIN channels c ON c.id=m.source_id
         WHERE (?1='' OR m.channel=?1) AND (?2='' OR m.title LIKE ?3 ESCAPE '\\') AND (?4='' OR m.category=?4) ORDER BY replace(m.date,'-',''),m.id",
         params![batch.channel, batch.query, db::like_pattern(&batch.query), batch.category],
     )?
@@ -70,7 +70,9 @@ pub fn enqueue(root: &Path, control: &Control, batch: &Batch, start: bool) -> Re
     let mut unavailable = 0;
     let mut existing = 0;
     for m in items {
-        if !available(&m) {
+        // A recording that was never downloaded is downloaded first.
+        let download = m["path"].is_null() && super::download::youtube_url(m["url"].as_str().unwrap_or("")).is_ok();
+        if !available(&m) && !download {
             unavailable += 1;
             continue;
         }
@@ -78,7 +80,7 @@ pub fn enqueue(root: &Path, control: &Control, batch: &Batch, start: bool) -> Re
             &tx,
             m["id"].as_str().unwrap(),
             m["title"].as_str().unwrap(),
-            "transcribe",
+            if download { "download" } else { "transcribe" },
             &device,
             m["diarize"] != 0,
         )? {
@@ -219,7 +221,7 @@ pub(super) fn claim(root: &Path, at: i64) -> Result<Option<Value>> {
         return Ok(None);
     }
     let limited = super::download::daily_count(&tx)? >= cfg.daily_limit;
-    let rows=db::rows(&tx,"SELECT j.*,p.kind,p.diarize,p.device,p.attempts,m.path,m.url,m.source_id FROM jobs j JOIN pipeline_work p ON p.id=j.id JOIN media m ON m.id=j.media_id WHERE p.cancelled=0 AND (j.status='queued' OR (j.status IN ('retry','waiting_live') AND p.retry_at<=?1)) ORDER BY j.rowid",[at])?;
+    let rows=db::rows(&tx,"SELECT j.*,p.kind,p.diarize,p.device,p.attempts,m.path,m.url,m.source_id,m.channel FROM jobs j JOIN pipeline_work p ON p.id=j.id JOIN media m ON m.id=j.media_id WHERE p.cancelled=0 AND (j.status='queued' OR (j.status IN ('retry','waiting_live') AND p.retry_at<=?1)) ORDER BY j.rowid",[at])?;
     if !downloads_ready {
         for r in rows
             .iter()

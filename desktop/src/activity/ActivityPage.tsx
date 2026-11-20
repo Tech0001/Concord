@@ -208,7 +208,23 @@ export function ActivityPage() {
         </section>
 
         <section className="activity-section" aria-label="Following">
-          <h2>Following</h2>
+          <div className="activity-section-head">
+            <h2>Following</h2>
+            {sources.some(isFollowed) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={RefreshCw}
+                disabled={busy || sources.filter(isFollowed).every(isChecking)}
+                onClick={() => void run(async () => {
+                  // Each waits its turn behind a check already running.
+                  for (const s of sources.filter((s) => isFollowed(s) && !isChecking(s))) await api.pipelineCheck(s.id);
+                })}
+              >
+                Check all now
+              </Button>
+            )}
+          </div>
           {sources.length ? (
             <div className="activity-card activity-list">
               {sources.map((s) => (

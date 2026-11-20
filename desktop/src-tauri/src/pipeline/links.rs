@@ -127,7 +127,7 @@ fn lookup(root: &Path, cfg: &super::Config, raw: &str, kind: &Kind) -> Result<Va
         Kind::Video => {
             let video = video_preview(&data).context("Couldn't find a video at this link")?;
             let existing: bool = db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM media WHERE url=?1)",
+                "SELECT EXISTS(SELECT 1 FROM media WHERE url=?1 AND (path IS NOT NULL OR transcript IS NOT NULL))",
                 [&video.url],
                 |r| r.get(0),
             )?;
@@ -167,13 +167,26 @@ pub fn add_videos(root: &Path, control: &Control, videos: &[Video], category: &s
         }
         let url = format!("https://www.youtube.com/watch?v={remote}");
         let id = serde_json::to_string(&("link", remote))?;
-        let known: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM media WHERE id=?1 OR url=?2) OR EXISTS(SELECT 1 FROM removed_recordings WHERE id=?1 OR url=?2)",
+        let removed: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM removed_recordings WHERE id=?1 OR url=?2)",
             params![id, url],
             |r| r.get(0),
         )?;
-        if known {
+        let present = db::rows(&tx, "SELECT id,title,path IS NULL AND transcript IS NULL AS waiting FROM media WHERE id=?1 OR url=?2 LIMIT 1", params![id, url])?;
+        if removed || present.first().is_some_and(|m| m["waiting"] != 1) {
             existing += 1;
+            continue;
+        }
+        // Already in the library but never downloaded (an import, or a download that was stopped).
+        if let Some(m) = present.first() {
+            let media = m["id"].as_str().unwrap_or_default();
+            match super::queue::insert(&tx, media, m["title"].as_str().unwrap_or(remote), "download", device, diarize)? {
+                Some(_) => {
+                    ids.push(media.to_owned());
+                    added += 1;
+                }
+                None => existing += 1,
+            }
             continue;
         }
         let title = if video.title.trim().is_empty() { remote } else { video.title.trim() };
