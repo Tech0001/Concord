@@ -185,8 +185,11 @@ pub fn channel_folder(channel: &str) -> String {
 /// "2026-10-05 - Title" as Concord named downloads; the video id when the title has no usable characters.
 pub fn video_name(title: &str, upload_date: &str, id: &str) -> String {
     let title = Some(sanitize(title)).filter(|s| !s.is_empty()).unwrap_or_else(|| id.to_owned());
-    if upload_date.len() == 8 && upload_date.bytes().all(|b| b.is_ascii_digit()) {
-        format!("{}-{}-{} - {title}", &upload_date[..4], &upload_date[4..6], &upload_date[6..])
+    // YouTube's 20261005, or 2026-10-05 as stored for some recordings.
+    let digits: String = upload_date.chars().filter(|c| *c != '-').collect();
+    let shaped = upload_date.len() == 8 || (upload_date.len() == 10 && upload_date.as_bytes()[4] == b'-' && upload_date.as_bytes()[7] == b'-');
+    if shaped && digits.len() == 8 && digits.bytes().all(|b| b.is_ascii_digit()) {
+        format!("{}-{}-{} - {title}", &digits[..4], &digits[4..6], &digits[6..])
     } else {
         title
     }
@@ -555,6 +558,7 @@ print('CONCORD_FILE:'+json.dumps(str(out)))
         assert_eq!(channel_folder("  "), "Manual");
         assert_eq!(video_name("The Angels Got Their Orders — You’re Walking", "20261005", "zvFoXZaWtmw"), "2026-10-05 - The_Angels_Got_Their_Orders_Youre_Walking");
         assert_eq!(video_name("No date", "", "id"), "No_date");
+        assert_eq!(video_name("Dashed date", "2026-10-05", "id"), "2026-10-05 - Dashed_date");
         assert_eq!(video_name("——", "20261005", "zvFoXZaWtmw"), "2026-10-05 - zvFoXZaWtmw");
     }
 

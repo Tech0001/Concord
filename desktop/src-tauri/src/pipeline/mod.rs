@@ -22,6 +22,8 @@ pub struct Config {
     pub retries: u32,
     pub retry_minutes: u32,
     pub download_directory: String,
+    /// Where new transcripts are saved, a folder for each channel; empty keeps Concord's own folder.
+    pub transcript_directory: String,
     pub quality: String,
     pub codec: String,
     pub audio_language: String,
@@ -42,6 +44,7 @@ impl Default for Config {
             retries: 2,
             retry_minutes: 5,
             download_directory: String::new(),
+            transcript_directory: String::new(),
             quality: "1080".into(),
             codec: "any".into(),
             audio_language: "en".into(),
@@ -116,6 +119,10 @@ pub fn save_config(root: &Path, value: &Config) -> Result<()> {
     anyhow::ensure!(
         value.download_directory.is_empty() || Path::new(&value.download_directory).is_absolute(),
         "Choose an absolute download folder path"
+    );
+    anyhow::ensure!(
+        value.transcript_directory.is_empty() || Path::new(&value.transcript_directory).is_absolute(),
+        "Choose a full path for the transcripts folder"
     );
     anyhow::ensure!(
         value.cookies_file.is_empty() || Path::new(&value.cookies_file).is_file(),

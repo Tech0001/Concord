@@ -963,3 +963,28 @@ fn the_download_folder_is_suggested_then_kept_once_chosen() {
     assert_eq!(download_folder(root).unwrap()["folder"], chosen.to_str().unwrap());
     assert_eq!(config(root).unwrap().download_directory, chosen.to_str().unwrap());
 }
+#[test]
+fn an_imported_library_keeps_saving_transcripts_where_concord_did() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    let legacy = root.join("pipeline.db");
+    rusqlite::Connection::open(&legacy).unwrap().execute_batch(
+        "CREATE TABLE app_config(key TEXT PRIMARY KEY,value TEXT);
+         INSERT INTO app_config VALUES ('transcriptDir','/run/media/pc/Maac/YouTube/transcripts'),('videoSaveDir','/run/media/pc/Maac/YouTube/saved_videos');",
+    ).unwrap();
+    {
+        let db = db::open(root).unwrap();
+        db.execute("INSERT INTO settings VALUES ('imported_from',?1)", [legacy.to_str()]).unwrap();
+        // Imported by an earlier version, which brought the download settings only.
+        db.execute("INSERT INTO settings VALUES ('pipeline.downloadsImported','1')", []).unwrap();
+    }
+    sources::seed(root).unwrap();
+    let cfg = config(root).unwrap();
+    assert_eq!(cfg.transcript_directory, "/run/media/pc/Maac/YouTube/transcripts");
+    assert_eq!(cfg.download_directory, "", "download settings already imported stay as they were");
+    // Once carried over, a folder chosen in Settings is never replaced.
+    save_config(root, &Config { transcript_directory: "/home/you/Transcripts".into(), ..cfg }).unwrap();
+    sources::seed(root).unwrap();
+    assert_eq!(config(root).unwrap().transcript_directory, "/home/you/Transcripts");
+    assert!(save_config(root, &Config { transcript_directory: "relative/folder".into(), ..Config::default() }).is_err());
+}

@@ -84,7 +84,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   recording_file_action: () => undefined,
   set_recording_title: ({id,title}) => { const m=find(id);if(m)m.title=title; },
   set_category: ({id,category}) => { const m=find(id); if(m) m.category=category; },
-  pipeline_state: () => ({ running: queueOverview().running, checking:false, overview:queueOverview(), sources, config: {device:"auto",retries:2,retryMinutes:5,downloadDirectory:"",quality:"1080",codec:"any",audioLanguage:"en",audioOnly:false,speed:"conservative",rateMib:3,dailyLimit:200,checkMinutes:1440,automaticChecks:false,cookiesFile:"",cookiesBrowser:"",speechLanguage:"en-US"}, channels:[{channel:"Tuesday Study"}], jobs:addingHandlers.pipeline_state_jobs({}) }),
+  pipeline_state: () => ({ running: queueOverview().running, checking:false, overview:queueOverview(), sources, config: {device:"auto",retries:2,retryMinutes:5,downloadDirectory:"",transcriptDirectory:"",quality:"1080",codec:"any",audioLanguage:"en",audioOnly:false,speed:"conservative",rateMib:3,dailyLimit:200,checkMinutes:1440,automaticChecks:false,cookiesFile:"",cookiesBrowser:"",speechLanguage:"en-US"}, channels:[{channel:"Tuesday Study"}], jobs:addingHandlers.pipeline_state_jobs({}) }),
   pipeline_candidates: () => ({total:fx.mediaList.length,eligible:fx.mediaList.length,unavailable:0,alreadyQueued:0,hours:24,items:fx.mediaList}),
   pipeline_enqueue: () => ({added:2,ids:["test"],unavailable:0,alreadyQueued:0}),
   pipeline_action: () => undefined,

@@ -357,6 +357,8 @@ pub(crate) fn process_options(root:&Path,runtime:&Runtime,control:&Control,job:&
         device
     };
     crate::runtime_log::debug("Speech", &format!("Job {job}; model Nemotron 3.5 multilingual; selected device {device}; diarization {}", options.diarize));
+    // Settled before any work, so a disconnected drive stops the job now, not after transcribing.
+    let target = transcript_target(root, &crate::pipeline::config(root)?, &db::media(root, id)?, job)?;
     let work = root.join("work").join(job);
     fs::create_dir_all(&work)?;
     let outcome = (|| -> Result<()> {
@@ -429,14 +431,7 @@ pub(crate) fn process_options(root:&Path,runtime:&Runtime,control:&Control,job:&
         }
         // Unique versions plus a transactional DB pointer keep the previous transcript
         // intact on failure, and never overwrite the stable application's files.
-        let out = root.join("transcripts").join(job);
-        fs::create_dir_all(&out)?;
-        let json_path = out.join("transcript.json");
-        let md = out.join("transcript.md");
-        fs::write(&json_path, serde_json::to_vec_pretty(&merged)?)?;
-        fs::write(&md, transcript::markdown(&merged))?;
-        persist(root, id, &md, &merged, &diar)?;
-        Ok(())
+        publish(root, id, &target, &merged, &diar)
     })();
     // Keep only small diagnostics, not multi-gigabyte intermediate WAVs.
     if let Ok(text) = fs::read(work.join("speech.log")) {
@@ -455,7 +450,61 @@ fn floats(blob: Vec<u8>) -> Vec<f32> {
         .map(|b| f32::from_le_bytes(*b))
         .collect()
 }
-fn persist(root: &Path, id: &str, md: &Path, raw: &Value, diar: &Value) -> Result<()> {
+/// Where a recording's new transcript goes. With a transcripts folder chosen, saved as Concord
+/// saved them: `<folder>/<Channel>/<YYYY-MM-DD - Title>.md`, with its `.json` beside it. A
+/// transcript already in that folder is replaced where it is; another recording's never is.
+pub(crate) fn transcript_target(root: &Path, cfg: &crate::pipeline::Config, media: &Value, job: &str) -> Result<PathBuf> {
+    use crate::pipeline::download::{channel_folder, video_name};
+    if cfg.transcript_directory.is_empty() {
+        return Ok(root.join("transcripts").join(job).join("transcript.md"));
+    }
+    let folder = Path::new(&cfg.transcript_directory);
+    anyhow::ensure!(folder.is_dir(), "The transcripts folder is unavailable. Reconnect its drive or choose a folder in Settings → Processing & downloads.");
+    if let Some(current) = media["transcript"].as_str().map(Path::new) {
+        if current.starts_with(folder) && current.parent().is_some_and(Path::is_dir) {
+            return Ok(current.to_owned());
+        }
+    }
+    let channel = folder.join(channel_folder(media["channel"].as_str().unwrap_or("")));
+    fs::create_dir_all(&channel).context("Can't create the transcript folder. Check the drive, or choose another folder in Settings → Processing & downloads.")?;
+    let id = media["id"].as_str().unwrap_or("");
+    let short = serde_json::from_str::<Vec<String>>(id).ok().and_then(|parts| parts.last().cloned()).unwrap_or_else(|| id.chars().take(8).collect());
+    // A local file's date is when it was added, which isn't worth putting in its name.
+    let downloaded = media["url"].as_str().is_some_and(|u| !u.is_empty());
+    let name = video_name(media["title"].as_str().unwrap_or(""), if downloaded { media["date"].as_str().unwrap_or("") } else { "" }, &short);
+    let free = |name: &str| !channel.join(format!("{name}.md")).exists() && !channel.join(format!("{name}.json")).exists();
+    let job_short: String = job.chars().take(8).collect();
+    let chosen = [name.clone(), format!("{name} [{short}]"), format!("{name} [{short} {job_short}]")]
+        .into_iter()
+        .find(|n| free(n))
+        .unwrap_or_else(|| format!("{name} [{job}]"));
+    Ok(channel.join(format!("{chosen}.md")))
+}
+/// Save a transcript at `md` (and its `.json` beside it) only once the library has taken it:
+/// the files are written beside their final names, the library switches over, and then they
+/// replace whatever was there. If saving fails, the previous transcript is left untouched.
+pub(crate) fn publish(root: &Path, id: &str, md: &Path, merged: &Value, diar: &Value) -> Result<()> {
+    if let Some(folder) = md.parent() {
+        fs::create_dir_all(folder)?;
+    }
+    let json = md.with_extension("json");
+    let pending = |path: &Path| PathBuf::from(format!("{}.concord-saving", path.display()));
+    let (md_new, json_new) = (pending(md), pending(&json));
+    let written = (|| -> Result<()> {
+        fs::write(&json_new, serde_json::to_vec_pretty(merged)?)?;
+        fs::write(&md_new, transcript::markdown(merged))?;
+        persist(root, id, md, &md_new, merged, diar)
+    })();
+    if let Err(e) = written {
+        let _ = fs::remove_file(&md_new);
+        let _ = fs::remove_file(&json_new);
+        return Err(e);
+    }
+    fs::rename(&json_new, &json).context("Couldn't save the transcript file")?;
+    fs::rename(&md_new, md).context("Couldn't save the transcript file")?;
+    Ok(())
+}
+fn persist(root: &Path, id: &str, md: &Path, written: &Path, raw: &Value, diar: &Value) -> Result<()> {
     let mut db = db::open(root)?;
     let voices: Vec<(String, Vec<f32>)> = {
         let mut q = db.prepare("SELECT id,embedding FROM speakers WHERE embedding IS NOT NULL")?;
@@ -521,7 +570,7 @@ fn persist(root: &Path, id: &str, md: &Path, raw: &Value, diar: &Value) -> Resul
             id
         ],
     )?;
-    crate::health::indexed(&tx,id,md)?;
+    crate::health::indexed_from(&tx,id,md,written)?;
     tx.commit()?;
     Ok(())
 }
@@ -547,6 +596,71 @@ mod tests {
         assert!(runtime.installed());
     }
     use super::*;
+    fn with_folder(dir: &Path) -> crate::pipeline::Config {
+        crate::pipeline::Config { transcript_directory: dir.to_string_lossy().into_owned(), ..Default::default() }
+    }
+    fn video(title: &str, channel: &str, date: &str, url: &str, transcript: Option<&str>) -> Value {
+        json!({"id": "[\"UCx\",\"vid12345678\"]", "title": title, "channel": channel, "date": date, "url": url, "transcript": transcript})
+    }
+    #[test]
+    fn new_transcripts_are_saved_beside_the_others_named_like_concord() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let folder = root.join("Transcripts");
+        fs::create_dir(&folder).unwrap();
+        let watch = "https://www.youtube.com/watch?v=vid12345678";
+        let row = video("The Angels Got Their Orders — You’re Walking", "Ellen McFarlane", "20261005", watch, None);
+        let target = transcript_target(root, &with_folder(&folder), &row, "job1").unwrap();
+        assert_eq!(target, folder.join("Ellen_McFarlane/2026-10-05 - The_Angels_Got_Their_Orders_Youre_Walking.md"));
+        assert!(folder.join("Ellen_McFarlane").is_dir());
+        // Without a chosen folder, Concord keeps them in its own.
+        assert_eq!(transcript_target(root, &crate::pipeline::Config::default(), &row, "job1").unwrap(), root.join("transcripts/job1/transcript.md"));
+        // A local file's date is when it was added, so it isn't put in the name.
+        let local = video("2026-08-08 - You_Just_Passed", "Bella_Bashan", "2026-10-01", "", None);
+        assert_eq!(transcript_target(root, &with_folder(&folder), &local, "job2").unwrap(), folder.join("Bella_Bashan/2026-08-08_-_You_Just_Passed.md"));
+        // A transcript already in the folder, under any name, is replaced where it is.
+        let existing = folder.join("LastDays/112123_Last_Days.md");
+        fs::create_dir_all(existing.parent().unwrap()).unwrap();
+        fs::write(&existing, "old transcript").unwrap();
+        let row = video("Last Days", "LastDays", "20231121", watch, Some(existing.to_str().unwrap()));
+        assert_eq!(transcript_target(root, &with_folder(&folder), &row, "job3").unwrap(), existing);
+        // Another recording's transcript is never taken over.
+        let other = folder.join("Ellen_McFarlane/2026-10-05 - The_Angels_Got_Their_Orders_Youre_Walking.md");
+        fs::write(&other, "someone else's").unwrap();
+        let row = video("The Angels Got Their Orders — You’re Walking", "Ellen McFarlane", "2026-10-05", watch, Some(root.join("transcripts/old/transcript.md").to_str().unwrap()));
+        assert_eq!(transcript_target(root, &with_folder(&folder), &row, "job4").unwrap(), folder.join("Ellen_McFarlane/2026-10-05 - The_Angels_Got_Their_Orders_Youre_Walking [vid12345678].md"));
+        // A folder on a drive that isn't connected stops the job before any work is done.
+        let gone = transcript_target(root, &with_folder(&root.join("unplugged")), &row, "job5").unwrap_err();
+        assert!(format!("{gone:#}").contains("Settings"), "{gone:#}");
+    }
+    #[test]
+    fn a_transcript_is_replaced_only_once_the_new_one_is_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let folder = root.join("Transcripts/LastDays");
+        fs::create_dir_all(&folder).unwrap();
+        let md = folder.join("Last_Days.md");
+        fs::write(&md, "old transcript").unwrap();
+        fs::write(md.with_extension("json"), "{\"segments\":[]}").unwrap();
+        let db = db::open(root).unwrap();
+        db.execute("INSERT INTO media(id,title,transcript,status) VALUES ('m','Last Days',?1,'complete')", [md.to_str()]).unwrap();
+        let raw = json!({"word_count": 2, "duration_seconds": 10., "segments": [{"speaker": "S0", "start": 0., "end": 10., "text": "New words"}]});
+        let bad = json!({"speakerProfiles": [{"localSpeaker": "S0"}]});
+        assert!(publish(root, "m", &md, &raw, &bad).is_err());
+        assert_eq!(fs::read_to_string(&md).unwrap(), "old transcript");
+        assert_eq!(fs::read_to_string(md.with_extension("json")).unwrap(), "{\"segments\":[]}");
+        let left: Vec<_> = fs::read_dir(&folder).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left.len(), 2, "no temporary files are left behind: {left:?}");
+        let good = json!({"segments": [], "speakerProfiles": []});
+        publish(root, "m", &md, &raw, &good).unwrap();
+        assert!(fs::read_to_string(&md).unwrap().contains("New words"));
+        assert!(fs::read_to_string(md.with_extension("json")).unwrap().contains("New words"));
+        assert_eq!(db::media(root, "m").unwrap()["transcript"], md.to_str().unwrap());
+        let (bytes, _) = crate::health::stamp(&md).unwrap();
+        let recorded: i64 = db.query_row("SELECT bytes FROM archive_transcripts WHERE media_id='m'", [], |r| r.get(0)).unwrap();
+        assert_eq!(recorded as u64, bytes, "the health audit sees the new file");
+        assert_eq!(fs::read_dir(&folder).unwrap().count(), 2);
+    }
     #[test]
     fn replacement_keeps_manual_labels_on_new_voice_numbers_and_rolls_back_on_error() {
         let dir=tempfile::tempdir().unwrap();let root=dir.path();
@@ -558,11 +672,11 @@ mod tests {
         let md=root.join("new.md");fs::write(&md,"New transcript").unwrap();
         let raw=json!({"word_count":4,"duration_seconds":20.,"segments":[{"speaker":"new_9","start":0.,"end":10.,"text":"Alice replacement"},{"speaker":"new_3","start":10.,"end":20.,"text":"Bob replacement"}]});
         let bad=json!({"speakerProfiles":[{"localSpeaker":"new_9"}]});
-        assert!(persist(root,"m",&md,&raw,&bad).is_err());
+        assert!(persist(root,"m",&md,&md,&raw,&bad).is_err());
         assert_eq!(db::media(root,"m").unwrap()["transcript"],"old.md");
         assert_eq!(db.query_row("SELECT count(*) FROM assignments",[],|r|r.get::<_,i64>(0)).unwrap(),3);
         let diar=json!({"speakerProfiles":[{"localSpeaker":"new_9","centroid":[1.,0.],"airtimeSeconds":10.},{"localSpeaker":"new_3","centroid":[0.,1.],"airtimeSeconds":10.}]});
-        persist(root,"m",&md,&raw,&diar).unwrap();
+        persist(root,"m",&md,&md,&raw,&diar).unwrap();
         let rows=db::rows(&db,"SELECT local_id,speaker_id,confidence FROM assignments ORDER BY local_id",[]).unwrap();
         assert_eq!(rows,json!([{"local_id":"new_3","speaker_id":"bob","confidence":null},{"local_id":"new_9","speaker_id":"alice","confidence":null}]).as_array().unwrap().to_vec());
         assert_eq!(db::media(root,"m").unwrap()["transcript"],md.to_string_lossy().as_ref());

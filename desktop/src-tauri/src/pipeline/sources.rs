@@ -739,12 +739,14 @@ pub fn seed(root: &Path) -> Result<()> {
         "UPDATE channels SET kind='collection' WHERE url='' AND kind='youtube'",
         [],
     )?;
-    let done: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM settings WHERE key='pipeline.downloadsImported')",
-        [],
-        |r| r.get(0),
-    )?;
-    if done {
+    // Each group of Electron settings is carried over once; libraries imported by an earlier
+    // version pick up the newer groups at their next start.
+    let marked = |key: &str| -> Result<bool> {
+        Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1)", [key], |r| r.get(0))?)
+    };
+    let downloads = !marked("pipeline.downloadsImported")?;
+    let transcripts = !marked("pipeline.transcriptsImported")?;
+    if !downloads && !transcripts {
         return Ok(());
     }
     let legacy: Option<String> = db
@@ -774,9 +776,15 @@ pub fn seed(root: &Path) -> Result<()> {
             .flatten()
         };
         let mut cfg = config(root)?;
-        if let Some(dir) = get("videoSaveDir").filter(|p| Path::new(p).is_absolute()) {
-            cfg.download_directory = dir;
+        if transcripts && cfg.transcript_directory.is_empty() {
+            if let Some(dir) = get("transcriptDir").filter(|p| Path::new(p).is_absolute()) {
+                cfg.transcript_directory = dir;
+            }
         }
+        if downloads {
+            if let Some(dir) = get("videoSaveDir").filter(|p| Path::new(p).is_absolute()) {
+                cfg.download_directory = dir;
+            }
         if let Some(q) = get("videoQuality").filter(|s| {
             ["best", "4320", "2160", "1440", "1080", "720", "480", "360"].contains(&s.as_str())
         }) {
@@ -804,11 +812,13 @@ pub fn seed(root: &Path) -> Result<()> {
         {
             cfg.check_minutes = n;
         }
+        }
         save_config(root, &cfg)?;
     }
-    db.execute(
-        "INSERT OR IGNORE INTO settings VALUES ('pipeline.downloadsImported','1')",
-        [],
-    )?;
+    for (key, wanted) in [("pipeline.downloadsImported", downloads), ("pipeline.transcriptsImported", transcripts)] {
+        if wanted {
+            db.execute("INSERT OR IGNORE INTO settings VALUES (?1,'1')", [key])?;
+        }
+    }
     Ok(())
 }
