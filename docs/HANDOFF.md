@@ -10,7 +10,18 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
-## One way in: Add, Following and Activity (0.29.1, branch `feature/adding`, installed, not merged)
+## One way in: Add, Following and Activity (0.29.2, branch `feature/adding`, installed, not merged)
+
+0.29.2 (November 20): the user imported their Electron library (2,610 recordings) and now uses
+Concord Next alone. New transcripts are saved as Electron saved them,
+`<transcript folder>/<Channel_Name>/<YYYY-MM-DD - Title>.md` with `.json` beside it
+(`Config.transcript_directory`, Settings → Processing & downloads; empty keeps
+`<data>/transcripts/<job>/`). Local files get no date prefix (their date is the import date).
+A transcript already in the folder is replaced in place; `speech::publish` writes
+`*.concord-saving` files, commits the library (stamp taken from the new file), then renames.
+`sources::seed` carries Electron's `transcriptDir` over once (`pipeline.transcriptsImported`),
+including for libraries imported earlier; it runs at startup. The Electron semantic index
+(3.7 GB of `vec_*` tables) is not imported; Concord Next's index is rebuilt from the AI page.
 
 0.29.1 (October 8): downloads follow the Electron pipeline. Files go to
 `<download folder>/<Channel_Name>/<YYYY-MM-DD - Title>.<ext>` (Electron's `sanitizeFileName`
