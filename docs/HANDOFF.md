@@ -10,7 +10,17 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
-## One way in: Add, Following and Activity (0.29.2, branch `feature/adding`, installed, not merged)
+## One way in: Add, Following and Activity (0.29.3, branch `feature/adding`, installed, not merged)
+
+0.29.3 (November 20): after the Electron import, nothing checked for new videos and a video
+Electron had queued sat undownloaded. `sources::seed` now runs `follow_imported` once
+(`pipeline.subscriptionsFollowed`): enabled YouTube channels get `since`=now, `file://` channels
+become folder sources (watched if enabled), and Electron `video_queue` rows still `pending`
+with no file are queued as downloads. Folder scans skip Electron's `*.playback.m4a` copies.
+Follow checks mark what they add (`source_seen` row `added:<video id>`); the download-time
+date backstop applies only to those, so an old video queued by hand still downloads. Downloads
+use the collection's name (`media.channel`) for the channel folder. `enqueue` and `add_videos`
+queue a download for a recording with a link but no file. Activity → Following has Check all now.
 
 0.29.2 (November 20): the user imported their Electron library (2,610 recordings) and now uses
 Concord Next alone. New transcripts are saved as Electron saved them,
