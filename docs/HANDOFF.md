@@ -17,8 +17,9 @@ download used up its three tries on "download folder is unavailable". A missing 
 transcripts folder now raises `pipeline::FolderUnavailable`; `queue::finish` keeps such a job in
 `retry` without counting the try and looks again every minute. The download folder is checked
 before yt-dlp is asked for metadata, so the wait makes no YouTube requests. Also in this build:
-the follow-date backstop keys on the video id stored in the recording's link (2a98d6b). The
-user's Hyprland autostart now mounts the drive at login (`udisksctl mount`, by UUID).
+the follow-date backstop keys on the video id stored in the recording's link (2a98d6b). A
+`udisksctl mount` in the user's Hyprland autostart didn't mount the drive at login and was
+removed; the user mounts it by hand, and queued work waits until they do.
 
 0.29.3 (November 20): after the Electron import, nothing checked for new videos and a video
 Electron had queued sat undownloaded. `sources::seed` now runs `follow_imported` once
