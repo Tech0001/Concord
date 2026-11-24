@@ -10,7 +10,15 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
-## One way in: Add, Following and Activity (0.29.3, branch `feature/adding`, installed, not merged)
+## One way in: Add, Following and Activity (0.29.4, branch `feature/adding`, installed, not merged)
+
+0.29.4 (November 23): after a restart the user's external drive wasn't mounted, and a queued
+download used up its three tries on "download folder is unavailable". A missing download or
+transcripts folder now raises `pipeline::FolderUnavailable`; `queue::finish` keeps such a job in
+`retry` without counting the try and looks again every minute. The download folder is checked
+before yt-dlp is asked for metadata, so the wait makes no YouTube requests. Also in this build:
+the follow-date backstop keys on the video id stored in the recording's link (2a98d6b). The
+user's Hyprland autostart now mounts the drive at login (`udisksctl mount`, by UUID).
 
 0.29.3 (November 20): after the Electron import, nothing checked for new videos and a video
 Electron had queued sat undownloaded. `sources::seed` now runs `follow_imported` once
