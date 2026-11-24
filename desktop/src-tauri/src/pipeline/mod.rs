@@ -13,6 +13,17 @@ pub use queue::{action, candidates, enqueue, enqueue_one, recover, snapshot, Bat
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+/// A chosen folder that isn't there, usually because its drive isn't connected. Work waits for
+/// it instead of using up its tries.
+#[derive(Debug)]
+pub(crate) struct FolderUnavailable(pub &'static str);
+impl std::fmt::Display for FolderUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for FolderUnavailable {}
 pub use worker::{launch, Control};
 
 #[derive(Clone, Deserialize, Serialize)]

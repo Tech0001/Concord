@@ -301,6 +301,10 @@ fn fetch_using(
     {
         return Ok(Outcome::File(path));
     }
+    // Noticed before asking YouTube, so waiting for a drive to be connected costs nothing.
+    if !cfg.download_directory.is_empty() && !Path::new(&cfg.download_directory).is_dir() {
+        return Err(super::FolderUnavailable("The download folder is unavailable. Reconnect its drive or choose a folder in Settings → Processing & downloads.").into());
+    }
     let job = row["id"].as_str().context("Queue item missing")?;
     let media = row["media_id"].as_str().context("Recording missing")?;
     let url = youtube_url(
@@ -360,9 +364,6 @@ fn fetch_using(
     } else {
         PathBuf::from(&cfg.download_directory)
     };
-    if !cfg.download_directory.is_empty() {
-        anyhow::ensure!(base.is_dir(),"The download folder is unavailable. Reconnect its drive or choose a folder in Settings → Processing & downloads.");
-    }
     // Saved like Concord: a folder per channel, files named by date and title.
     let channel = row["channel"].as_str().filter(|c| !c.trim().is_empty()).or_else(|| metadata["channel"].as_str()).or_else(|| metadata["uploader"].as_str()).unwrap_or("");
     let folder = base.join(channel_folder(channel));
@@ -594,6 +595,24 @@ print('CONCORD_FILE:'+json.dumps(str(out)))
         assert!(path.starts_with(root.join("media/LastDays").canonicalize().unwrap()), "{}", path.display());
         db.execute("INSERT INTO source_seen VALUES ('ch-1','added:fixture1234')", []).unwrap();
         assert!(matches!(fetch_using(root, &control, &row("two", "job2"), &Config::default(), &fake).unwrap(), Outcome::Skipped(_)));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_missing_download_folder_waits_without_asking_youtube() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let asked = root.join("asked");
+        let fake = root.join("yt-dlp-fixture.sh");
+        std::fs::write(&fake, format!("#!/bin/sh\ntouch '{}'\nexit 1\n", asked.display())).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        db::open(root).unwrap();
+        let row = json!({"id": "job1", "media_id": "one", "url": "https://www.youtube.com/watch?v=fixture1234", "source_id": null, "channel": "LastDays", "path": null});
+        let cfg = Config { download_directory: root.join("unplugged").to_string_lossy().into_owned(), ..Default::default() };
+        let err = fetch_using(root, &speech::Control::default(), &row, &cfg, &fake).err().expect("a missing folder stops the download");
+        assert!(err.chain().any(|c| c.is::<crate::pipeline::FolderUnavailable>()), "{err:#}");
+        assert!(!asked.exists(), "YouTube isn't asked while the drive is away");
     }
 
     #[test]

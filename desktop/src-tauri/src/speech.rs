@@ -459,7 +459,9 @@ pub(crate) fn transcript_target(root: &Path, cfg: &crate::pipeline::Config, medi
         return Ok(root.join("transcripts").join(job).join("transcript.md"));
     }
     let folder = Path::new(&cfg.transcript_directory);
-    anyhow::ensure!(folder.is_dir(), "The transcripts folder is unavailable. Reconnect its drive or choose a folder in Settings → Processing & downloads.");
+    if !folder.is_dir() {
+        return Err(crate::pipeline::FolderUnavailable("The transcripts folder is unavailable. Reconnect its drive or choose a folder in Settings → Processing & downloads.").into());
+    }
     if let Some(current) = media["transcript"].as_str().map(Path::new) {
         if current.starts_with(folder) && current.parent().is_some_and(Path::is_dir) {
             return Ok(current.to_owned());
@@ -632,6 +634,7 @@ mod tests {
         // A folder on a drive that isn't connected stops the job before any work is done.
         let gone = transcript_target(root, &with_folder(&root.join("unplugged")), &row, "job5").unwrap_err();
         assert!(format!("{gone:#}").contains("Settings"), "{gone:#}");
+        assert!(gone.chain().any(|c| c.is::<crate::pipeline::FolderUnavailable>()), "the job waits for the drive: {gone:#}");
     }
     #[test]
     fn a_transcript_is_replaced_only_once_the_new_one_is_saved() {

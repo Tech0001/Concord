@@ -264,6 +264,8 @@ pub(super) fn finish(
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let closing = control.closing.load(Ordering::SeqCst);
+    // A drive that isn't connected doesn't use up tries; the work looks for it again each minute.
+    let drive = result.as_ref().err().is_some_and(|e| e.chain().any(|c| c.is::<super::FolderUnavailable>()));
     // Publication is atomic. If it completed just before cancellation, report success.
     let (status, message) = match result {
         Ok(()) => ("complete", "Transcript and speakers are ready".into()),
@@ -289,6 +291,7 @@ pub(super) fn finish(
                 "Waiting for YouTube downloads to be enabled in Settings".into(),
             )
         }
+        Err(e) if drive => ("retry", format!("{e:#}\nWaiting for it; checking again every minute")),
         Err(e) if attempts <= cfg.retries => (
             "retry",
             format!(
@@ -304,6 +307,9 @@ pub(super) fn finish(
         params![status, message, id],
     )?;
     tx.execute("UPDATE pipeline_work SET retry_at=?1,finished_at=CASE WHEN ?2 IN ('complete','failed','cancelled') THEN datetime('now') ELSE NULL END WHERE id=?3",params![at+i64::from(cfg.retry_minutes)*60,status,id])?;
+    if drive && status == "retry" {
+        tx.execute("UPDATE pipeline_work SET attempts=max(0,attempts-1),retry_at=?1 WHERE id=?2", params![at + 60, id])?;
+    }
     if status == "queued" {
         tx.execute(
             "UPDATE pipeline_work SET attempts=max(0,attempts-1) WHERE id=?1",

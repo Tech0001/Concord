@@ -1082,3 +1082,27 @@ fn pasting_the_link_of_a_recording_that_never_downloaded_downloads_it() {
     let rows: i64 = db::open(root).unwrap().query_row("SELECT count(*) FROM media WHERE url='https://www.youtube.com/watch?v=vvvvvvvvvvv'", [], |r| r.get(0)).unwrap();
     assert_eq!(rows, 1, "no second copy of the recording");
 }
+#[test]
+fn a_missing_drive_holds_work_until_it_is_back_without_using_its_tries() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    save_config(root, &Config { retries: 0, retry_minutes: 5, ..Default::default() }).unwrap();
+    enqueue(root, &c, &Batch { ids: vec!["one".into()], ..Default::default() }, true).unwrap();
+    let missing = || -> anyhow::Result<()> {
+        Err(anyhow::Error::new(FolderUnavailable("The download folder is unavailable. Reconnect its drive or choose a folder in Settings → Processing & downloads.")).context("Download failed"))
+    };
+    for at in [100, 160, 220] {
+        let job = queue::claim(root, at).unwrap().expect("tried again a minute later");
+        let id = job["id"].as_str().unwrap().to_owned();
+        queue::finish(root, &id, missing(), &c, at).unwrap();
+        let s = state(root, &id);
+        assert_eq!((s["status"].as_str(), s["attempts"].as_i64(), s["retry_at"].as_i64()), (Some("retry"), Some(0), Some(at + 60)), "{s}");
+        assert!(s["message"].as_str().unwrap().contains("Reconnect its drive"), "{s}");
+        assert!(queue::claim(root, at + 59).unwrap().is_none());
+    }
+    // Any other failure still uses up its tries.
+    let job = queue::claim(root, 280).unwrap().unwrap();
+    let id = job["id"].as_str().unwrap().to_owned();
+    queue::finish(root, &id, Err(anyhow::anyhow!("permanent failure")), &c, 280).unwrap();
+    assert_eq!(state(root, &id)["status"], "failed");
+}
