@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Copy,
+  Database,
   MessageCircle,
   MoreHorizontal,
   Plus,
@@ -49,7 +50,27 @@ export function ChatView({ compact = false }: { compact?: boolean }) {
     [filters, setFilters] = useState(false),
     [remove, setRemove] = useState(false),
     [rename, setRename] = useState(false),
-    [title, setTitle] = useState("");
+    [title, setTitle] = useState(""),
+    [startingIndex, setStartingIndex] = useState(false),
+    [indexStarted, setIndexStarted] = useState(false);
+  const startIndexFromChat = async () => {
+    setStartingIndex(true);
+    try {
+      await api.aiIndex();
+      setIndexStarted(true);
+      toast.info("Building semantic search index", {
+        label: "Activity",
+        run: () => {
+          chat.close();
+          navigate({ page: "activity" });
+        },
+      });
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setStartingIndex(false);
+    }
+  };
   const touch = useMediaQuery(COARSE);
   const messages = useRef<HTMLDivElement>(null),
     input = useRef<HTMLTextAreaElement>(null),
@@ -238,7 +259,45 @@ export function ChatView({ compact = false }: { compact?: boolean }) {
                   <small>{modeLabel(m.context_kind, m.context_media_id)}</small>
                 </header>
                 {m.context_status && (
-                  <p className="chat-status-line">{m.context_status}</p>
+                  <div className="chat-status-line">
+                    <span>{m.context_status}</span>
+                    {m.context_status.includes("index isn't built") && (
+                      indexStarted ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            chat.close();
+                            navigate({ page: "activity" });
+                          }}
+                        >
+                          Indexing… View Activity
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          icon={Database}
+                          disabled={startingIndex}
+                          onClick={() => void startIndexFromChat()}
+                        >
+                          Build search index
+                        </Button>
+                      )
+                    )}
+                    {m.context_status.includes("turned off in Settings") && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={Settings2}
+                        onClick={() => {
+                          chat.close();
+                          navigate({ page: "settings", section: "ai" });
+                        }}
+                      >
+                        AI &amp; Search settings
+                      </Button>
+                    )}
+                  </div>
                 )}
                 <Markdown
                   source={m.content}

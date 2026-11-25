@@ -36,6 +36,7 @@ pub fn verify(path: &Path, pinned: &Pinned) -> Result<()> {
         format!("{:x}", sha.finalize()) == pinned.hash,
         "Model checksum does not match the pinned release"
     );
+    crate::runtime_log::debug("Model download", &format!("Size and SHA-256 verified: {} bytes", pinned.bytes));
     Ok(())
 }
 
@@ -48,6 +49,7 @@ pub fn fetch(
     progress: &mut dyn FnMut(u64) -> Result<()>,
 ) -> Result<()> {
     check()?;
+    crate::runtime_log::debug("Model download", &format!("Preparing pinned artifact: {} bytes", pinned.bytes));
     let mut offset = fs::metadata(partial).map(|m| m.len()).unwrap_or(0);
     if offset > pinned.bytes {
         fs::remove_file(partial)?;
@@ -100,6 +102,8 @@ pub fn fetch(
             } else {
                 fs::File::create(partial)?
             };
+            crate::runtime_log::debug("Model download", &format!("{} at {offset} of {} bytes", if resumed { "Resuming" } else { "Starting" }, pinned.bytes));
+            let mut logged_percent = offset.saturating_mul(100) / pinned.bytes.max(1) / 10;
             let mut bytes = offset;
             progress(bytes)?;
             let mut last = Instant::now();
@@ -113,11 +117,17 @@ pub fn fetch(
                 file.write_all(&chunk)?;
                 if last.elapsed() > Duration::from_millis(500) {
                     progress(bytes)?;
+                    let bucket = bytes.saturating_mul(100) / pinned.bytes.max(1) / 10;
+                    if bucket > logged_percent {
+                        crate::runtime_log::debug("Model download", &format!("{} / {} bytes ({}%)", bytes, pinned.bytes, bytes.saturating_mul(100) / pinned.bytes.max(1)));
+                        logged_percent = bucket;
+                    }
                     last = Instant::now();
                 }
             }
             file.sync_all()?;
             progress(bytes)?;
+            crate::runtime_log::debug("Model download", &format!("Received {bytes} / {} bytes; verifying before use", pinned.bytes));
             // Keep a short file: the next attempt continues it instead of starting over.
             ensure!(
                 bytes == pinned.bytes,

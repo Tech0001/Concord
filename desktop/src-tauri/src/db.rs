@@ -78,7 +78,7 @@ const MEDIA_COLUMNS_V2: [(&str, &str); 4] = [
 
 fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 15 {
+    if version >= 16 {
         return Ok(());
     }
     // Immediate: two windows opening at once must not both add the columns.
@@ -129,7 +129,16 @@ fn migrate(db: &mut Connection) -> Result<()> {
             if !present { tx.execute_batch(&format!("ALTER TABLE ai_messages ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"))?; }
         }
     }
-    tx.execute_batch("PRAGMA user_version=15")?;
+    if version < 16 {
+        // Following needs channels.since and source_seen on libraries that were already past version 9.
+        crate::pipeline::migrate_sources(&tx)?;
+        if version > 0 {
+            crate::pipeline::keep_old_work_paused(&tx)?;
+            // An enabled folder source was set up to bring recordings in: it's a watched folder now.
+            tx.execute("UPDATE channels SET since=CAST(strftime('%s','now') AS INTEGER) WHERE kind='folder' AND enabled=1 AND since=0", [])?;
+        }
+    }
+    tx.execute_batch("PRAGMA user_version=16")?;
     tx.commit()?;
     Ok(())
 }
@@ -263,6 +272,8 @@ pub struct LibraryFilter {
     pub status: String,
     pub query: String,
     pub channel: String,
+    /// One followed channel or folder (a source id), or all.
+    pub source: String,
     pub kind: String,
     pub transcribed: String,
     pub starred: bool,
@@ -283,15 +294,17 @@ fn order_by(sort: &str) -> &'static str {
     }
 }
 
-pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
-    let db = open(root)?;
+/// The query and conditions a Library page uses, shared with choosing everything it matches.
+/// Parameters: ?1 query, ?2 LIKE pattern, ?3 channel, ?4 kind, ?5 transcribed, ?6 starred,
+/// ?7 review, ?8 category, ?9 status, ?10 source.
+fn library_query() -> (String, String) {
     let kind = kind_sql();
-    let query = f.query.trim();
-    let pattern = like_pattern(query);
     let cte = "WITH latest_job AS (
-      SELECT media_id,status,row_number() OVER (PARTITION BY media_id ORDER BY rowid DESC) AS position FROM jobs
+      SELECT j.media_id,j.status,j.message,p.kind,row_number() OVER (PARTITION BY j.media_id ORDER BY j.rowid DESC) AS position
+      FROM jobs j LEFT JOIN pipeline_work p ON p.id=j.id
     ), library_media AS (
-      SELECT m.*, CASE WHEN m.status='archived' THEN 'archived' ELSE CASE j.status WHEN 'running' THEN 'processing' WHEN 'queued' THEN 'pending'
+      SELECT m.*, CASE WHEN j.status IN ('running','queued','retry','waiting_live','failed') THEN j.message END AS job_message,
+        CASE WHEN j.status IN ('running','queued','retry','waiting_live','failed') THEN j.kind END AS job_kind, CASE WHEN m.status='archived' THEN 'archived' ELSE CASE j.status WHEN 'running' THEN 'processing' WHEN 'queued' THEN 'pending'
         WHEN 'retry' THEN 'pending' WHEN 'waiting_live' THEN 'live' WHEN 'failed' THEN 'failed'
         WHEN 'cancelled' THEN 'cancelled' ELSE CASE m.status
           WHEN 'live' THEN 'live' WHEN 'waiting_live' THEN 'live' WHEN 'failed' THEN 'failed'
@@ -306,21 +319,30 @@ pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
          AND (?5 = '' OR (?5 = 'yes') = (m.transcript IS NOT NULL))
          AND (?6 = 0 OR m.starred = 1)
          AND (?7 = '' OR m.review_state = ?7)
-         AND (?8 = '' OR m.category = ?8) AND (?9 = '' OR m.processing_status = ?9)"
+         AND (?8 = '' OR m.category = ?8) AND (?9 = '' OR m.processing_status = ?9)
+         AND (?10 = '' OR m.source_id = ?10)"
     );
-    let args: [&dyn rusqlite::ToSql; 9] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status];
+    (cte.to_owned(), filter)
+}
+pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
+    let db = open(root)?;
+    let kind = kind_sql();
+    let query = f.query.trim();
+    let pattern = like_pattern(query);
+    let (cte, filter) = library_query();
+    let args: [&dyn rusqlite::ToSql; 10] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status, &f.source];
     let (total, transcribed): (i64, i64) = db.query_row(
         &format!("{cte} SELECT count(*), coalesce(sum(m.transcript IS NOT NULL), 0) FROM library_media m WHERE {filter}"),
         &args[..],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let limit = if [60, 120, 240].contains(&f.limit) { f.limit } else { 60 };
-    let paged: [&dyn rusqlite::ToSql; 10] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status, &f.offset];
+    let paged: [&dyn rusqlite::ToSql; 11] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status, &f.source, &f.offset];
     let mut items = rows(
         &db,
         &format!(
             "{cte} SELECT m.*, {kind} AS kind, (SELECT count(*) FROM assignments a WHERE a.media_id = m.id) AS speaker_count
-             FROM library_media m WHERE {filter} ORDER BY {},m.id LIMIT {limit} OFFSET ?10",
+             FROM library_media m WHERE {filter} ORDER BY {},m.id LIMIT {limit} OFFSET ?11",
             order_by(&f.sort)
         ),
         &paged[..],
@@ -334,6 +356,17 @@ pub fn library(root: &Path, f: &LibraryFilter) -> Result<Value> {
     }))
 }
 
+/// Every recording a Library filter matches, across all its pages, in the page order.
+pub fn library_ids(root: &Path, f: &LibraryFilter) -> Result<Vec<String>> {
+    let db = open(root)?;
+    let query = f.query.trim();
+    let pattern = like_pattern(query);
+    let (cte, filter) = library_query();
+    let args: [&dyn rusqlite::ToSql; 10] = [&query, &pattern, &f.channel, &f.kind, &f.transcribed, &f.starred, &f.review, &f.category, &f.status, &f.source];
+    let mut statement = db.prepare(&format!("{cte} SELECT m.id FROM library_media m WHERE {filter} ORDER BY {},m.id LIMIT 100000", order_by(&f.sort)))?;
+    let ids = statement.query_map(&args[..], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
 /// Named voices per recording, loudest first; the Library shows the top three.
 fn attach_speakers(db: &Connection, items: &mut [Value]) -> Result<()> {
     let ids: Vec<&str> = items.iter().filter_map(|m| m["id"].as_str()).collect();
@@ -661,7 +694,7 @@ mod tests {
         assert_eq!(
             db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
         drop(db);
         open(tmp.path()).unwrap(); // reopening is a no-op, not a duplicate-column error
@@ -816,6 +849,30 @@ mod tests {
         assert!(set_review(&root, "b", "archived").is_err());
         assert!(set_starred(&root, "missing", true).is_err());
         assert!(save_position(&root, "b", f64::NAN).is_err());
+    }
+
+    #[test]
+    fn every_recording_matching_a_filter_can_be_chosen_at_once() {
+        let (_tmp, root) = library_fixture();
+        let all = library_ids(&root, &LibraryFilter { limit: 60, offset: 2, ..Default::default() }).unwrap();
+        assert_eq!(all.len(), 3, "paging doesn't limit the choice");
+        let page = ids(&library(&root, &LibraryFilter { sort: "title".into(), ..Default::default() }).unwrap());
+        let mut sorted = all.clone();
+        sorted.sort();
+        let mut expected: Vec<String> = page.iter().map(|s| s.to_string()).collect();
+        expected.sort();
+        assert_eq!(sorted, expected);
+        assert_eq!(library_ids(&root, &LibraryFilter { query: "no such recording".into(), ..Default::default() }).unwrap().len(), 0);
+    }
+    #[test]
+    fn the_library_can_show_one_followed_collection() {
+        let (_tmp, root) = library_fixture();
+        open(&root).unwrap().execute("UPDATE media SET source_id='src-1' WHERE id IN ('a','c')", []).unwrap();
+        let filtered = |f: LibraryFilter| ids(&library(&root, &f).unwrap());
+        assert_eq!(filtered(LibraryFilter { source: "src-1".into(), sort: "title".into(), ..Default::default() }).len(), 2);
+        assert!(filtered(LibraryFilter { source: "src-1".into(), ..Default::default() }).iter().all(|id| id != "b"));
+        assert_eq!(filtered(LibraryFilter { source: "elsewhere".into(), ..Default::default() }).len(), 0);
+        assert_eq!(filtered(LibraryFilter::default()).len(), 3);
     }
 
     #[test]

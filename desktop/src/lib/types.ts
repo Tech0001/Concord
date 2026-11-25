@@ -5,6 +5,9 @@ export type SpeakerSummary = { name: string; color: string | null; airtime: numb
 export type Media = {
   category?: "personal" | "work";
   processing_status?: string;
+  /** The latest unfinished job's progress text and kind ("download" or "transcribe"). */
+  job_message?: string | null;
+  job_kind?: string | null;
   url?: string;
   id: string;
   title: string;
@@ -48,6 +51,8 @@ export type LibraryFilter = {
   status: string;
   query: string;
   channel: string;
+  /** One followed channel or folder; set from the route, never saved with views. */
+  source?: string;
   kind: "" | "audio" | "video";
   transcribed: "" | "yes" | "no";
   starred: boolean;

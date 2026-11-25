@@ -1,17 +1,29 @@
 //! Durable, single-recording processing. Queue state survives application restarts.
 pub mod download;
 pub mod downloader;
+pub mod links;
 mod queue;
 pub mod sources;
 pub(crate) mod subprocess;
 #[cfg(test)]
 mod tests;
 mod worker;
-use anyhow::Result;
+use anyhow::{Context, Result};
 pub use queue::{action, candidates, enqueue, enqueue_one, recover, snapshot, Batch, WAITING_FOR_SPEECH};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+/// A chosen folder that isn't there, usually because its drive isn't connected. Work waits for
+/// it instead of using up its tries.
+#[derive(Debug)]
+pub(crate) struct FolderUnavailable(pub &'static str);
+impl std::fmt::Display for FolderUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for FolderUnavailable {}
 pub use worker::{launch, Control};
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -21,6 +33,8 @@ pub struct Config {
     pub retries: u32,
     pub retry_minutes: u32,
     pub download_directory: String,
+    /// Where new transcripts are saved, a folder for each channel; empty keeps Concord's own folder.
+    pub transcript_directory: String,
     pub quality: String,
     pub codec: String,
     pub audio_language: String,
@@ -41,6 +55,7 @@ impl Default for Config {
             retries: 2,
             retry_minutes: 5,
             download_directory: String::new(),
+            transcript_directory: String::new(),
             quality: "1080".into(),
             codec: "any".into(),
             audio_language: "en".into(),
@@ -48,7 +63,7 @@ impl Default for Config {
             speed: "conservative".into(),
             rate_mib: 3,
             daily_limit: 200,
-            check_minutes: 1440,
+            check_minutes: 360,
             automatic_checks: false,
             cookies_file: String::new(),
             cookies_browser: String::new(),
@@ -117,6 +132,10 @@ pub fn save_config(root: &Path, value: &Config) -> Result<()> {
         "Choose an absolute download folder path"
     );
     anyhow::ensure!(
+        value.transcript_directory.is_empty() || Path::new(&value.transcript_directory).is_absolute(),
+        "Choose a full path for the transcripts folder"
+    );
+    anyhow::ensure!(
         value.cookies_file.is_empty() || Path::new(&value.cookies_file).is_file(),
         "The cookies file is unavailable"
     );
@@ -124,13 +143,37 @@ pub fn save_config(root: &Path, value: &Config) -> Result<()> {
     Ok(())
 }
 /// Import files and queue them for transcription. They wait in the queue until speech is ready.
-pub fn import_and_queue(root: &Path, control: &Control, paths: &[String], category: &str, device: &str) -> Result<usize> {
+pub fn import_and_queue(root: &Path, control: &Control, paths: &[String], category: &str, device: &str, diarize: bool) -> Result<usize> {
     validate_device(device)?;
     let ids = crate::db::import_media_ids(root, paths, category)?;
     if !ids.is_empty() {
-        enqueue(root, control, &Batch { ids: ids.clone(), device: device.into(), ..Default::default() }, true)?;
+        // Queued work runs by itself; a pause stays a pause.
+        let queued = enqueue(root, control, &Batch { ids: ids.clone(), device: device.into(), ..Default::default() }, false)?;
+        if !diarize {
+            let db = crate::db::open(root)?;
+            for job in queued["ids"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str) {
+                db.execute("UPDATE pipeline_work SET diarize=0 WHERE id=?1", [job])?;
+            }
+        }
     }
     Ok(ids.len())
+}
+/// Where downloaded videos are saved (empty until chosen) and where Concord suggests.
+pub fn download_folder(root: &Path) -> Result<serde_json::Value> {
+    let suggested = directories::UserDirs::new()
+        .and_then(|d| d.video_dir().map(Path::to_path_buf).or_else(|| Some(d.home_dir().join("Videos"))))
+        .unwrap_or_else(|| root.join("media"))
+        .join("Concord");
+    Ok(serde_json::json!({"folder": config(root)?.download_directory, "suggested": suggested}))
+}
+/// Choose where downloaded videos are saved; each channel gets a folder inside it.
+pub fn set_download_folder(root: &Path, folder: &str) -> Result<()> {
+    let path = Path::new(folder.trim());
+    anyhow::ensure!(path.is_absolute(), "Choose a full folder path");
+    std::fs::create_dir_all(path).context("Can't create that folder. Check the drive is connected, or choose another")?;
+    let value = Config { download_directory: path.to_string_lossy().into_owned(), ..config(root)? };
+    crate::db::open(root)?.execute("INSERT INTO settings VALUES ('pipeline.config',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [serde_json::to_string(&value)?])?;
+    Ok(())
 }
 /// The one stored speech device preference, used by the queue and by manual transcription.
 pub fn device(root: &Path) -> Result<String> {
@@ -175,6 +218,7 @@ pub fn migrate_sources(db: &Connection) -> Result<()> {
         ("channels", "check_message", "TEXT NOT NULL DEFAULT ''"),
         ("channels", "check_status", "TEXT NOT NULL DEFAULT ''"),
         ("pipeline_work", "diarize", "INTEGER NOT NULL DEFAULT 1"),
+        ("channels", "since", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         let exists: bool = db.query_row(
             &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1)"),
@@ -185,14 +229,28 @@ pub fn migrate_sources(db: &Connection) -> Result<()> {
             db.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {name} {kind}"))?;
         }
     }
-    db.execute_batch("CREATE TABLE IF NOT EXISTS pipeline_downloads(id INTEGER PRIMARY KEY,job_id TEXT NOT NULL,day TEXT NOT NULL);
+    db.execute_batch("CREATE TABLE IF NOT EXISTS source_seen(source_id TEXT NOT NULL,video_id TEXT NOT NULL,PRIMARY KEY(source_id,video_id));
+        CREATE TABLE IF NOT EXISTS pipeline_downloads(id INTEGER PRIMARY KEY,job_id TEXT NOT NULL,day TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS pipeline_download_day ON pipeline_downloads(day);
         UPDATE channels SET kind='collection' WHERE url='' AND kind='youtube';")?;
     Ok(())
 }
-fn running(db: &Connection) -> Result<bool> {
+/// Work now runs unless paused. A library from before that, with work it queued without
+/// starting (or automatic checks on), keeps waiting until the person resumes it.
+pub fn keep_old_work_paused(db: &Connection) -> Result<()> {
+    db.execute(
+        "INSERT INTO settings(key,value) SELECT 'pipeline.running','false'
+         WHERE NOT EXISTS(SELECT 1 FROM settings WHERE key='pipeline.running')
+         AND (EXISTS(SELECT 1 FROM jobs j JOIN pipeline_work p ON p.id=j.id WHERE j.status IN ('queued','retry','waiting_live'))
+           OR COALESCE((SELECT json_extract(value,'$.automaticChecks') FROM settings WHERE key='pipeline.config'),0)=1)",
+        [],
+    )?;
+    Ok(())
+}
+pub(crate) fn running(db: &Connection) -> Result<bool> {
     Ok(db.query_row(
-        "SELECT COALESCE((SELECT value FROM settings WHERE key='pipeline.running'),'false')='true'",
+        // Work runs unless someone paused it.
+        "SELECT COALESCE((SELECT value FROM settings WHERE key='pipeline.running'),'true')='true'",
         [],
         |r| r.get(0),
     )?)
@@ -213,8 +271,11 @@ pub fn overview(root: &Path) -> Result<serde_json::Value> {
     };
     let config = config(root)?;
     let daily = download::daily_count(&db)?;
+    let active_kind: Option<String> = db
+        .query_row("SELECT p.kind FROM jobs j JOIN pipeline_work p ON p.id=j.id WHERE j.status='running' LIMIT 1", [], |r| r.get(0))
+        .optional()?;
     Ok(
-        serde_json::json!({"running":running(&db)?,"active":count("running"),"queued":count("queued"),"retry":count("retry"),"waitingLive":count("waiting_live"),"failed":count("failed"),"dailyDownloads":daily,"dailyLimit":config.daily_limit,"atDailyLimit":daily>=config.daily_limit}),
+        serde_json::json!({"running":running(&db)?,"active":count("running"),"activeKind":active_kind,"queued":count("queued"),"retry":count("retry"),"waitingLive":count("waiting_live"),"failed":count("failed"),"dailyDownloads":daily,"dailyLimit":config.daily_limit,"atDailyLimit":daily>=config.daily_limit}),
     )
 }
 fn now() -> i64 {

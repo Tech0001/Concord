@@ -289,6 +289,7 @@ pub fn provider(root: &Path, mut progress: impl FnMut(&str) -> Result<()>) -> Re
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            crate::runtime_log::native_line("Embedding runtime", &line);
             if let Some(label) = offload_status(&line) {
                 crate::runtime_log::push("info", &format!("Local semantic search: {label}"));
                 *detected.lock().unwrap() = label;

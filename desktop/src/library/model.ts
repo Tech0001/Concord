@@ -39,3 +39,24 @@ export const viewKey = (f: LibraryFilter, layout: string) => JSON.stringify([nor
 export function processingStatus(m: Media): string {
   return m.processing_status || (m.status === "failed" ? "failed" : m.status === "archived" ? "archived" : m.transcript ? "complete" : ["pending", "queued"].includes(m.status) ? "pending" : m.status === "cancelled" ? "cancelled" : "ready");
 }
+
+export type Progress = { label: string; tone: "busy" | "wait" | "bad"; pct: number | null };
+/** What a recording is waiting for or doing right now, for its card. Null once it's done. */
+export function jobProgress(m: Media): Progress | null {
+  const status = processingStatus(m);
+  const message = m.job_message ?? "";
+  const match = /(\d+(?:\.\d+)?)\s*%/.exec(message);
+  const pct = match ? Math.min(100, Math.floor(Number(match[1]))) : null;
+  const downloading = m.job_kind === "download" && !m.path;
+  if (status === "processing") {
+    if (downloading) return { label: pct == null ? "Downloading" : `Downloading · ${pct}%`, tone: "busy", pct };
+    return { label: pct == null ? "Transcribing" : `Transcribing · ${pct}%`, tone: "busy", pct };
+  }
+  if (status === "pending") {
+    if (/speech engine/i.test(message)) return { label: "Waiting for the speech engine", tone: "wait", pct: null };
+    return { label: downloading ? "Waiting to download" : "Waiting to transcribe", tone: "wait", pct: null };
+  }
+  if (status === "live") return { label: "Waiting for the live stream to end", tone: "wait", pct: null };
+  if (status === "failed") return { label: "Needs attention", tone: "bad", pct: null };
+  return null;
+}

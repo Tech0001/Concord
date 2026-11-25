@@ -28,6 +28,8 @@ fn batch_is_deduplicated_pausable_and_preserves_previous_recordings() {
     let preview = candidates(root, &batch).unwrap();
     assert_eq!(preview["eligible"], 2);
     assert_eq!(preview["unavailable"], 1);
+    // Work runs by itself; only an explicit pause holds it.
+    action(root, &c, "pause", None).unwrap();
     let result = enqueue(root, &c, &batch, false).unwrap();
     assert_eq!(result["added"], 2);
     assert_eq!(result["unavailable"], 1);
@@ -254,7 +256,8 @@ fn folder_sources_preserve_files_metadata_and_labels_when_edited_or_removed() {
     assert_eq!(sources::local(root, &c, &source).unwrap(), 1);
     assert_eq!(sources::local(root, &c, &source).unwrap(), 0);
     let state = snapshot(root).unwrap();
-    assert_eq!(state["running"], false);
+    // Found recordings are processed without a separate start step.
+    assert_eq!(state["running"], true);
     assert_eq!(state["jobs"][0]["diarize"], 0);
     let media = state["jobs"][0]["media_id"].as_str().unwrap();
     let item = db::media(root, media).unwrap();
@@ -438,7 +441,7 @@ fn files_added_during_setup_are_queued_for_transcription() {
     let root = dir.path();
     let file = root.join("new.m4a");
     std::fs::write(&file, b"fixture").unwrap();
-    let added = import_and_queue(root, &c, &[file.to_string_lossy().into_owned()], "work", "auto").unwrap();
+    let added = import_and_queue(root, &c, &[file.to_string_lossy().into_owned()], "work", "auto", true).unwrap();
     assert_eq!(added, 1);
     let queued = db::rows(&db::open(root).unwrap(), "SELECT m.category,j.status FROM jobs j JOIN media m ON m.id=j.media_id WHERE m.path LIKE '%new.m4a'", []).unwrap();
     assert_eq!(queued.len(), 1);
@@ -511,4 +514,595 @@ fn removed_recordings_stay_out_of_folder_and_youtube_scans() {
     let id=serde_json::to_string(&("yt","AbCdEfGhI12")).unwrap();
     crate::media_files::remove(root,&c,&ai,&id).unwrap();
     assert_eq!(sources::ingest(root,&remote,&entries,"cpu").unwrap(),0);
+}
+#[test]
+fn added_work_runs_without_a_start_step_until_paused() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let file = root.join("new.m4a");
+    std::fs::write(&file, b"fixture").unwrap();
+    {
+        let db = db::open(root).unwrap();
+        queue::insert(&db, "one", "one", "transcribe", "auto", true).unwrap();
+    }
+    assert!(queue::claim(root, 1).unwrap().is_some());
+    action(root, &c, "pause", None).unwrap();
+    queue::insert(&db::open(root).unwrap(), "two", "two", "transcribe", "auto", true).unwrap();
+    assert!(queue::claim(root, 2).unwrap().is_none());
+}
+#[test]
+fn the_overview_says_what_kind_of_work_is_running() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    {
+        let db = db::open(root).unwrap();
+        queue::insert(&db, "one", "one", "download", "auto", true).unwrap();
+        queue::insert(&db, "two", "two", "transcribe", "auto", true).unwrap();
+    }
+    assert_eq!(overview(root).unwrap()["activeKind"], Value::Null);
+    assert!(queue::claim(root, 1).unwrap().is_some());
+    let now = overview(root).unwrap();
+    assert_eq!(now["activeKind"], "download");
+    assert_eq!(now["active"], 1);
+    assert_eq!(now["queued"], 1);
+}
+fn channel(root: &Path, c: &Control) -> Value {
+    let id = sources::save(root, c, &sources::Source {
+        id: None,
+        name: "Tuesday Study".into(),
+        kind: "youtube".into(),
+        url: "https://www.youtube.com/@TuesdayStudy".into(),
+        enabled: true,
+        diarize: true,
+        include_shorts: false,
+        category: "personal".into(),
+    })
+    .unwrap();
+    sources::start_following(root, &id).unwrap();
+    sources::source(root, &id).unwrap()
+}
+const VIDEOS: &str = "https://www.youtube.com/@TuesdayStudy/videos";
+const STREAMS: &str = "https://www.youtube.com/@TuesdayStudy/streams";
+const SHORTS: &str = "https://www.youtube.com/@TuesdayStudy/shorts";
+fn tab(url: &str, ids: &[&str], listed: bool) -> sources::Tab {
+    sources::Tab { url: url.into(), entries: ids.iter().map(|id| serde_json::json!({"id": id, "title": format!("Video {id}")})).collect(), listed }
+}
+fn followed_titles(root: &Path, source: &Value) -> Vec<String> {
+    db::rows(&db::open(root).unwrap(), "SELECT title FROM media WHERE source_id=?1 ORDER BY title", [source["id"].as_str()]).unwrap()
+        .iter().map(|r| r["title"].as_str().unwrap().to_owned()).collect()
+}
+#[test]
+fn following_a_channel_adds_only_videos_posted_after_following() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let source = channel(root, &c);
+    assert!(source["since"].as_i64().unwrap() > 0);
+    // The first check after following only records what already exists.
+    assert_eq!(sources::follow_ingest(root, &source, &[tab(VIDEOS, &["aaaaaaaaaaa", "bbbbbbbbbbb"], true)], "auto").unwrap(), 0);
+    let newer = [tab(VIDEOS, &["ccccccccccc", "aaaaaaaaaaa", "bbbbbbbbbbb"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &newer, "auto").unwrap(), 1);
+    assert_eq!(sources::follow_ingest(root, &source, &newer, "auto").unwrap(), 0);
+    assert_eq!(followed_titles(root, &source), ["Video ccccccccccc"]);
+    let marked = |video: &str| -> bool {
+        db::open(root).unwrap().query_row("SELECT EXISTS(SELECT 1 FROM source_seen WHERE source_id=?1 AND video_id=?2)", rusqlite::params![source["id"].as_str(), format!("added:{video}")], |r| r.get(0)).unwrap()
+    };
+    assert!(marked("ccccccccccc"), "a video a follow check added is marked as such");
+    assert!(!marked("aaaaaaaaaaa"), "videos that were already there are not");
+}
+#[test]
+fn a_check_that_could_not_list_a_channel_does_not_count_as_its_baseline() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let source = channel(root, &c);
+    // YouTube refused (offline, sign-in wall): nothing is recorded as seen.
+    assert_eq!(sources::follow_ingest(root, &source, &[tab(VIDEOS, &[], false), tab(STREAMS, &[], false)], "auto").unwrap(), 0);
+    // The first listing that works is the baseline, so older videos are never added.
+    let old = [tab(VIDEOS, &["aaaaaaaaaaa", "bbbbbbbbbbb"], true), tab(STREAMS, &["sssssssssss"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &old, "auto").unwrap(), 0);
+    assert!(followed_titles(root, &source).is_empty());
+}
+#[test]
+fn a_tab_that_failed_once_starts_from_its_own_baseline() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let source = channel(root, &c);
+    assert_eq!(sources::follow_ingest(root, &source, &[tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(STREAMS, &[], false)], "auto").unwrap(), 0);
+    // Streams list for the first time: what they hold predates the follow.
+    let later = [tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(STREAMS, &["sssssssssss", "ttttttttttt"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &later, "auto").unwrap(), 0);
+    let live = [tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(STREAMS, &["uuuuuuuuuuu", "sssssssssss", "ttttttttttt"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &live, "auto").unwrap(), 1);
+    assert_eq!(followed_titles(root, &source), ["Video uuuuuuuuuuu"]);
+}
+#[test]
+fn turning_on_shorts_later_does_not_add_old_shorts() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let mut source = channel(root, &c);
+    sources::follow_ingest(root, &source, &[tab(VIDEOS, &["aaaaaaaaaaa"], true)], "auto").unwrap();
+    source["include_shorts"] = serde_json::json!(1);
+    let with_shorts = [tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(SHORTS, &["hhhhhhhhhhh", "iiiiiiiiiii"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &with_shorts, "auto").unwrap(), 0);
+    let new_short = [tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(SHORTS, &["jjjjjjjjjjj", "hhhhhhhhhhh", "iiiiiiiiiii"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &new_short, "auto").unwrap(), 1);
+}
+#[test]
+fn a_channel_without_a_streams_tab_adds_its_first_stream() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let source = channel(root, &c);
+    // "This channel does not have a streams tab" lists as empty, which is a real baseline.
+    sources::follow_ingest(root, &source, &[tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(STREAMS, &[], true)], "auto").unwrap();
+    let first_stream = [tab(VIDEOS, &["aaaaaaaaaaa"], true), tab(STREAMS, &["sssssssssss"], true)];
+    assert_eq!(sources::follow_ingest(root, &source, &first_stream, "auto").unwrap(), 1);
+}
+#[test]
+fn a_tab_is_listed_in_full_until_it_has_a_baseline_and_playlists_always() {
+    assert_eq!(sources::listing_limit(VIDEOS, false), None);
+    assert_eq!(sources::listing_limit(VIDEOS, true), Some(20));
+    assert_eq!(sources::listing_limit(SHORTS, true), Some(20));
+    assert_eq!(sources::listing_limit("https://www.youtube.com/playlist?list=PL123", true), None);
+}
+#[test]
+fn videos_posted_before_following_are_recognised_at_download() {
+    let since = 1_790_000_000; // 2026-09-21
+    assert!(download::posted_before(&serde_json::json!({"timestamp": since - 10 * 86400}), since));
+    assert!(!download::posted_before(&serde_json::json!({"timestamp": since + 3600}), since));
+    // A day either side is allowed for time zones and premieres.
+    assert!(!download::posted_before(&serde_json::json!({"timestamp": since - 3600}), since));
+    assert!(download::posted_before(&serde_json::json!({"upload_date": "20260901"}), since));
+    assert!(!download::posted_before(&serde_json::json!({"upload_date": "20260920"}), since));
+    assert!(!download::posted_before(&serde_json::json!({}), since));
+    assert!(!download::posted_before(&serde_json::json!({"upload_date": "20200101"}), 0));
+}
+#[test]
+fn an_unwanted_download_leaves_no_trace_in_the_library() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    {
+        let db = db::open(root).unwrap();
+        db.execute("INSERT INTO media(id,title,url,status) VALUES ('old','Old video','https://www.youtube.com/watch?v=ooooooooooo','pending')", []).unwrap();
+        queue::insert(&db, "old", "Old video", "download", "auto", true).unwrap();
+    }
+    let job: String = db::open(root).unwrap().query_row("SELECT id FROM jobs WHERE media_id='old'", [], |r| r.get(0)).unwrap();
+    queue::discard(root, &job, "Skipped a video posted before following").unwrap();
+    let db = db::open(root).unwrap();
+    let left: i64 = db.query_row("SELECT (SELECT count(*) FROM media WHERE id='old')+(SELECT count(*) FROM jobs WHERE id=?1)+(SELECT count(*) FROM pipeline_work WHERE id=?1)", [&job], |r| r.get(0)).unwrap();
+    assert_eq!(left, 0);
+}
+#[test]
+fn video_links_are_added_once_and_queued_for_download() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let video = links::Video {
+        url: "https://www.youtube.com/watch?v=ccccccccccc".into(),
+        id: "ccccccccccc".into(),
+        title: "Community garden interview".into(),
+        channel: "Tuesday Study".into(),
+        channel_url: Some("https://www.youtube.com/@TuesdayStudy".into()),
+        duration: 3151.0,
+        date: "20260914".into(),
+    };
+    let first = links::add_videos(root, &c, std::slice::from_ref(&video), "work", true, "auto").unwrap();
+    assert_eq!((first["added"].as_u64(), first["existing"].as_u64()), (Some(1), Some(0)));
+    let again = links::add_videos(root, &c, &[video], "work", true, "auto").unwrap();
+    assert_eq!((again["added"].as_u64(), again["existing"].as_u64()), (Some(0), Some(1)));
+    let rows = db::rows(&db::open(root).unwrap(), "SELECT m.title,m.channel,m.category,m.url,p.kind FROM media m JOIN jobs j ON j.media_id=m.id JOIN pipeline_work p ON p.id=j.id WHERE m.url LIKE '%ccccccccccc'", []).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["channel"], "Tuesday Study");
+    assert_eq!(rows[0]["category"], "work");
+    assert_eq!(rows[0]["kind"], "download");
+}
+#[test]
+fn a_folder_is_added_once_with_or_without_watching() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let folder = root.join("Interviews");
+    std::fs::create_dir_all(folder.join("2025")).unwrap();
+    std::fs::write(folder.join("a.m4a"), b"audio").unwrap();
+    std::fs::write(folder.join("2025/b.mp4"), b"video").unwrap();
+    std::fs::write(folder.join("notes.txt"), b"text").unwrap();
+    let preview = sources::folder_preview(root, &folder).unwrap();
+    assert_eq!((preview["name"].as_str(), preview["files"].as_u64(), preview["existing"].as_u64()), (Some("Interviews"), Some(2), Some(0)));
+    // Adding once imports what is there; it leaves no hidden source behind.
+    let added = sources::add_folder(root, &c, &folder, false, "work", true).unwrap();
+    assert_eq!(added["added"], 2);
+    assert!(added["id"].is_null());
+    assert!(sources::list(root).unwrap().iter().all(|s| s["kind"] != "folder"));
+    let rows = db::rows(&db::open(root).unwrap(), "SELECT DISTINCT channel,category,source_id FROM media WHERE path LIKE ?1", [format!("{}%", folder.to_string_lossy())]).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0]["channel"].as_str(), rows[0]["category"].as_str(), rows[0]["source_id"].is_null()), (Some("Interviews"), Some("work"), true));
+    let other = root.join("Sermons");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("c.wav"), b"audio").unwrap();
+    let watched = sources::add_folder(root, &c, &other, true, "personal", true).unwrap();
+    let source = sources::source(root, watched["id"].as_str().unwrap()).unwrap();
+    assert_eq!(source["enabled"], 1);
+    assert!(source["since"].as_i64().unwrap() > 0);
+}
+#[test]
+fn followed_sources_are_checked_on_schedule_without_the_old_toggle() {
+    let cfg = Config { automatic_checks: false, check_minutes: 60, ..Default::default() };
+    let followed = serde_json::json!({"id": "f", "kind": "youtube", "enabled": 1, "since": 100, "last_check": 0});
+    let legacy = serde_json::json!({"id": "l", "kind": "youtube", "enabled": 1, "since": 0, "last_check": 0});
+    let fresh = serde_json::json!({"id": "n", "kind": "folder", "enabled": 1, "since": 100, "last_check": 10_000});
+    let stopped = serde_json::json!({"id": "s", "kind": "folder", "enabled": 0, "since": 100, "last_check": 0});
+    let all = [legacy.clone(), stopped, fresh, followed];
+    assert_eq!(sources::due(&all, &cfg, 10_500, |_| true).as_deref(), Some("f"));
+    assert_eq!(sources::due(std::slice::from_ref(&legacy), &cfg, 10_500, |_| true), None);
+    let on = Config { automatic_checks: true, ..cfg };
+    assert_eq!(sources::due(&[legacy], &on, 10_500, |_| true).as_deref(), Some("l"));
+}
+#[test]
+fn library_items_carry_their_job_progress() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    enqueue(root, &c, &Batch { ids: vec!["one".into()], ..Default::default() }, true).unwrap();
+    db::open(root).unwrap().execute("UPDATE jobs SET message='45.2% · 3MiB/s · 00:20 remaining' WHERE media_id='one'", []).unwrap();
+    let page = db::library(root, &db::LibraryFilter::default()).unwrap();
+    let one = page["items"].as_array().unwrap().iter().find(|m| m["id"] == "one").unwrap().clone();
+    assert_eq!(one["job_message"], "45.2% · 3MiB/s · 00:20 remaining");
+    assert_eq!(one["job_kind"], "transcribe");
+}
+#[test]
+fn dropped_paths_are_sorted_into_recordings_and_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("Interviews");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("a.m4a"), b"audio").unwrap();
+    let file = dir.path().join("talk.mp3");
+    std::fs::write(&file, b"audio").unwrap();
+    let note = dir.path().join("notes.txt");
+    std::fs::write(&note, b"text").unwrap();
+    let paths = [file, folder.clone(), note].map(|p| p.to_string_lossy().into_owned());
+    let found = sources::inspect_paths(&paths);
+    assert_eq!(found["files"].as_array().unwrap().len(), 1);
+    assert_eq!(found["folders"][0]["path"], folder.to_string_lossy().as_ref());
+    assert_eq!(found["skipped"].as_array().unwrap().len(), 1);
+}
+#[test]
+fn following_the_same_channel_twice_reuses_its_collection() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let first = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudy", "Tuesday Study", "personal", true, false).unwrap();
+    let again = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudy/videos", "Tuesday Study", "work", true, false).unwrap();
+    assert_eq!(first, again);
+    let source = sources::source(root, &first).unwrap();
+    assert_eq!((source["enabled"].as_i64(), source["category"].as_str()), (Some(1), Some("work")));
+    assert!(source["since"].as_i64().unwrap() > 0);
+    // A different channel with the same display name still gets its own collection.
+    let other = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudyClips", "Tuesday Study", "personal", true, false).unwrap();
+    assert_ne!(other, first);
+    assert_eq!(sources::source(root, &other).unwrap()["name"], "Tuesday Study (2)");
+}
+#[test]
+fn files_can_skip_speaker_identification() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let file = root.join("solo.m4a");
+    std::fs::write(&file, b"fixture").unwrap();
+    import_and_queue(root, &c, &[file.to_string_lossy().into_owned()], "personal", "auto", false).unwrap();
+    let rows = db::rows(&db::open(root).unwrap(), "SELECT p.diarize FROM pipeline_work p JOIN jobs j ON j.id=p.id JOIN media m ON m.id=j.media_id WHERE m.path LIKE '%solo.m4a'", []).unwrap();
+    assert_eq!(rows[0]["diarize"], 0);
+}
+/// A library last opened by 0.28 (schema 15): no follow columns, no queue state saved.
+fn as_schema_15(root: &Path) {
+    db::open(root)
+        .unwrap()
+        .execute_batch("ALTER TABLE channels DROP COLUMN since;DROP TABLE source_seen;DELETE FROM settings WHERE key='pipeline.running';PRAGMA user_version=15;")
+        .unwrap();
+}
+#[test]
+fn an_existing_library_can_follow_channels_and_watch_folders_after_upgrading() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    as_schema_15(root);
+    let id = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudy", "Tuesday Study", "personal", true, false).unwrap();
+    assert!(sources::source(root, &id).unwrap()["since"].as_i64().unwrap() > 0);
+    let folder = root.join("Interviews");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("elena.wav"), b"fixture").unwrap();
+    let added = sources::add_folder(root, &c, &folder, true, "work", true).unwrap();
+    assert_eq!(added["added"], 1);
+}
+#[test]
+fn upgrading_keeps_old_waiting_work_paused_until_resumed() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    queue::insert(&db::open(root).unwrap(), "one", "one", "transcribe", "auto", true).unwrap();
+    as_schema_15(root);
+    assert!(!queue::claim(root, 1).unwrap().is_some(), "work queued before the upgrade waits for Resume");
+    action(root, &c, "start", None).unwrap();
+    assert!(queue::claim(root, 2).unwrap().is_some());
+}
+#[test]
+fn upgrading_a_library_with_automatic_checks_keeps_it_paused() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    let mut cfg = config(root).unwrap();
+    cfg.automatic_checks = true;
+    save_config(root, &cfg).unwrap();
+    as_schema_15(root);
+    assert!(!overview(root).unwrap()["running"].as_bool().unwrap());
+}
+#[test]
+fn upgrading_a_quiet_library_runs_by_default() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    as_schema_15(root);
+    assert!(overview(root).unwrap()["running"].as_bool().unwrap());
+}
+fn folder_source(root: &Path, c: &Control, name: &str) -> String {
+    let folder = root.join(name);
+    std::fs::create_dir_all(&folder).unwrap();
+    sources::save(root, c, &sources::Source { id: None, name: name.into(), kind: "folder".into(), url: folder.to_string_lossy().into_owned(), enabled: true, diarize: true, include_shorts: false, category: "personal".into() }).unwrap()
+}
+#[test]
+fn only_the_source_being_checked_is_locked_during_a_check() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let busy = folder_source(root, &c, "Busy");
+    let other = folder_source(root, &c, "Other");
+    c.checking.store(true, Ordering::SeqCst);
+    db::open(root).unwrap().execute("UPDATE channels SET check_status='checking' WHERE id=?1", [&busy]).unwrap();
+    // Following something new, and editing or removing another source, all go ahead.
+    sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudy", "Tuesday Study", "personal", true, false).unwrap();
+    let mut edit = sources::Source { id: Some(other.clone()), name: "Other renamed".into(), kind: "folder".into(), url: root.join("Other").to_string_lossy().into_owned(), enabled: true, diarize: false, include_shorts: false, category: "work".into() };
+    sources::save(root, &c, &edit).unwrap();
+    edit.id = Some(busy.clone());
+    edit.name = "Busy renamed".into();
+    edit.url = root.join("Busy").to_string_lossy().into_owned();
+    assert!(sources::save(root, &c, &edit).is_err(), "the source being checked waits");
+    assert!(sources::remove(root, &c, &busy).is_err());
+    sources::remove(root, &c, &other).unwrap();
+}
+#[test]
+fn checking_one_source_while_another_is_checked_waits_its_turn() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let first = folder_source(root, &c, "First");
+    let second = folder_source(root, &c, "Second");
+    let c = Arc::new(c);
+    c.checking.store(true, Ordering::SeqCst);
+    sources::start(root.to_path_buf(), c.clone(), Some(second.clone()), false).unwrap();
+    sources::start(root.to_path_buf(), c.clone(), Some(second.clone()), false).unwrap();
+    assert_eq!(sources::source(root, &second).unwrap()["check_status"], "queued");
+    assert!(sources::start(root.to_path_buf(), c.clone(), None, false).is_err(), "checking everything still waits for the running check");
+    // When the running check finishes it takes the waiting one, once, then stops.
+    assert_eq!(sources::next_waiting(&c).as_deref(), Some(second.as_str()));
+    assert!(c.checking.load(Ordering::SeqCst));
+    assert_eq!(sources::next_waiting(&c), None);
+    assert!(!c.checking.load(Ordering::SeqCst));
+    let _ = first;
+}
+#[test]
+fn removing_a_followed_source_forgets_what_it_had_seen() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let source = channel(root, &c);
+    sources::follow_ingest(root, &source, &[tab(VIDEOS, &["aaaaaaaaaaa"], true)], "auto").unwrap();
+    sources::remove(root, &c, source["id"].as_str().unwrap()).unwrap();
+    let left: i64 = db::open(root).unwrap().query_row("SELECT count(*) FROM source_seen WHERE source_id=?1", [source["id"].as_str()], |r| r.get(0)).unwrap();
+    assert_eq!(left, 0);
+}
+#[test]
+fn a_folder_added_once_can_be_added_again_and_watched_later() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let folder = root.join("Interviews");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("a.m4a"), b"audio").unwrap();
+    assert_eq!(sources::add_folder(root, &c, &folder, false, "work", true).unwrap()["added"], 1);
+    std::fs::write(folder.join("b.m4a"), b"audio").unwrap();
+    assert_eq!(sources::add_folder(root, &c, &folder, false, "work", true).unwrap()["added"], 1);
+    std::fs::write(folder.join("c.m4a"), b"audio").unwrap();
+    let watched = sources::add_folder(root, &c, &folder, true, "work", true).unwrap();
+    assert_eq!(watched["added"], 1);
+    let source = sources::source(root, watched["id"].as_str().unwrap()).unwrap();
+    assert_eq!(source["enabled"], 1);
+    assert!(source["since"].as_i64().unwrap() > 0);
+    // Watching it again is the same collection, not "Interviews (2)".
+    let again = sources::add_folder(root, &c, &folder, true, "work", true).unwrap();
+    assert_eq!(again["id"], watched["id"]);
+    assert_eq!(again["name"], "Interviews");
+    assert_eq!(sources::list(root).unwrap().iter().filter(|s| s["kind"] == "folder").count(), 1);
+}
+#[test]
+fn adding_files_while_paused_does_not_resume() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    action(root, &c, "pause", None).unwrap();
+    let file = root.join("new.m4a");
+    std::fs::write(&file, b"fixture").unwrap();
+    assert_eq!(import_and_queue(root, &c, &[file.to_string_lossy().into_owned()], "personal", "auto", true).unwrap(), 1);
+    assert!(!overview(root).unwrap()["running"].as_bool().unwrap());
+}
+#[test]
+fn a_channel_or_playlist_is_recognised_however_its_link_is_written() {
+    let key = |u: &str| sources::source_key(u).unwrap();
+    let channel = key("https://www.youtube.com/@TuesdayStudy");
+    for same in ["https://youtube.com/@TuesdayStudy?si=share123", "https://m.youtube.com/@tuesdaystudy/videos", "https://www.youtube.com/@TuesdayStudy/streams/"] {
+        assert_eq!(key(same), channel, "{same}");
+    }
+    assert_eq!(key("https://www.youtube.com/playlist?list=PL1&si=x"), key("https://youtube.com/playlist?list=PL1"));
+    assert_ne!(key("https://www.youtube.com/playlist?list=PL1"), key("https://www.youtube.com/playlist?list=pl1"));
+    assert_ne!(key("https://www.youtube.com/@Other"), channel);
+    assert!(sources::source_key("https://example.com/@TuesdayStudy").is_none());
+}
+#[test]
+fn following_by_a_share_link_finds_the_channel_already_followed() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let first = sources::follow(root, &c, "https://www.youtube.com/@TuesdayStudy", "Tuesday Study", "personal", true, false).unwrap();
+    let again = sources::follow(root, &c, "https://m.youtube.com/@tuesdaystudy?si=share123", "Tuesday Study", "personal", true, false).unwrap();
+    assert_eq!(first, again);
+    let db = db::open(root).unwrap();
+    assert!(links::followed(&db, "https://youtube.com/@TuesdayStudy?si=x").unwrap());
+    // An older subscription isn't followed for new videos until someone follows it.
+    db.execute("UPDATE channels SET since=0 WHERE id=?1", [&first]).unwrap();
+    assert!(!links::followed(&db, "https://www.youtube.com/@TuesdayStudy").unwrap());
+}
+#[test]
+fn upgrading_turns_enabled_folder_sources_into_watched_folders() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let watched = folder_source(root, &c, "Sermons");
+    let off = folder_source(root, &c, "Old");
+    db::open(root).unwrap().execute("UPDATE channels SET enabled=0 WHERE id=?1", [&off]).unwrap();
+    as_schema_15(root);
+    db::open(root).unwrap();
+    assert!(sources::source(root, &watched).unwrap()["since"].as_i64().unwrap() > 0);
+    assert_eq!(sources::source(root, &off).unwrap()["since"], 0);
+}
+#[test]
+fn the_download_folder_is_suggested_then_kept_once_chosen() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    let folder = download_folder(root).unwrap();
+    assert_eq!(folder["folder"], "");
+    assert!(folder["suggested"].as_str().unwrap().ends_with("Concord"));
+    assert!(set_download_folder(root, "relative/videos").is_err());
+    let chosen = root.join("Videos/Concord");
+    set_download_folder(root, chosen.to_str().unwrap()).unwrap();
+    assert!(chosen.is_dir());
+    assert_eq!(download_folder(root).unwrap()["folder"], chosen.to_str().unwrap());
+    assert_eq!(config(root).unwrap().download_directory, chosen.to_str().unwrap());
+}
+#[test]
+fn an_imported_library_keeps_saving_transcripts_where_concord_did() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    let legacy = root.join("pipeline.db");
+    rusqlite::Connection::open(&legacy).unwrap().execute_batch(
+        "CREATE TABLE app_config(key TEXT PRIMARY KEY,value TEXT);
+         INSERT INTO app_config VALUES ('transcriptDir','/run/media/pc/Maac/YouTube/transcripts'),('videoSaveDir','/run/media/pc/Maac/YouTube/saved_videos');",
+    ).unwrap();
+    {
+        let db = db::open(root).unwrap();
+        db.execute("INSERT INTO settings VALUES ('imported_from',?1)", [legacy.to_str()]).unwrap();
+        // Imported by an earlier version, which brought the download settings only.
+        db.execute("INSERT INTO settings VALUES ('pipeline.downloadsImported','1')", []).unwrap();
+    }
+    sources::seed(root).unwrap();
+    let cfg = config(root).unwrap();
+    assert_eq!(cfg.transcript_directory, "/run/media/pc/Maac/YouTube/transcripts");
+    assert_eq!(cfg.download_directory, "", "download settings already imported stay as they were");
+    // Once carried over, a folder chosen in Settings is never replaced.
+    save_config(root, &Config { transcript_directory: "/home/you/Transcripts".into(), ..cfg }).unwrap();
+    sources::seed(root).unwrap();
+    assert_eq!(config(root).unwrap().transcript_directory, "/home/you/Transcripts");
+    assert!(save_config(root, &Config { transcript_directory: "relative/folder".into(), ..Config::default() }).is_err());
+}
+#[test]
+fn imported_subscriptions_keep_checking_and_waiting_downloads_come_over() {
+    let (dir, _c) = fixture();
+    let root = dir.path();
+    let meetings = root.join("meetings");
+    std::fs::create_dir(&meetings).unwrap();
+    let legacy = root.join("pipeline.db");
+    rusqlite::Connection::open(&legacy).unwrap().execute_batch(
+        "CREATE TABLE app_config(key TEXT PRIMARY KEY,value TEXT);
+         CREATE TABLE video_queue(channel_id TEXT,video_id TEXT,status TEXT,video_path TEXT,md_path TEXT);
+         INSERT INTO video_queue VALUES ('ch-1','pend1234567','pending',NULL,NULL),('ch-1','done1234567','complete','/x.mp4','/x.md');",
+    ).unwrap();
+    {
+        let db = db::open(root).unwrap();
+        for key in ["pipeline.downloadsImported", "pipeline.transcriptsImported"] {
+            db.execute("INSERT INTO settings VALUES (?1,'1')", [key]).unwrap();
+        }
+        db.execute("INSERT INTO settings VALUES ('imported_from',?1)", [legacy.to_str()]).unwrap();
+        db.execute_batch(&format!(
+            "INSERT INTO channels(id,name,url,enabled) VALUES ('ch-1','LastDays','https://www.youtube.com/@lastdays247',1),
+               ('ch-2','Meetings','file://{}/',1),('ch-3','Off','https://www.youtube.com/@off',0),('ch-4','Odd','not a link',1);
+             INSERT INTO media(id,title,url,channel,source_id,status) VALUES
+               ('[\"ch-1\",\"pend1234567\"]','Waiting','https://www.youtube.com/watch?v=pend1234567','LastDays','ch-1','ready');
+             INSERT INTO media(id,title,url,channel,source_id,path,transcript,status) VALUES
+               ('[\"ch-1\",\"done1234567\"]','Done','https://www.youtube.com/watch?v=done1234567','LastDays','ch-1','/x.mp4','/x.md','complete');",
+            meetings.display()
+        )).unwrap();
+    }
+    sources::seed(root).unwrap();
+    let since = |id: &str| sources::source(root, id).unwrap()["since"].as_i64().unwrap();
+    assert!(since("ch-1") > 0, "a channel Electron checked keeps being checked");
+    assert_eq!((since("ch-3"), since("ch-4")), (0, 0), "switched off, or not a channel link");
+    let folder = sources::source(root, "ch-2").unwrap();
+    assert_eq!((folder["kind"].as_str(), folder["url"].as_str()), (Some("folder"), meetings.to_str()));
+    assert!(folder["since"].as_i64().unwrap() > 0, "a folder Electron watched is watched");
+    let jobs = |media: &str| db::rows(&db::open(root).unwrap(), "SELECT p.kind FROM jobs j JOIN pipeline_work p ON p.id=j.id WHERE j.media_id=?1", [media]).unwrap();
+    assert_eq!(jobs("[\"ch-1\",\"pend1234567\"]"), [serde_json::json!({"kind": "download"})], "Electron's waiting download is queued");
+    assert!(jobs("[\"ch-1\",\"done1234567\"]").is_empty());
+    sources::seed(root).unwrap();
+    assert_eq!(jobs("[\"ch-1\",\"pend1234567\"]").len(), 1, "and only once");
+}
+#[test]
+fn electrons_playback_copies_are_not_new_recordings() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let folder = root.join("meetings");
+    std::fs::create_dir(&folder).unwrap();
+    for name in ["2025-09-11.ogg", "2025-09-11.playback.m4a", "talk.mp3"] {
+        std::fs::write(folder.join(name), b"audio").unwrap();
+    }
+    assert_eq!(sources::folder_preview(root, &folder).unwrap()["files"], 2);
+    assert_eq!(sources::add_folder(root, &c, &folder, false, "personal", true).unwrap()["added"], 2);
+}
+fn never_downloaded(root: &Path) -> String {
+    let id = "[\"ch-1\",\"vvvvvvvvvvv\"]".to_owned();
+    db::open(root).unwrap().execute("INSERT INTO media(id,title,url,channel,status) VALUES (?1,'Waiting','https://www.youtube.com/watch?v=vvvvvvvvvvv','LastDays','ready')", [&id]).unwrap();
+    id
+}
+#[test]
+fn transcribing_a_recording_that_was_never_downloaded_downloads_it_first() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let id = never_downloaded(root);
+    let queued = enqueue(root, &c, &Batch { ids: vec![id.clone()], ..Default::default() }, false).unwrap();
+    assert_eq!((queued["added"].as_u64(), queued["unavailable"].as_u64()), (Some(1), Some(0)));
+    let kind: String = db::open(root).unwrap().query_row("SELECT p.kind FROM jobs j JOIN pipeline_work p ON p.id=j.id WHERE j.media_id=?1", [&id], |r| r.get(0)).unwrap();
+    assert_eq!(kind, "download");
+}
+#[test]
+fn pasting_the_link_of_a_recording_that_never_downloaded_downloads_it() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    let id = never_downloaded(root);
+    let video = links::Video {
+        url: "https://www.youtube.com/watch?v=vvvvvvvvvvv".into(),
+        id: "vvvvvvvvvvv".into(),
+        title: "Waiting".into(),
+        channel: "Last Days".into(),
+        channel_url: None,
+        duration: 60.0,
+        date: "20261120".into(),
+    };
+    let added = links::add_videos(root, &c, std::slice::from_ref(&video), "personal", true, "auto").unwrap();
+    assert_eq!((added["added"].as_u64(), added["ids"][0].as_str()), (Some(1), Some(id.as_str())));
+    let again = links::add_videos(root, &c, &[video], "personal", true, "auto").unwrap();
+    assert_eq!((again["added"].as_u64(), again["existing"].as_u64()), (Some(0), Some(1)), "already on its way");
+    let rows: i64 = db::open(root).unwrap().query_row("SELECT count(*) FROM media WHERE url='https://www.youtube.com/watch?v=vvvvvvvvvvv'", [], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 1, "no second copy of the recording");
+}
+#[test]
+fn a_missing_drive_holds_work_until_it_is_back_without_using_its_tries() {
+    let (dir, c) = fixture();
+    let root = dir.path();
+    save_config(root, &Config { retries: 0, retry_minutes: 5, ..Default::default() }).unwrap();
+    enqueue(root, &c, &Batch { ids: vec!["one".into()], ..Default::default() }, true).unwrap();
+    let missing = || -> anyhow::Result<()> {
+        Err(anyhow::Error::new(FolderUnavailable("The download folder is unavailable. Reconnect its drive or choose a folder in Settings → Processing & downloads.")).context("Download failed"))
+    };
+    for at in [100, 160, 220] {
+        let job = queue::claim(root, at).unwrap().expect("tried again a minute later");
+        let id = job["id"].as_str().unwrap().to_owned();
+        queue::finish(root, &id, missing(), &c, at).unwrap();
+        let s = state(root, &id);
+        assert_eq!((s["status"].as_str(), s["attempts"].as_i64(), s["retry_at"].as_i64()), (Some("retry"), Some(0), Some(at + 60)), "{s}");
+        assert!(s["message"].as_str().unwrap().contains("Reconnect its drive"), "{s}");
+        assert!(queue::claim(root, at + 59).unwrap().is_none());
+    }
+    // Any other failure still uses up its tries.
+    let job = queue::claim(root, 280).unwrap().unwrap();
+    let id = job["id"].as_str().unwrap().to_owned();
+    queue::finish(root, &id, Err(anyhow::anyhow!("permanent failure")), &c, 280).unwrap();
+    assert_eq!(state(root, &id)["status"], "failed");
 }

@@ -19,6 +19,8 @@ pub struct Control {
     pub checking: AtomicBool,
     pub previewing: AtomicBool,
     pub scanner: Arc<speech::Control>,
+    /// Sources asked to be checked while another check ran; taken in order when it finishes.
+    pub(crate) waiting_checks: Mutex<std::collections::VecDeque<String>>,
 }
 impl Control {
     pub fn new(speech: Arc<speech::Control>) -> Self {
@@ -32,6 +34,7 @@ impl Control {
             checking: AtomicBool::new(false),
             previewing: AtomicBool::new(false),
             scanner: Arc::new(speech::Control::default()),
+            waiting_checks: Mutex::new(std::collections::VecDeque::new()),
         }
     }
     pub fn shutdown(&self) {
@@ -68,6 +71,7 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                     return Ok(());
                 };
                 let id = row["id"].as_str().unwrap();
+                runtime_log::debug("Queue", &format!("Claimed {id}; kind {}; requested device {}; diarization {}", row["kind"].as_str().unwrap_or(""), row["device"].as_str().unwrap_or("auto"), row["diarize"] != 0));
                 *active = Some(id.into());
                 control.speech.begin();
                 control.downloading.store(
@@ -78,6 +82,7 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                     Ordering::SeqCst,
                 );
                 drop(active);
+                let mut skipped = None;
                 let result = (|| -> anyhow::Result<bool> {
                     let cfg = super::config(&root)?;
                     let path = if row["kind"] == "download" {
@@ -86,6 +91,10 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                         match result? {
                             super::download::Outcome::File(path) => path,
                             super::download::Outcome::Waiting => return Ok(false),
+                            super::download::Outcome::Skipped(reason) => {
+                                skipped = Some(reason);
+                                return Ok(true);
+                            }
                         }
                     } else {
                         PathBuf::from(row["path"].as_str().unwrap_or_default())
@@ -108,6 +117,7 @@ pub fn launch(root: PathBuf, runtime: speech::Runtime, control: Arc<Control>) {
                 control.downloading.store(false, Ordering::SeqCst);
                 let mut active = control.gate.lock().unwrap();
                 let saved = match result {
+                    Ok(true) if skipped.is_some() => queue::discard(&root, id, &skipped.unwrap_or_default()),
                     Ok(false) if !control.speech.is_cancelled() => {
                         queue::wait_for_live(&root, id, queue::tick_time())
                     }

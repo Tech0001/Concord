@@ -3,7 +3,8 @@ import { clock, prettyDate } from "../lib/format.ts";
 import type { Media } from "../lib/types.ts";
 import type { MenuEntry } from "../ui/Menu.tsx";
 import { Cover } from "./Cover.tsx";
-import { MoreMenu, SpeakerChips, StarButton, StatusChips } from "./parts.tsx";
+import { MoreMenu, SelectBox, SpeakerChips, StarButton, StatusChips } from "./parts.tsx";
+import { jobProgress } from "./model.ts";
 
 export const RecordingRow = memo(function RecordingRow({
   media,
@@ -11,15 +12,23 @@ export const RecordingRow = memo(function RecordingRow({
   menu,
   onOpen,
   onStar,
+  selected = false,
+  onSelect,
 }: {
   media: Media;
   transcribing: boolean;
   menu: () => MenuEntry[];
   onOpen: () => void;
   onStar: () => void;
+  selected?: boolean;
+  onSelect?: (range: boolean) => void;
 }) {
+  const progress = jobProgress(media);
   return (
-    <div className="rec-row" role="row">
+    <div className={selected ? "rec-row is-selected" : "rec-row"} role="row" aria-selected={onSelect ? selected : undefined}>
+      <span className="rec-row-select" role="cell">
+        {onSelect && <SelectBox media={media} selected={selected} onSelect={onSelect} />}
+      </span>
       <span className="rec-row-star" role="cell">
         <StarButton media={media} onToggle={onStar} />
       </span>
@@ -37,6 +46,7 @@ export const RecordingRow = memo(function RecordingRow({
           {media.channel} · {prettyDate(media.date)} · {clock(media.duration)}
         </span>
         <SpeakerChips media={media} max={2} />
+        {progress && <span className={`rec-row-progress is-${progress.tone}`}>{progress.label}</span>}
       </span>
       <span className="rec-row-channel" role="cell">
         {media.channel}

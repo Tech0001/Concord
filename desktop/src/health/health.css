@@ -1,34 +1,15 @@
-.dialog:has(> .dialog-body > .archive-workspace) {
-  width: min(1200px, 96vw);
-  max-width: 96vw;
-  height: min(960px, 94dvh);
-}
-.dialog-body:has(> .archive-workspace) {
-  overflow: hidden;
-  min-height: 0;
-}
 .archive-workspace {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 10px;
-  min-width: 0;
-  height: 100%;
-  min-height: 0;
-}
-.archive-scroll {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  padding-right: 4px;
+  gap: 16px;
+  min-width: 0;
 }
-.archive-scroll > * {
-  flex-shrink: 0;
+.archive-intro-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.archive-tabs,
 .archive-intro,
 .archive-audit-summary,
 .embedding-guard,
@@ -38,10 +19,6 @@
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-}
-.archive-tabs {
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
 }
 .archive-intro p,
 .archive-section p,
@@ -61,7 +38,7 @@
 }
 .archive-totals {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
 }
 .archive-totals > div {
@@ -336,6 +313,10 @@
 .level-warn b {
   color: var(--warning, var(--primary));
 }
+.level-debug b { color: var(--muted-foreground); }
+.level-error b { color: var(--destructive, #e87373); }
+.terminal-disclosure { font-size: 12px; margin: -5px 0 12px; }
+.terminal-controls .segmented { flex-shrink: 0; }
 @media (max-width: 800px) {
   .archive-coverage-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

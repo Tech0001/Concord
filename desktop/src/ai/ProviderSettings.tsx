@@ -1,14 +1,15 @@
 import { ChatGPTSettings } from "./ChatGPTSettings.tsx";
 import { useEffect, useState } from "react";
-import { Check, RefreshCw, Save } from "lucide-react";
+import { Check, MessageCircle, RefreshCw, Save, Search } from "lucide-react";
 import { api } from "../lib/ipc.ts";
 import { Button } from "../ui/Button.tsx";
 import { Select } from "../ui/Select.tsx";
+import { Switch } from "../ui/Switch.tsx";
 import { useToast } from "../ui/Toasts.tsx";
-import { ConfirmDialog } from "../ui/Dialog.tsx";
 import { IndexControl } from "./IndexControl.tsx";
 import type { AiConfig, Provider } from "./types.ts";
 import "./ai.css";
+
 function ProviderEditor({
   task,
   value,
@@ -25,6 +26,7 @@ function ProviderEditor({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const toast = useToast();
+
   useEffect(() => {
     setDraft(value);
     setKey("");
@@ -39,21 +41,42 @@ function ProviderEditor({
     value.hasKey,
     value.local,
   ]);
+
   const builtin = draft.kind === "builtin";
   const cli = draft.kind === "codex" || draft.kind === "claude-code";
   const chatgpt = draft.kind === "chatgpt";
+  const dirty =
+    draft.enabled !== value.enabled ||
+    draft.kind !== value.kind ||
+    draft.baseUrl !== value.baseUrl ||
+    draft.model !== value.model ||
+    (draft.accountId ?? "") !== (value.accountId ?? "") ||
+    !!key ||
+    removeKey;
+
   const changed = (kind: Provider["kind"]) => {
     setDraft({
       ...draft,
       kind,
       baseUrl:
-        kind === "codex" || kind === "claude-code" ? "" : kind === "chatgpt"
-          ? "https://api.openai.com/v1"
-          : kind === "openrouter"
-            ? "https://openrouter.ai/api/v1"
-            : "http://127.0.0.1:11434/v1",
-      model: kind === "codex" || kind === "claude-code" ? "default" : kind === "builtin" ? "Qwen3-Embedding-0.6B-Q8_0" : "",
-      enabled: kind === "builtin" || kind === "codex" || kind === "claude-code" || draft.enabled,
+        kind === "codex" || kind === "claude-code"
+          ? ""
+          : kind === "chatgpt"
+            ? "https://api.openai.com/v1"
+            : kind === "openrouter"
+              ? "https://openrouter.ai/api/v1"
+              : "http://127.0.0.1:11434/v1",
+      model:
+        kind === "codex" || kind === "claude-code"
+          ? "default"
+          : kind === "builtin"
+            ? "Qwen3-Embedding-0.6B-Q8_0"
+            : "",
+      enabled:
+        kind === "builtin" ||
+        kind === "codex" ||
+        kind === "claude-code" ||
+        draft.enabled,
       hasKey: false,
       accountId: "",
       connected: false,
@@ -63,6 +86,7 @@ function ProviderEditor({
     setModels([]);
     setMessage("");
   };
+
   const save = async () => {
     const c = await api.aiSaveProvider(
       task,
@@ -72,6 +96,7 @@ function ProviderEditor({
     onSaved(c);
     return c;
   };
+
   const action = async (what: "save" | "models" | "check") => {
     setBusy(true);
     setMessage("");
@@ -87,25 +112,25 @@ function ProviderEditor({
       if (what === "models") {
         setModels(await api.aiModels(task));
         setMessage("Model list loaded. Choose a model, then save.");
-      } else if (what === "check")
+      } else if (what === "check") {
         setMessage((await api.aiCheck(task)).message);
-      else setMessage("Saved");
+      } else {
+        setMessage("Saved");
+      }
     } catch (e) {
       toast.error(e);
     } finally {
       setBusy(false);
     }
   };
+
   return (
     <div className="provider-editor">
-      <header>
-        <h3>{task === "embedding" ? "Embedding model" : "Chat model"}</h3>
-        <p>
-          {task === "embedding"
-            ? "Finds relevant passages for semantic search and chat. Independent of the chat model."
-            : "Writes answers, summaries and suggested tags. Chat stays disabled until you configure it."}
-        </p>
-      </header>
+      <p className="settings-note">
+        {task === "embedding"
+          ? "Powers Search → By meaning and archive retrieval in Ask Concord. Independent of your chat model."
+          : "Writes answers, summaries, and suggested tags. Stays disabled until configured."}
+      </p>
       <label className="field">
         <span>Provider</span>
         <Select
@@ -124,7 +149,10 @@ function ProviderEditor({
             ...(task === "chat"
               ? [
                   { value: "codex", label: "Codex CLI · ChatGPT subscription" },
-                  { value: "claude-code", label: "Claude Code CLI · Claude subscription" },
+                  {
+                    value: "claude-code",
+                    label: "Claude Code CLI · Claude subscription",
+                  },
                   {
                     value: "chatgpt",
                     label: "ChatGPT · sign in with your account",
@@ -138,13 +166,29 @@ function ProviderEditor({
         />
       </label>
       {builtin ? (
-        <p className="settings-note">
-          Uses your GPU automatically when supported; otherwise runs on CPU.
-          No API key or separate AI application needed. The index below shows the active device.
-        </p>
+        <>
+          <Switch
+            checked={draft.enabled}
+            onChange={(enabled) => setDraft((old) => ({ ...old, enabled }))}
+            hint="Uses your GPU automatically when supported; otherwise runs on CPU. No API key needed."
+          >
+            Enable built-in semantic search
+          </Switch>
+        </>
       ) : (
         <>
-          {cli && <p className="settings-note">Uses your installed, signed-in {draft.kind === "codex" ? "Codex" : "Claude Code"}. Sign in with <code>{draft.kind === "codex" ? "codex login" : "claude auth login"}</code>, then Test connection. Use <code>default</code> for its default model, or enter a model available to your account. Concord does not store your subscription credentials.</p>}
+          {cli && (
+            <p className="settings-note">
+              Uses your installed, signed-in{" "}
+              {draft.kind === "codex" ? "Codex" : "Claude Code"}. Sign in with{" "}
+              <code>
+                {draft.kind === "codex" ? "codex login" : "claude auth login"}
+              </code>
+              , then click Test chat. Use <code>default</code> for its default
+              model, or enter any model available to your account. Concord never
+              stores your subscription credentials.
+            </p>
+          )}
           {chatgpt && (
             <ChatGPTSettings
               accountId={draft.accountId || ""}
@@ -159,16 +203,12 @@ function ProviderEditor({
               }
             />
           )}
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={draft.enabled}
-              onChange={(e) =>
-                setDraft((old) => ({ ...old, enabled: e.target.checked }))
-              }
-            />{" "}
+          <Switch
+            checked={draft.enabled}
+            onChange={(enabled) => setDraft((old) => ({ ...old, enabled }))}
+          >
             Enable {task === "embedding" ? "this embedding provider" : "chat"}
-          </label>
+          </Switch>
           {!chatgpt && !cli && (
             <>
               <label className="field">
@@ -242,19 +282,26 @@ function ProviderEditor({
             </datalist>
           </label>
           <p className="settings-note">
-            {cli ? "Messages and selected archive excerpts go through the CLI to its provider. Subscription limits and extra-usage settings apply. Embeddings stay with your separate search provider." : chatgpt
-              ? "Model choices come from the selected ChatGPT account. Requests use that account’s plan or credits."
-              : draft.kind === "local"
-                ? "Requests go to a server on this computer."
-                : task === "embedding"
-                  ? "Indexing sends passages to this provider. Semantic searches send the query; the vector index stays on this computer."
-                  : "Chat sends your messages and selected library excerpts to this provider. Summaries send transcript text. Provider usage may incur charges."}
+            {cli
+              ? "Messages and selected archive excerpts go through the CLI to its provider. Subscription limits apply. Embeddings stay with your separate search provider."
+              : chatgpt
+                ? "Model choices come from the selected ChatGPT account. Requests use that account’s plan or credits."
+                : draft.kind === "local"
+                  ? "Requests go to a server on this computer."
+                  : task === "embedding"
+                    ? "Indexing sends passages to this provider. Semantic searches send the query; the vector index stays on this computer."
+                    : "Chat sends your messages and selected library excerpts to this provider. Summaries send transcript text. Provider usage may incur charges."}
           </p>
         </>
       )}
       <div className="ai-actions">
-        <Button icon={Save} disabled={busy} onClick={() => void action("save")}>
-          Save {task} settings
+        <Button
+          variant={dirty ? "primary" : "secondary"}
+          icon={Save}
+          disabled={busy}
+          onClick={() => void action("save")}
+        >
+          Save {task === "embedding" ? "embedding" : "chat"} settings
         </Button>
         {!builtin && (
           <>
@@ -284,51 +331,64 @@ function ProviderEditor({
     </div>
   );
 }
-export function ProviderSettings() {
+
+export function ProviderSettings({ onChanged }: { onChanged?: () => void }) {
   const [config, setConfig] = useState<AiConfig>();
-  const [clear, setClear] = useState(false);
   const toast = useToast();
+
   useEffect(() => {
     api.aiConfig().then(setConfig).catch(toast.error);
   }, [toast]);
+
+  const saved = (next: AiConfig) => {
+    setConfig(next);
+    onChanged?.();
+  };
+
   return (
-    <section className="ai-settings">
-      <h2>AI providers</h2>
-      <p className="muted">
-        Embeddings and chat have separate providers, models and credentials. API
-        keys are stored in a private file on this computer, outside the library
-        database.
-      </p>
-      {config && (
-        <>
-          <ProviderEditor
-            task="embedding"
-            value={config.embedding}
-            onSaved={setConfig}
-          />
-          <ProviderEditor task="chat" value={config.chat} onSaved={setConfig} />
-        </>
-      )}
-      <IndexControl />
-      <Button variant="ghost" size="sm" onClick={() => setClear(true)}>
-        Clear current model's search index…
-      </Button>
-      <ConfirmDialog
-        open={clear}
-        onOpenChange={setClear}
-        title="Clear search index?"
-        body="This removes only the current embedding model's vectors. Your recordings, documents, notes and chats are kept. Update index to rebuild it."
-        confirmLabel="Clear index"
-        onConfirm={async () => {
-          try {
-            await api.aiClearIndex();
-            setClear(false);
-            toast.success("Search index cleared");
-          } catch (e) {
-            toast.error(e);
-          }
-        }}
-      />
-    </section>
+    <>
+      <section className="settings-section">
+        <header>
+          <span className="settings-icon">
+            <Search size={17} aria-hidden />
+          </span>
+          <h2>Search &amp; Embeddings</h2>
+        </header>
+        <div className="settings-body">
+          {config ? (
+            <ProviderEditor
+              task="embedding"
+              value={config.embedding}
+              onSaved={saved}
+            />
+          ) : (
+            <p className="muted">Loading…</p>
+          )}
+          <div className="settings-divider-block">
+            <IndexControl showClear />
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <header>
+          <span className="settings-icon">
+            <MessageCircle size={17} aria-hidden />
+          </span>
+          <h2>Chat &amp; Summaries</h2>
+        </header>
+        <div className="settings-body">
+          {config ? (
+            <ProviderEditor task="chat" value={config.chat} onSaved={saved} />
+          ) : (
+            <p className="muted">Loading…</p>
+          )}
+          <p className="settings-note">
+            API keys are stored in a private file on this computer, outside the
+            library database.
+          </p>
+        </div>
+      </section>
+    </>
   );
 }

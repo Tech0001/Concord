@@ -1,6 +1,6 @@
 # Concord development handoff
 
-Updated October 1, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.28.0**
+Updated October 7, 2026. Code baseline: `rewrite/rust-tauri`, **Concord Next 0.28.2**
 (preview in development; full Electron port remains in progress).
 
 The working Electron application has been moved onto the tested Nemotron speech
@@ -9,6 +9,234 @@ installed beside it as **Concord Next**. Delivery 1 rebuilt the interface on a
 themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
+
+## Search, Activity, Settings & Ask overhaul (0.30.0, branch `feature/ux-overhaul`, branched from `feature/adding`)
+
+0.30.0 (November 25): overhauled the fragmented Search, Activity, Settings, and Ask Concord
+workflows into one cohesive layout on top of 0.29.4:
+- **Ask Concord keyword fallback**: when a user asks about their archive with semantic search on
+  and no semantic index exists yet (or embeddings are off), `ai::chat::send` automatically falls
+  back to natural-question keyword search (`ai::index::search_question_keywords`, stripping
+  conversational stop words and stepping from AND to OR ranked by BM25) instead of dead-ending
+  with `"Create a search index for this embedding model in Settings"`. Replies carry a quiet
+  status notice with a one-click **Build search index** (or **AI & Search settings**) button.
+- **Unified Search (`#/search`) & focused AI page (`#/ai`)**: Search now has a top-right
+  **Keywords** / **By meaning** switcher (`#/search?mode=meaning`), inline `All words` /
+  `Exact phrase` matching, collapsible filter tray with active count badge, and inline
+  `IndexControl` (**Build search index** / **Update search index**) when unindexed or running.
+  AI (`#/ai`) is now dedicated full-view chat with a quick **Search by meaning** shortcut.
+- **Tabbed Activity workspace (`#/activity`)**: replaced the duplicate **Status & Health** popup
+  modal (`ActivityPanel`) with four first-class tabs directly on Activity: **Queue** (now
+  showing live semantic indexing and active repairs right inside **Now**, plus Needs attention,
+  Up next, Following, Automatic AI, History), **Status & Health** (coverage cards with direct
+  **Build / Update search index** buttons, audit, repairs, channels table), **Logs** (Activity /
+  Debug terminal + Runtime diagnostics), and **Backups** (`#/activity?tab=health|logs|backups`).
+- **Tabbed Settings (`#/settings`)**: replaced the long vertical scroll and duplicate Speech /
+  Downloads sections with four clean tabs: **General** (Appearance, Library + Backups link,
+  About), **AI & Search** (Search & Embeddings with `IndexControl` and Clear index directly
+  inside, built-in enable switch, Chat & Summaries, and After transcription), **Speech** (one
+  unified CPU/GPU device selector, language, transcripts folder, readiness facts, Speech setup),
+  and **Downloads & Schedule** (unified YouTube toggle + yt-dlp updater, folder, quality/codec,
+  optional cookies disclosure, schedule/limits/retries). Legacy deep-links (`appearance`,
+  `library`, `about`, `processing`, `youtube`, `concord:health`, `#/pipeline`) map cleanly.
+- Verified with 215 Rust tests, 74 UI tests, `tsc --noEmit`, `vite build`, Clippy (zero warnings),
+  and desktop + phone headless Chromium screenshots.
+
+## One way in: Add, Following and Activity (0.29.4, branch `feature/adding`, installed, not merged)
+
+0.29.4 (November 23): after a restart the user's external drive wasn't mounted, and a queued
+download used up its three tries on "download folder is unavailable". A missing download or
+transcripts folder now raises `pipeline::FolderUnavailable`; `queue::finish` keeps such a job in
+`retry` without counting the try and looks again every minute. The download folder is checked
+before yt-dlp is asked for metadata, so the wait makes no YouTube requests. Also in this build:
+the follow-date backstop keys on the video id stored in the recording's link (2a98d6b). A
+`udisksctl mount` in the user's Hyprland autostart didn't mount the drive at login and was
+removed; the user mounts it by hand, and queued work waits until they do.
+
+0.29.3 (November 20): after the Electron import, nothing checked for new videos and a video
+Electron had queued sat undownloaded. `sources::seed` now runs `follow_imported` once
+(`pipeline.subscriptionsFollowed`): enabled YouTube channels get `since`=now, `file://` channels
+become folder sources (watched if enabled), and Electron `video_queue` rows still `pending`
+with no file are queued as downloads. Folder scans skip Electron's `*.playback.m4a` copies.
+Follow checks mark what they add (`source_seen` row `added:<video id>`); the download-time
+date backstop applies only to those, so an old video queued by hand still downloads. Downloads
+use the collection's name (`media.channel`) for the channel folder. `enqueue` and `add_videos`
+queue a download for a recording with a link but no file. Activity → Following has Check all now.
+
+0.29.2 (November 20): the user imported their Electron library (2,610 recordings) and now uses
+Concord Next alone. New transcripts are saved as Electron saved them,
+`<transcript folder>/<Channel_Name>/<YYYY-MM-DD - Title>.md` with `.json` beside it
+(`Config.transcript_directory`, Settings → Processing & downloads; empty keeps
+`<data>/transcripts/<job>/`). Local files get no date prefix (their date is the import date).
+A transcript already in the folder is replaced in place; `speech::publish` writes
+`*.concord-saving` files, commits the library (stamp taken from the new file), then renames.
+`sources::seed` carries Electron's `transcriptDir` over once (`pipeline.transcriptsImported`),
+including for libraries imported earlier; it runs at startup. The Electron semantic index
+(3.7 GB of `vec_*` tables) is not imported; Concord Next's index is rebuilt from the AI page.
+
+0.29.1 (October 8): downloads follow the Electron pipeline. Files go to
+`<download folder>/<Channel_Name>/<YYYY-MM-DD - Title>.<ext>` (Electron's `sanitizeFileName`
+rules; ` [id]` added only if another video's finished file has the name). Without a chosen
+folder they fall back to `<data>/media/<Channel_Name>/`. Add asks for the folder the first time
+a video is added or a channel followed (suggests `~/Videos/Concord`; `download_folder` /
+`set_download_folder`). On HTTP 403 the partials are cleaned and the download retries once with
+`--extractor-args youtube:player_client=tv_simply,mweb` (usually 360p); on HTTP 5xx / "Giving
+up after" it steps down the codec chain (av01 → avc1 → vp9; vp9 → avc1). The user hit the
+403 with yt-dlp 2026.08.19. Installed 0.29.1 after backup
+`backups/before-0.29.1-20261008-115930.db` (schema 16, quick_check OK).
+
+Built by Claude from the approved canvas (claude.ai artifact "Concord adding redesign").
+Installed for the user to try on October 7, 2026: the 0.29.0 AppImage was byte-verified at
+`~/.local/opt/concord-next/Concord-Next.AppImage` (packaged with
+`PATH="$HOME/.cache/concord-build-tools:$PATH" pnpm --dir desktop package`). Pre-install backup:
+`~/.local/share/concord-next/backups/before-0.29.0-20261007-115554.db` (schema 15, `quick_check`
+OK). The first launch upgrades the library to schema 16; 0.28.2 still opens it but can't restore
+backups made after.
+It replaces the Pipeline → Sources → Save & scan → Start queue flow, the separate
+YouTube settings step and the Pipeline/Tools sidebar items. Not merged, versioned or
+installed; the user decides.
+
+**What a person sees**
+- **Add** (top bar, empty Library, palette, Setup's Recordings step): one dialog for files,
+  folders and links. Dropping files or folders anywhere in the window opens it
+  (`getCurrentWebview().onDragDropEvent` through the Transport); pasting a link outside a
+  text field opens it too. The button says what will happen ("Add 3 recordings",
+  "Add 23 and keep watching", "Follow Tuesday Study", "Add all").
+- Folders add what they hold now; **Keep watching this folder** follows it for new files.
+- A **video link** adds that video (download, then transcribe). A **channel or playlist link
+  can only be followed for new videos**: the first check records what exists, later checks
+  add only videos not seen before. No back catalogue, at the user's request. After adding
+  videos from one unfollowed channel, the confirmation toast offers "Follow ‹channel›".
+- yt-dlp installs inline the first time a link needs it ("Install and continue").
+- **Nothing to start**: the queue runs unless paused (`pipeline.running` defaults to true).
+  Cards and rows show Downloading · 45%, Waiting to download/transcribe, Transcribing,
+  Needs attention. Download/transcribe percentage replaces the resume bar on the cover.
+- **Following** (sidebar group between Archive and Analysis) lists followed channels and
+  watched folders; each opens as `#/library?collection=<source id>` with last check,
+  Check now and Options (Personal/Work, Identify speakers, Include Shorts, Rename, Stop
+  following).
+- **Library multi-select** (check on each card/row, shift for ranges): Transcribe (re-run;
+  does not un-pause, toast offers Resume), Move to Work/Personal.
+- **Activity** (`#/activity`; `#/pipeline` redirects, `?tab=setup` goes to Settings) replaces
+  Pipeline: Now, Needs attention (Retry, Ask for help, Remove), Up next, Following (older
+  subscriptions get "Follow for new videos"), history, Health & repair (opens Status &
+  Health), one Pause/Resume. The sidebar footer item summarises it ("Transcribing · 4
+  waiting", "Pausing after this one", "Paused · 3 waiting").
+- **Settings → Processing & downloads** (`section=processing`; old `section=youtube` maps
+  here) holds the old Pipeline Setup tab, after-transcription AI and the yt-dlp toggle.
+- Tools left the sidebar: Record is in Add and the palette; Extract audio stays on each
+  recording's menu.
+
+**Backend** (`pipeline/links.rs` new; `pipeline/sources.rs`, `pipeline/mod.rs`, `db.rs`, `lib.rs`)
+- Commands: `sources_list`, `add_inspect_paths`, `add_folder_preview`, `add_folder`,
+  `add_preview_links`, `add_videos`, `add_follow`, `pipeline_overview` (cheap counts plus
+  `activeKind`, polled with jobs); `import_and_queue` takes optional `diarize`.
+- Schema: `channels.since` (unix seconds; > 0 means followed under the new model) and
+  `source_seen(source_id, video_id)`. Followed sources are checked on schedule without the
+  old `automatic_checks` toggle, which now only governs older subscriptions ("Also check
+  older subscriptions" in Settings).
+- Library rows carry `job_message`/`job_kind`; `LibraryFilter.source` filters a collection.
+- Help diagnostics now read the queue state through `pipeline::running` (they reported a
+  fresh library as paused). `ai/help-guide.md` describes Add/Following/Activity.
+
+**Decisions worth checking** (full list in the build ledger): Following is its own sidebar
+group (the canvas nested it under Library); older subscriptions stay off the sidebar until
+followed; bulk "Remove from library" from the canvas was left out; native drag-and-drop was
+verified by emitting Tauri's `tauri://drag-drop`, so one real file-manager drag is still worth
+doing. Codex's Terminal "Activity / Debug" filter shares the word Activity with the new page;
+reconcile the naming when merging.
+
+**After review** (fresh reviewer on the whole branch; all Critical and Important fixed with
+tests that failed first):
+- Schema **16**: existing libraries (15) get `channels.since`/`source_seen`; libraries with work
+  queued but never started, or automatic checks on, stay paused until Resume; enabled folder
+  sources become watched folders.
+- Follow baselines are **per tab** (`source_seen` row `tab:<url>`), written only when that tab
+  listed successfully, in one transaction with the ingest. A tab's first listing and any
+  playlist are listed in full. Download-time backstop: a followed channel's video posted more
+  than a day before `since` is discarded without a trace (`queue::discard`).
+- Only the source being checked is locked; Check now during another check waits in
+  `Control.waiting_checks`; Stop is back (collection header, Activity).
+- Adding a folder once imports without creating a source; watching reuses an existing one.
+- `sources::source_key` normalises channel/playlist links (host, tab, `?si=`, handle case).
+- Library: select across pages and "Select all N matching" (`library_ids`) for Transcribe;
+  collections page on their own. Adding files no longer resumes a pause.
+- Deferred (minor): Activity "Remove" removes the recording (dismiss-only is missing) and
+  Clear history also clears failures; Stop following detaches recordings (no reattach on
+  re-follow); old `kind='collection'` sources and source URL edits have no UI;
+  `desktop/scripts/native-{folder,terminal,ask,pipeline,subscriptions}-smoke.js` still drive the
+  old Pipeline/paused-queue flow and need updating before they are run again.
+
+Validation: 199 Rust tests (9 ignored), 74 interface tests, Clippy clean, `tsc` and Vite
+build pass. Mock screenshots of every canvas board at desktop and phone width. Native
+WebKitGTK run against a scratch library (three synthetic recordings, a watched folder,
+pasted links, collection header, Pause/Resume, selection → Work, Settings deep link): all
+steps pass; scripts were scratch files, not committed.
+
+## Terminal Activity / Debug (0.28.2)
+
+Status & Health → Terminal now offers **Activity / Debug**. Activity contains readable
+progress, warnings and errors. Debug also includes source scan counts and skipped files,
+source duration, queue claims, download progress and subprocess exit/timing, selected speech
+and voice-matching devices, model download/resume/verification, native GPU/model-loading
+diagnostics, and semantic indexing batch/commit progress. This is a view filter, not an
+on/off capture switch: opening it after an operation shows the retained lead-up.
+
+Two separate memory rings retain up to 2,000 activity entries and 2,000 debug entries;
+verbose processing cannot evict the activity history. Each entry is capped at 3,000
+characters. The UI uses the same retention policy during Pause; Resume snapshots its
+buffer before scheduling the React update. Filter and Copy use the selected view, Clear
+clears that local terminal view, and the detail preference lasts for the window session.
+There is no new persistent terminal file or database write. Existing speech diagnostic
+files remain in the data root's `logs/` and active `work/` folders.
+
+New diagnostics are structured and never mirror subprocess stdout, AI request/response
+bodies, prompts, or command arguments. Native output uses an explicit diagnostic-prefix
+allowlist and bounded incremental reads. The common log writer also omits credential-
+bearing lines and URLs. Existing error messages can still contain local paths or tool
+failure details; this terminal is a local troubleshooting view, not a promise that every
+third-party error is anonymous. Help-chat diagnostics remain separately allowlisted and
+do not include this log. No schema or source/download behavior changed.
+
+Validation: 165 Rust tests pass (9 existing opt-in tests ignored), 60 interface tests pass,
+Clippy clean, frontend/native builds pass. `desktop/scripts/native-terminal-test.py` runs
+in real WebKitGTK against two synthetic WAV files and a new scratch library; verifies
+mode separation/retention, startup and live scan diagnostics, paused processing queue,
+pause/resume buffering, filtering and Clear. Latest successful root:
+`/tmp/concord-terminal-native-kcqks8t_`. No real archive/provider requests were used.
+Logs: `/tmp/concord-0282-{rust,ts,clippy,native-test,package}.log`.
+Installed and byte-verified the 0.28.2 AppImage at
+`~/.local/opt/concord-next/Concord-Next.AppImage`; user’s running app was left open.
+Close and reopen to load the new Terminal toggle. Verified pre-install backup:
+`~/.local/share/concord-next/backups/before-0.28.2-20261007-085404.db` (schema 15,
+`quick_check` OK). Final credential-redaction fixtures also passed after the full run.
+
+## Stable SQLite connection lifetime (0.28.1)
+
+The user saw `library.db-wal` and `library.db-shm` repeatedly appear/disappear in the
+file manager. Every background request opened a short-lived connection; when the final
+connection closed, SQLite removed the sidecars, only to recreate them on the next poll.
+This was unnecessary filesystem activity, not evidence that the database was corrupt.
+
+`AppState` now retains the initialized SQLite connection for the app lifetime. Worker
+connections still run independently; the retained connection holds no transaction or
+read cursor, so normal WAL checkpointing remains enabled. Pending restores are applied
+before this connection is opened. The retained connection is explicitly dropped on the
+final Tauri Exit event, after cancellation has been requested, because process exit may
+not run managed-state destructors. No schema, journaling or durability settings changed.
+
+`desktop/scripts/native-database-lifetime-test.py` monitors filesystem events with inotify
+while the native app exercises 60 IPC reads, writes a synthetic conversation and creates
+and validates a backup. Before the fix each sidecar was created/deleted 53 times; afterward
+each was created once and removed once at normal exit. The saved write was present in
+both the final database and backup, and both passed integrity checks. The test uses only
+a fresh scratch library and no provider. Final root: `/tmp/concord-database-native-c0xv1eyd`.
+
+All 163 Rust tests passed (9 existing opt-in tests ignored); Clippy and the frontend/native
+build passed. Logs: `/tmp/concord-0281-{before,rust,clippy,native-test,package}.log`.
+Installed and byte-verified 0.28.1 at `~/.local/opt/concord-next/Concord-Next.AppImage`.
+The existing app was left running; close and reopen to load the fix. Verified backup:
+`~/.local/share/concord-next/backups/before-0.28.1-20261002-103542.db`.
 
 ## Global Ask panel and shared chat (0.28.0)
 

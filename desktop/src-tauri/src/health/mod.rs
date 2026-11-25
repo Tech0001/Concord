@@ -57,7 +57,12 @@ pub fn stamp(path: &Path) -> Result<(u64, u64)> {
     ))
 }
 pub fn indexed(db: &Connection, id: &str, path: &Path) -> Result<()> {
-    let (bytes, mtime) = stamp(path)?;
+    indexed_from(db, id, path, path)
+}
+/// Record `path` as the transcript, with the size and time of `written`, the file that is about
+/// to be renamed to it (a rename keeps both).
+pub fn indexed_from(db: &Connection, id: &str, path: &Path, written: &Path) -> Result<()> {
+    let (bytes, mtime) = stamp(written)?;
     db.execute("INSERT INTO archive_transcripts VALUES (?1,?2,?3,?4) ON CONFLICT(media_id) DO UPDATE SET path=excluded.path,bytes=excluded.bytes,mtime=excluded.mtime",params![id,path.to_string_lossy(),bytes,mtime])?;
     Ok(())
 }

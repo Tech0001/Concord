@@ -1,7 +1,7 @@
 import {
+  Activity,
   MessageCircle,
   Wrench,
-  Workflow,
   FileText,
   Library,
   Network,
@@ -56,7 +56,9 @@ export const ANALYSIS: NavItem[] = [
   { page: "map", label: "Map", icon: Network, route: { page: "map" } },
 ];
 
-export const OPERATIONS: NavItem[] = [{ page: "pipeline", label: "Pipeline", icon: Workflow, route: { page: "pipeline" } }, {page:"tools",label:"Tools",icon:Wrench,route:{page:"tools"}}];
+export const ACTIVITY: NavItem = { page: "activity", label: "Activity", icon: Activity, route: { page: "activity" } };
+/** Recording and audio extraction; reached from Add, a recording's menu and the palette rather than the sidebar. */
+export const TOOLS: NavItem = { page: "tools", label: "Tools", icon: Wrench, route: { page: "tools" } };
 
 export const PAGE_TITLES: Record<Page, string> = {
   library: "Library",
@@ -68,7 +70,7 @@ export const PAGE_TITLES: Record<Page, string> = {
   map: "Map",
   ai: "AI",
   settings: "Settings",
-  pipeline: "Pipeline",
+  activity: "Activity",
   tools: "Tools",
   setup: "Setup",
 };

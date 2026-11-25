@@ -120,7 +120,7 @@ pub fn snapshot(
       "setup":{"completed":status["progress"]["completed"],"step":status["progress"]["step"]},
       "library":{"recordings":status["library"]["media"],"documents":status["library"]["docs"],"notes":status["library"]["notes"]},
       "speech":{"runtimeErrorCategory":error_category(runtime["runtimeError"].as_str().unwrap_or("")),"installed":status["speech"]["installed"],"ready":runtime["ready"],"modelsReady":runtime["modelsReady"],"voiceMatchingReady":runtime["voiceMatchingReady"],"ffmpegReady":runtime["mediaToolsReady"],"gpuDetected":runtime["gpu"].is_string(),"detectedDevice":runtime["device"],"selectedDevice":if pipeline::validate_device(&cfg.device).is_ok(){cfg.device.as_str()}else{"unknown"},"setupStatus":state(status["speech"]["setup"]["status"].as_str().unwrap_or("")),"setupErrorCategory":if status["speech"]["setup"]["status"]=="failed"{error_category(status["speech"]["setup"]["message"].as_str().unwrap_or(""))}else{"none"}},
-      "pipeline":{"configurationReadable":configuration_readable,"running":count("SELECT COALESCE((SELECT value FROM settings WHERE key='pipeline.running'),'false')='true'")?!=0,"checkingSources":control.checking.load(Ordering::SeqCst),"queued":count("SELECT count(*) FROM jobs WHERE status IN ('queued','retry')")?,"runningJobs":count("SELECT count(*) FROM jobs WHERE status='running'")?,"automaticChecks":cfg.automatic_checks,"checkMinutes":cfg.check_minutes,"dailyDownloadLimit":cfg.daily_limit,"downloaderEnabled":pipeline::downloader::enabled(root)?,"downloaderReady":pipeline::downloader::available(root),"sources":sources,"sourceCount":count("SELECT count(*) FROM channels")?},
+      "pipeline":{"configurationReadable":configuration_readable,"running":pipeline::running(&db)?,"checkingSources":control.checking.load(Ordering::SeqCst),"queued":count("SELECT count(*) FROM jobs WHERE status IN ('queued','retry')")?,"runningJobs":count("SELECT count(*) FROM jobs WHERE status='running'")?,"automaticChecks":cfg.automatic_checks,"checkMinutes":cfg.check_minutes,"dailyDownloadLimit":cfg.daily_limit,"downloaderEnabled":pipeline::downloader::enabled(root)?,"downloaderReady":pipeline::downloader::available(root),"sources":sources,"sourceCount":count("SELECT count(*) FROM channels")?},
       "documents":{"folders":folders,"folderCount":count("SELECT count(*) FROM document_roots")?},
       "search":{"provider":safe_provider(&providers.embedding),"modelReady":status["search"]["modelReady"],"runtimeDevice":device,"indexedSources":db.query_row("SELECT count(*) FROM ai_sources WHERE signature=?1",[providers.embedding.signature()],|r|r.get::<_,i64>(0))?,"downloadStatus":state(status["search"]["download"]["status"].as_str().unwrap_or(""))},
       "chat":{"provider":safe_provider(&providers.chat),"configured":status["chat"]["connected"]},"recentErrors":errors,
@@ -159,6 +159,8 @@ mod tests {
         )
         .unwrap();
         let text = data.to_string();
+        // Work runs unless someone paused it; a library that never paused is running.
+        assert_eq!(data["pipeline"]["running"], true);
         assert!(!text.contains(secret));
         assert!(!text.contains(root.path().to_str().unwrap()));
         assert_eq!(

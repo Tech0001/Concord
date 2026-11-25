@@ -1,7 +1,9 @@
 import { createContext, useContext } from "react";
-import type { Route } from "../lib/router.ts";
+import type { ActivityTab, Route } from "../lib/router.ts";
 import type { Category, Job, Note, Overview } from "../lib/types.ts";
 import type { SetupStatus } from "../setup/types.ts";
+import type { Source } from "../pipeline/types.ts";
+import type { QueueOverview } from "./activity.ts";
 
 export type AppContextValue = {
   category: Category;
@@ -13,15 +15,22 @@ export type AppContextValue = {
   revision: number;
   refresh: () => void;
   jobs: Job[];
+  /** Queue counts and whether it is paused, polled with the jobs. */
+  queue?: QueueOverview;
+  /** Channels, playlists and folders, refreshed with the library. */
+  sources: Source[];
   activeJob?: Job;
   device: string;
   setDevice: (device: string) => void;
   transcribe: (id: string) => Promise<void>;
   openNote: (note: Note) => void;
   openPalette: () => void;
-  openActivity: () => void;
+  openActivity: (tab?: ActivityTab) => void;
   openAsk: (intent?: Partial<import("../ai/ChatStore.tsx").AskIntent>) => void;
-  addRecordings: () => Promise<void>;
+  /** Open Add, optionally with dropped paths or pasted links; more seeds join an open dialog. */
+  openAdd: (seed?: import("../add/types.ts").AddSeed) => void;
+  /** Pick files or a folder first, then open Add with them. */
+  chooseToAdd: (kind: "files" | "folder") => Promise<void>;
   /** Resolves true when a library was imported. */
   importLegacy: (path?: string) => Promise<boolean>;
   /** Readiness for setup, the Library checklist and the sidebar; polled while downloads run. */

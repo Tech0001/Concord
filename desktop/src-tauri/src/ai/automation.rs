@@ -209,7 +209,7 @@ pub fn action(root: &Path, control: &Control, id: &str, action: &str) -> Result<
             let target = saved
                 .target(row["action"].as_str().unwrap())
                 .ok_or_else(|| {
-                    anyhow::anyhow!("Enable this automatic action in Pipeline Setup first")
+                    anyhow::anyhow!("Turn on this action in Settings → Processing & downloads first")
                 })?;
             let providers = config::read(root)?;
             let provider = if row["action"] == "embedding" {
@@ -219,7 +219,7 @@ pub fn action(root: &Path, control: &Control, id: &str, action: &str) -> Result<
             };
             ensure!(
                 *target == Target::from(provider) && ready(root, provider),
-                "Review and save the AI actions in Pipeline Setup first"
+                "Review and save the AI actions in Settings → Processing & downloads first"
             );
             ensure!(current_transcript(&db,&row)?,"A newer transcript replaced this job's source. Use the recording's AI controls for the new transcript.");
             db.execute("UPDATE ai_followups SET status='queued',message='Queued again with the approved provider',target=?2,child_id=NULL WHERE id=?1",params![id,serde_json::to_string(target)?])?;
@@ -259,7 +259,7 @@ pub(crate) fn tick(root: &Path, control: &Arc<Control>) -> Result<()> {
             &providers.chat
         };
         let blocked = if saved.target(action) != Some(&target) || target != Target::from(provider) {
-            Some("AI settings changed. Review Pipeline Setup, then retry with its approved provider.")
+            Some("AI settings changed. Review them in Settings → Processing & downloads, then retry with the approved provider.")
         } else if !ready(root, provider) {
             Some("The approved AI provider is unavailable. Reconnect it, then retry.")
         } else {

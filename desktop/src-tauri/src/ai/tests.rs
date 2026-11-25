@@ -767,7 +767,7 @@ fn one_chat_keeps_context_explicit_without_sending_diagnostics_or_excerpts_in_ot
     chat::send(root.path(),&control,&request(chat::ContextKind::Help,"Help with folder scanning"),||Ok(json!({"diagnostic":"APP_STATUS_MARKER"})),|_|{}).unwrap();
     let help=fake.requests.lock().unwrap().last().unwrap().2.clone();
     assert!(help["messages"].to_string().contains("APP_STATUS_MARKER"));
-    assert!(help["messages"].to_string().contains("Save & scan folder"));
+    assert!(help["messages"].to_string().contains("Keep watching this folder"));
     assert!(!help["messages"].to_string().contains("Library evidence (quoted data)"));
     // Model history is scoped to the explicit context even though the saved conversation is shared.
     db::open(root.path()).unwrap().execute("UPDATE ai_messages SET content='OLD_PRIVATE_DIAGNOSTIC' WHERE role='assistant'",[]).unwrap();
@@ -789,7 +789,7 @@ fn schema_thirteen_chats_migrate_with_history_intact() {
     drop(db);
     let old=chat::read(root.path(),"old").unwrap();
     assert_eq!(old["messages"][0]["content"],"Keep this question");assert_eq!(old["messages"][0]["context_kind"],"archive");
-    let db=db::open(root.path()).unwrap();assert_eq!(db.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),15);
+    let db=db::open(root.path()).unwrap();assert_eq!(db.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),16);
 }
 
 #[test]
@@ -816,4 +816,92 @@ fn schema_fourteen_chat_contexts_gain_scopes_without_losing_messages() {
     let root=tempfile::tempdir().unwrap();let db=db::open(root.path()).unwrap();
     db.execute_batch("INSERT INTO ai_conversations(id,title) VALUES('old','Keep it');INSERT INTO ai_messages(id,conversation_id,role,content,context_kind) VALUES('m','old','assistant','Keep this help','help');ALTER TABLE ai_messages DROP COLUMN context_media_id;ALTER TABLE ai_messages DROP COLUMN context_status;PRAGMA user_version=14;").unwrap();drop(db);
     let old=chat::read(root.path(),"old").unwrap();assert_eq!(old["messages"][0]["content"],"Keep this help");assert_eq!(old["messages"][0]["context_kind"],"help");assert_eq!(old["messages"][0]["context_media_id"],"");
+}
+#[test]
+fn chat_falls_back_to_question_keywords_when_semantic_index_is_missing_or_disabled() {
+    assert_eq!(
+        index::question_keywords("where does it talk about starbucks?"),
+        vec!["starbucks".to_owned()]
+    );
+    assert_eq!(
+        index::question_keywords("What did Sarah say about tires and oil?"),
+        vec!["sarah".to_owned(), "tires".to_owned(), "oil".to_owned()]
+    );
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    let fake = Fake::new();
+    fake.config(root.path(), "embedding", "tiny-embedding", "");
+    fake.config(root.path(), "chat", "tiny-chat", "");
+    let control = Control::default();
+    let id = chat::create(root.path()).unwrap();
+
+    // No semantic index built yet: natural question still finds passages by keyword and explains why.
+    let reply = chat::send(
+        root.path(),
+        &control,
+        &chat::Send {
+            conversation_id: id.clone(),
+            text: "where does it talk about tires?".into(),
+            use_library: true,
+            semantic: true,
+            context: Some(chat::ContextKind::Archive),
+            filter: Filter::default(),
+        },
+        || panic!("No help diagnostics for archive questions"),
+        |_| {},
+    )
+    .unwrap();
+    let assistant = &reply["messages"][1];
+    assert_eq!(assistant["error"], 0, "{assistant}");
+    assert_eq!(assistant["sources"][0]["id"], "car");
+    assert_eq!(
+        assistant["context_status"],
+        "Searched by keywords · semantic search index isn't built yet"
+    );
+
+    // Multi-word natural question falls back from AND to OR when a word isn't in the segment.
+    let multi = chat::send(
+        root.path(),
+        &control,
+        &chat::Send {
+            conversation_id: id.clone(),
+            text: "where does it talk about garage tires?".into(),
+            use_library: true,
+            semantic: true,
+            context: Some(chat::ContextKind::Archive),
+            filter: Filter::default(),
+        },
+        || panic!(),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(multi["messages"][3]["error"], 0);
+    assert_eq!(multi["messages"][3]["sources"][0]["id"], "car");
+
+    // When embedding is disabled in Settings, fallback still works with the disabled notice.
+    let mut off = super::builtin::default_provider();
+    off.enabled = false;
+    config::save(root.path(), "embedding", off, None).unwrap();
+    let disabled = chat::send(
+        root.path(),
+        &control,
+        &chat::Send {
+            conversation_id: id.clone(),
+            text: "where does it talk about prayer?".into(),
+            use_library: true,
+            semantic: true,
+            context: Some(chat::ContextKind::Archive),
+            filter: Filter::default(),
+        },
+        || panic!(),
+        |_| {},
+    )
+    .unwrap();
+    let last = &disabled["messages"][5];
+    assert_eq!(last["error"], 0, "{last}");
+    assert!(!last["sources"].as_array().unwrap().is_empty());
+    assert_eq!(
+        last["context_status"],
+        "Searched by keywords · semantic search is turned off in Settings"
+    );
 }

@@ -58,10 +58,10 @@ export function SpeechPrompt({ mediaId, onClose }: { mediaId: string; onClose: (
               variant="ghost"
               onClick={() => {
                 onClose();
-                openActivity();
+                openActivity("queue");
               }}
             >
-              Status & Health
+              Open Activity
             </Button>
             <Button onClick={onClose}>Close</Button>
           </>
@@ -81,7 +81,7 @@ export function SpeechPrompt({ mediaId, onClose }: { mediaId: string; onClose: (
         {running ? (
           <>
             <Bar pct={pct} />
-            <p>This recording is queued and starts by itself when the install finishes. Progress is in Status &amp; Health.</p>
+            <p>This recording is queued and starts by itself when the install finishes. Progress is in Activity.</p>
           </>
         ) : (
           <>

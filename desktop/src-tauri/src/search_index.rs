@@ -51,6 +51,15 @@ pub fn query(text: &str, exact: bool) -> String {
             .join(" AND ")
     }
 }
+pub fn query_terms(terms: &[String], require_all: bool) -> String {
+    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let joiner = if require_all { " AND " } else { " OR " };
+    terms
+        .iter()
+        .map(|s| quote(s.as_str()))
+        .collect::<Vec<_>>()
+        .join(joiner)
+}
 pub fn date(value: &str) -> String {
     if value.len() == 8 && value.bytes().all(|c| c.is_ascii_digit()) {
         format!("{}-{}-{}", &value[..4], &value[4..6], &value[6..])

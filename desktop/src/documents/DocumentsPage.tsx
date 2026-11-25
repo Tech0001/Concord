@@ -314,7 +314,7 @@ export function DocumentsPage({ id }: { id?: string }) {
                 .catch(toast.error)
             }
           >
-            Update semantic index
+            Update search index
           </Button>
         </aside>
         {id ? (

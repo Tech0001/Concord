@@ -1,14 +1,16 @@
 import type { PopoutSession, PlaybackPosition, PopoutCommand } from "../player/popout-types.ts";
 import type { ToolsState } from "../tools/types.ts";
 import type { FileAction, RecordingFileInfo } from "../library/RecordingFileDialog.tsx";
-import type { AutomaticAi, SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
+import type { Source, AutomaticAi, SourceInput, PipelineState, PipelineConfig, Batch, Candidates, Enqueued } from "../pipeline/types.ts";
 import type { DocumentsState, DocumentSync } from "../documents/types.ts";
+import type { DragDrop, FolderPreview, Inspected, LinkPreview, LinkVideo } from "../add/types.ts";
 import type { ArchiveStatus, Audit, BackupValidation, LogEntry, MaintenanceJob } from "../health/types.ts";
 import type { SetupStatus, SetupProgress, Preflight, LocalServer, ModelDownload } from "../setup/types.ts";
 import type { ChatContext, ChatGPTStatus, AiConfig, Provider, SearchFilter, ResearchHit, FilterOptions, IndexStatus, Conversation, ChatDetail, SummaryState } from "../ai/types.ts";
 import { invoke, isTauri, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   NoteLink,
@@ -46,6 +48,8 @@ export type Transport = {
   pickSavePath(options: SavePick): Promise<string | null>;
   version(): Promise<string>;
   pickFolder?(title?: string): Promise<string | null>;
+  /** Files and folders dragged over the window from outside. */
+  onDragDrop?(handler: (event: DragDrop) => void): Promise<() => void>;
 };
 
 const tauriTransport: Transport = {
@@ -61,6 +65,10 @@ const tauriTransport: Transport = {
     save({ title, defaultPath, filters: [{ name, extensions }] }),
   version: () => getVersion(),
   pickFolder: async (title = "Choose folder") => { const path = await open({ title, directory: true, multiple: false }); return typeof path === "string" ? path : null; },
+  onDragDrop: (handler) =>
+    getCurrentWebview().onDragDropEvent(({ payload }) =>
+      handler({ type: payload.type, paths: payload.type === "enter" || payload.type === "drop" ? payload.paths : [] }),
+    ),
 };
 
 let transport: Transport = tauriTransport;
@@ -122,6 +130,7 @@ export const api = {
   downloaderInstall: () => call<void>("downloader_install"),
   downloaderEnable: (enabled: boolean) => call<void>("downloader_enable", { enabled }),
   pipelineState: () => call<PipelineState>("pipeline_state"),
+  pipelineOverview: () => call<import("../shell/activity.ts").QueueOverview>("pipeline_overview"),
   pipelineAiState: () => call<AutomaticAi>("pipeline_ai_state"),
   pipelineAiSave: (embedding: boolean, summary: boolean) => call<AutomaticAi>("pipeline_ai_save", { embedding, summary }),
   pipelineAiAction: (id: string, action: "cancel" | "retry") => call<void>("pipeline_ai_action", { id, action }),
@@ -184,6 +193,8 @@ export const api = {
   startLibrary: () => call<void>("start_library"),
   importLegacy: (path: string) => call<Overview>("import_legacy", { path }),
   library: (filter: LibraryFilter) => call<LibraryPage>("library", { filter }),
+  /** Every recording the filter matches, across all pages. */
+  libraryIds: (filter: LibraryFilter) => call<string[]>("library_ids", { filter }),
   recording: (id: string) => call<Recording>("recording", { id }),
   mediaUrl: (id: string) => call<string>("media_file", { id }),
   async thumbnail(id: string): Promise<string | null> {
@@ -203,7 +214,21 @@ export const api = {
   rescanSpeakers: (id?: string) => call<MatchResult>("rescan_speakers", { id: id ?? null }),
   labelVoices: (label: LabelVoice) => call<MatchResult>("label_speakers", { label }),
   importMedia: (paths: string[], category = "personal") => call<number>("import_media", { paths, category }),
-  importAndQueue: (paths: string[], category: string, device: string) => call<number>("import_and_queue", { paths, category, device }),
+  importAndQueue: (paths: string[], category: string, device: string, diarize = true) => call<number>("import_and_queue", { paths, category, device, diarize }),
+  sourcesList: () => call<Source[]>("sources_list"),
+  addInspectPaths: (paths: string[]) => call<Inspected>("add_inspect_paths", { paths }),
+  /** Where downloaded videos are saved ("" until chosen) and the suggested folder. */
+  downloadFolder: () => call<{ folder: string; suggested: string }>("download_folder"),
+  setDownloadFolder: (folder: string) => call<void>("set_download_folder", { folder }),
+  addFolderPreview: (path: string) => call<FolderPreview>("add_folder_preview", { path }),
+  addFolder: (path: string, watch: boolean, category: string, diarize: boolean) =>
+    call<{ id: string | null; name: string; added: number }>("add_folder", { path, watch, category, diarize }),
+  addPreviewLinks: (urls: string[]) => call<LinkPreview[]>("add_preview_links", { urls }),
+  addVideos: (videos: LinkVideo[], category: string, diarize: boolean, device: string) =>
+    call<{ added: number; existing: number; ids: string[] }>("add_videos", { videos, category, diarize, device }),
+  addFollow: (url: string, name: string, category: string, diarize: boolean, includeShorts: boolean) =>
+    call<string>("add_follow", { url, name, category, diarize, includeShorts }),
+  onDragDrop: (handler: (event: DragDrop) => void) => (transport.onDragDrop ? transport.onDragDrop(handler) : Promise.resolve(() => {})),
   speechStatus: () => call<Runtime>("speech_status"),
   speechSetupStatus: () => call<import("./types.ts").SpeechSetupStatus>("speech_setup_status"),
   speechSetupStart: () => call<void>("speech_setup_start"),

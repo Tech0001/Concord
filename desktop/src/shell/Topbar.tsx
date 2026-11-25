@@ -14,7 +14,7 @@ import { useApp } from "./AppContext.tsx";
 export function Topbar({ onAdd }: { onAdd: () => void }) {
   const { route, pageTitle, openPalette, openAsk, category, setCategory } = useApp();
   const phone = useMediaQuery(PHONE);
-  const scoped = ["library", "search", "documents", "notes", "map", "ai", "pipeline"].includes(route.page);
+  const scoped = ["library", "search", "documents", "notes", "map", "ai"].includes(route.page);
   const categories: {value: Category; label: string}[] = [{value:"personal",label:"Personal"},{value:"work",label:"Work"},{value:"",label:"Both"}];
   const title = pageTitle ?? PAGE_TITLES[route.page];
   if (phone)
@@ -26,7 +26,7 @@ export function Topbar({ onAdd }: { onAdd: () => void }) {
         <PopoutIndicator/><ToolIndicator/>
         <IconButton label="Ask Concord" icon={MessageCircle} onClick={()=>openAsk()}/>
         <IconButton label="Search or jump to" icon={Search} onClick={openPalette} />
-        {route.page === "library" && <IconButton label="Add recordings" icon={Plus} onClick={onAdd} />}
+        {route.page === "library" && <IconButton label="Add" icon={Plus} onClick={onAdd} />}
       </header>
     );
   return (
@@ -40,8 +40,8 @@ export function Topbar({ onAdd }: { onAdd: () => void }) {
       <div className="topbar-actions">
         <PopoutIndicator/><ToolIndicator/>
         {scoped && <Segmented label="Archive category" value={category} onChange={setCategory} options={categories}/>}
-        <Button variant="primary" icon={Plus} onClick={onAdd}>
-          Add recordings
+        <Button variant="primary" icon={Plus} onClick={onAdd} title="Add recordings, folders or links">
+          Add
         </Button>
       </div>
     </header>

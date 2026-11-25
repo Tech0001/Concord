@@ -20,9 +20,8 @@ import { Sidebar, SidebarDrawer } from "./shell/Sidebar.tsx";
 import { TabBar } from "./shell/TabBar.tsx";
 import { Topbar } from "./shell/Topbar.tsx";
 import { CommandPalette } from "./shell/CommandPalette.tsx";
-import { ActivityPanel } from "./shell/ActivityPanel.tsx";
 import { NoteEditor } from "./notes/NoteEditor.tsx";
-import { PipelinePage } from "./pipeline/PipelinePage.tsx";
+import { ActivityPage } from "./activity/ActivityPage.tsx";
 import { isCategory } from "./library/model.ts";
 import { LibraryPage } from "./library/LibraryPage.tsx";
 import { PlayerPage } from "./player/PlayerPage.tsx";
@@ -35,6 +34,12 @@ import { MapPage } from "./map/MapPage.tsx";
 import { SettingsPage } from "./settings/SettingsPage.tsx";
 import { SetupPage } from "./setup/SetupPage.tsx";
 import { SpeechPrompt } from "./setup/SpeechPrompt.tsx";
+import { AddDialog } from "./add/AddDialog.tsx";
+import { DropVeil, useDropAndPaste } from "./add/useDropAndPaste.tsx";
+import type { AddSeed } from "./add/types.ts";
+import type { Source } from "./pipeline/types.ts";
+import { isChecking } from "./library/following.ts";
+import type { QueueOverview } from "./shell/activity.ts";
 import type { SetupStatus } from "./setup/types.ts";
 
 export default function App() {
@@ -54,6 +59,8 @@ function Shell() {
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
   const [category, setCategory] = useStoredState<Category>("archive-category-v1", "", isCategory);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [queue, setQueue] = useState<QueueOverview>();
+  const [sources, setSources] = useState<Source[]>([]);
   const [device, setDeviceState] = useState("auto");
   const [setup, setSetup] = useState<SetupStatus>();
   const setupRef = useRef<SetupStatus>(undefined);
@@ -61,7 +68,6 @@ function Shell() {
   const [speechPrompt, setSpeechPrompt] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [activityOpen, setActivityOpen] = useState(false);
   const [pageTitle, setPageTitle] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("sidebar-collapsed-v1", false, (v) => typeof v === "boolean");
   const narrow = useMediaQuery(RAIL);
@@ -73,7 +79,32 @@ function Shell() {
   useEffect(() => {
     if (!available) return;
     api.overview().then(setOverview).catch(toast.error);
+    api
+      .sourcesList()
+      .then((next) => setSources((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next)))
+      .catch(toast.error);
+    api
+      .pipelineOverview()
+      .then((next) => setQueue((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next)))
+      .catch(toast.error);
   }, [available, revision, toast]);
+
+  // A source check runs in the background. Follow just the source list while it runs, so the
+  // header and sidebar show it, then refresh everything once when it ends.
+  const sourceChecking = sources.some(isChecking);
+  const wasChecking = useRef(false);
+  useEffect(() => {
+    if (wasChecking.current && !sourceChecking) refresh();
+    wasChecking.current = sourceChecking;
+    if (!sourceChecking) return;
+    const timer = window.setInterval(() => {
+      api
+        .sourcesList()
+        .then((next) => setSources((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next)))
+        .catch(() => {});
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [sourceChecking, refresh]);
 
   // Poll quickly while a job runs, slowly otherwise; refresh data when job states change.
   useEffect(() => {
@@ -82,9 +113,10 @@ function Shell() {
     let timer = 0;
     const poll = async () => {
       try {
-        const data = await api.jobs();
+        const [data, counts] = await Promise.all([api.jobs(), api.pipelineOverview()]);
         if (!alive) return;
         setJobs((old) => (JSON.stringify(old) === JSON.stringify(data) ? old : data));
+        setQueue((old) => (JSON.stringify(old) === JSON.stringify(counts) ? old : counts));
         const signature = data.map((j) => j.id + j.status).join();
         if (lastJobs.current !== null && signature !== lastJobs.current) refresh();
         lastJobs.current = signature;
@@ -168,12 +200,29 @@ function Shell() {
     if (!onSetup && !p.completed && (!setup.library.started || p.furthest !== "library")) navigate({ page: "setup" }, { replace: true });
   }, [setup, onSetup, navigate]);
 
-  const openAsk = useCallback((intent?: Parameters<AppContextValue['openAsk']>[0]) => {
-    const help = activityOpen || route.page === 'settings' || route.page === 'setup';
-    const recording = route.page === 'recording' ? route.id : undefined;
-    setActivityOpen(false);
-    ask.show({context:help?'help':recording?'recording':'archive',recordingId:recording,recordingTitle:recording?pageTitle??undefined:undefined,...intent});
-  },[ask.show,activityOpen,route,pageTitle]);
+  const openActivity = useCallback(
+    (tab: "queue" | "health" | "logs" | "backups" = "health") => {
+      navigate({ page: "activity", tab: tab === "queue" ? undefined : tab });
+    },
+    [navigate],
+  );
+
+  const openAsk = useCallback(
+    (intent?: Parameters<AppContextValue["openAsk"]>[0]) => {
+      const help =
+        route.page === "activity" ||
+        route.page === "settings" ||
+        route.page === "setup";
+      const recording = route.page === "recording" ? route.id : undefined;
+      ask.show({
+        context: help ? "help" : recording ? "recording" : "archive",
+        recordingId: recording,
+        recordingTitle: recording ? pageTitle ?? undefined : undefined,
+        ...intent,
+      });
+    },
+    [ask.show, route, pageTitle],
+  );
   useShortcuts([{ key: "k", mod: true, global: true, run: () => setPaletteOpen((v) => !v) },
     { key: "j", mod: true, global: true, run: () => ask.open ? ask.close() : openAsk() }]);
   useEffect(()=>{
@@ -198,8 +247,8 @@ function Shell() {
       try {
         await api.transcribe(id, device);
         toast.info(ready && !ready.installed ? "Queued. It starts when the speech engine finishes installing." : "Recording added to the processing queue", {
-          label: "Status & Health",
-          run: () => setActivityOpen(true),
+          label: "Activity",
+          run: () => navigate({ page: "activity" }),
         });
         setJobs(await api.jobs());
         refresh();
@@ -209,18 +258,22 @@ function Shell() {
     },
     [device, refresh, toast],
   );
-  const addRecordings = useCallback(async () => {
-    try {
-      const paths = await api.pickMedia();
-      if (!paths.length) return;
-      const n = await api.importMedia(paths, category || "personal");
-      refresh();
-      navigate({ page: "library" });
-      toast.success(`${count(n, "recording")} added`);
-    } catch (e) {
-      toast.error(e);
-    }
-  }, [navigate, refresh, toast, category]);
+  // Add collects every drop, pick and paste made while it is open.
+  const [adding, setAdding] = useState<AddSeed[] | null>(null);
+  const [addKey, setAddKey] = useState(0);
+  const openAdd = useCallback((seed: AddSeed = {}) => setAdding((old) => [...(old ?? []), seed]), []);
+  const chooseToAdd = useCallback(
+    async (kind: "files" | "folder") => {
+      try {
+        const paths = kind === "files" ? await api.pickMedia() : [await api.pickFolder("Choose a folder of recordings")].filter((p): p is string => !!p);
+        if (paths.length) openAdd({ paths });
+      } catch (e) {
+        toast.error(e);
+      }
+    },
+    [openAdd, toast],
+  );
+  const dragging = useDropAndPaste(openAdd);
   const importLegacy = useCallback(
     async (path?: string) => {
       try {
@@ -250,15 +303,18 @@ function Shell() {
       revision,
       refresh,
       jobs,
+      queue,
+      sources,
       activeJob,
       device,
       setDevice,
       transcribe,
       openNote: setNote,
       openPalette: () => setPaletteOpen(true),
-      openActivity: () => setActivityOpen(true),
+      openActivity,
       openAsk,
-      addRecordings,
+      openAdd,
+      chooseToAdd,
       importLegacy,
       pageTitle,
       setPageTitle,
@@ -275,15 +331,19 @@ function Shell() {
       revision,
       refresh,
       jobs,
+      queue,
+      sources,
       activeJob,
       device,
       setDevice,
       transcribe,
-      addRecordings,
+      openAdd,
+      chooseToAdd,
       importLegacy,
       pageTitle,
       setup,
       refreshSetup,
+      openActivity,
       openAsk,
     ],
   );
@@ -299,13 +359,27 @@ function Shell() {
       </div>
     );
 
-  const prompts = speechPrompt && <SpeechPrompt mediaId={speechPrompt} onClose={() => setSpeechPrompt(null)} />;
+  const prompts = (
+    <>
+      {speechPrompt && <SpeechPrompt mediaId={speechPrompt} onClose={() => setSpeechPrompt(null)} />}
+      {adding && (
+        <AddDialog
+          key={addKey}
+          seeds={adding}
+          onClose={(leftover) => {
+            setAddKey((k) => k + 1);
+            setAdding(leftover?.length ? leftover : null);
+          }}
+        />
+      )}
+      {dragging && <DropVeil />}
+    </>
+  );
   if (route.page === "setup")
     return (
       <AppContext.Provider value={context}>
         <SetupPage route={route} />
-        <AskPanel/>
-        <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} onChanged={() => api.jobs().then(setJobs).catch(toast.error)} />
+        <AskPanel />
         {prompts}
       </AppContext.Provider>
     );
@@ -316,7 +390,7 @@ function Shell() {
       page = <PlayerPage id={route.id} at={route.at} />;
       break;
     case "search":
-      page = <SearchPage q={route.q} />;
+      page = <SearchPage q={route.q} mode={route.mode} />;
       break;
     case "speakers":
       page = <SpeakersPage id={route.id} />;
@@ -334,10 +408,10 @@ function Shell() {
       page = <MapPage />;
       break;
     case "tools":
-      page = <ToolsPage tab={route.tab} source={route.source}/>;
+      page = <ToolsPage tab={route.tab} source={route.source} />;
       break;
-    case "pipeline":
-      page = <PipelinePage tab={route.tab} />;
+    case "activity":
+      page = <ActivityPage tab={route.tab} />;
       break;
     case "settings":
       page = <SettingsPage section={route.section} />;
@@ -348,12 +422,12 @@ function Shell() {
 
   return (
     <AppContext.Provider value={context}>
-      <div className="shell" data-ask-open={ask.open && route.page!=="ai"} data-rail={!phone && (collapsed || narrow)}>
+      <div className="shell" data-ask-open={ask.open && route.page !== "ai"} data-rail={!phone && (collapsed || narrow)}>
         {!phone && (
           <Sidebar mode={collapsed || narrow ? "rail" : "full"} onToggle={() => (narrow ? setDrawerOpen(true) : setCollapsed((v) => !v))} />
         )}
         <main className="main">
-          <Topbar onAdd={() => void addRecordings()} />
+          <Topbar onAdd={() => openAdd()} />
           <div className="page" key={pageKey}>
             {page}
           </div>
@@ -361,11 +435,10 @@ function Shell() {
         {phone && <TabBar />}
       </div>
       {!phone && narrow && <SidebarDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />}
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onAdd={() => void addRecordings()} />
-      <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} onChanged={() => api.jobs().then(setJobs).catch(toast.error)} />
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onAdd={() => openAdd()} />
       {note && <NoteEditor note={note} onClose={() => setNote(null)} />}
       {prompts}
-      <AskPanel/>
+      <AskPanel />
     </AppContext.Provider>
   );
 }

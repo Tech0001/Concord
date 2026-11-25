@@ -9,8 +9,11 @@ test("recording ids with JSON, slashes, ? and # round-trip", () => {
   assert.deepEqual(parseRoute(hash), route);
 });
 
-test("search keeps its query; documents keep their id", () => {
+test("search keeps its query and mode; documents keep their id", () => {
   assert.deepEqual(parseRoute(formatRoute({ page: "search", q: "harbour lights & more" })), { page: "search", q: "harbour lights & more" });
+  assert.deepEqual(parseRoute(formatRoute({ page: "search", q: "coffee", mode: "meaning" })), { page: "search", q: "coffee", mode: "meaning" });
+  assert.deepEqual(parseRoute("#/search?mode=meaning"), { page: "search", q: "", mode: "meaning" });
+  assert.equal(formatRoute({ page: "search", q: "", mode: "meaning" }), "#/search?mode=meaning");
   assert.deepEqual(parseRoute("#/documents/doc%3A1"), { page: "documents", id: "doc:1" });
   assert.equal(formatRoute({ page: "documents" }), "#/documents");
 });
@@ -36,10 +39,33 @@ test("setup keeps its step, where to return, and a preselected chat provider", (
   assert.deepEqual(parseRoute("#/setup?step=nowhere&return=recording&chat=fax"), { page: "setup" });
 });
 
-test("settings sections and pipeline tabs can be linked to", () => {
-  assert.deepEqual(parseRoute(formatRoute({ page: "settings", section: "speech" })), { page: "settings", section: "speech" });
+test("settings sections and activity tabs round-trip; legacy links map cleanly", () => {
+  for (const section of ["general", "ai", "speech", "downloads"] as const) {
+    assert.deepEqual(parseRoute(formatRoute({ page: "settings", section })), { page: "settings", section });
+  }
   assert.deepEqual(parseRoute("#/settings?section=elsewhere"), { page: "settings" });
   assert.equal(formatRoute({ page: "settings" }), "#/settings");
-  assert.deepEqual(parseRoute(formatRoute({ page: "pipeline", tab: "sources" })), { page: "pipeline", tab: "sources" });
-  assert.deepEqual(parseRoute("#/pipeline"), { page: "pipeline" });
+  assert.deepEqual(parseRoute("#/settings?section=appearance"), { page: "settings", section: "general" });
+  assert.deepEqual(parseRoute("#/settings?section=library"), { page: "settings", section: "general" });
+  assert.deepEqual(parseRoute("#/settings?section=about"), { page: "settings", section: "general" });
+  assert.deepEqual(parseRoute("#/settings?section=youtube"), { page: "settings", section: "downloads" });
+  assert.deepEqual(parseRoute("#/settings?section=processing"), { page: "settings", section: "downloads" });
+
+  assert.equal(formatRoute({ page: "activity" }), "#/activity");
+  assert.deepEqual(parseRoute("#/activity"), { page: "activity" });
+  assert.deepEqual(parseRoute("#/activity?tab=queue"), { page: "activity" });
+  for (const tab of ["health", "logs", "backups"] as const) {
+    assert.deepEqual(parseRoute(formatRoute({ page: "activity", tab })), { page: "activity", tab });
+  }
+  assert.deepEqual(parseRoute("#/pipeline"), { page: "activity" });
+  assert.deepEqual(parseRoute("#/pipeline?tab=sources"), { page: "activity" });
+  assert.deepEqual(parseRoute("#/pipeline?tab=setup"), { page: "settings", section: "downloads" });
+});
+
+test("the library can open on one followed collection", () => {
+  const route: Route = { page: "library", collection: "src:1/x" };
+  assert.equal(formatRoute(route), "#/library?collection=src%3A1%2Fx");
+  assert.deepEqual(parseRoute(formatRoute(route)), route);
+  assert.deepEqual(parseRoute("#/library"), { page: "library" });
+  assert.equal(formatRoute({ page: "library" }), "#/library");
 });

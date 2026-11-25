@@ -263,6 +263,7 @@ fn build_filtered(
             .collect()
     };
     let signature = provider.signature();
+    crate::runtime_log::debug("Semantic index", &format!("Job {job}: {} sources; embedding batches of 8; {} execution", list.len(), if provider.kind == "builtin" || provider.kind == "local" { "local" } else { "configured provider" }));
     let client = provider.client()?;
     db.execute(
         "UPDATE ai_jobs SET total=?2 WHERE id=?1",
@@ -288,7 +289,8 @@ fn build_filtered(
                 ],
             )?;
             let mut vectors = Vec::new();
-            for batch in source.chunks(8) {
+            for (batch_index, batch) in source.chunks(8).enumerate() {
+                crate::runtime_log::debug("Semantic index", &format!("Source {}/{} ({kind}); batch {}/{}; {} passages", i + 1, list.len(), batch_index + 1, source.len().div_ceil(8), batch.len()));
                 ensure!(!control.cancel_index.load(Ordering::SeqCst), "Cancelled");
                 vectors.extend(provider.embed(
                     &client,
@@ -337,6 +339,9 @@ fn build_filtered(
                 tx.execute("INSERT INTO ai_chunks(signature,kind,source_id,position,text,start,end,vector) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![signature,kind,id,position,c.text,c.start,c.end,bytes])?;
             }
             tx.commit()?;
+            crate::runtime_log::debug("Semantic index", &format!("Source {}/{} committed: {} passages, {dimensions} dimensions", i + 1, list.len(), source.len()));
+        } else {
+            crate::runtime_log::debug("Semantic index", &format!("Source {}/{} skipped: {}", i + 1, list.len(), if source.is_empty() { "no text" } else { "already up to date" }));
         }
         db.execute(
             "UPDATE ai_jobs SET done=?2 WHERE id=?1",
@@ -450,6 +455,151 @@ pub fn query_input(query: &str, model: &str) -> String {
         query.to_owned()
     }
 }
+/// Reports `(embedding_enabled, index_exists)` for the currently selected embedding provider.
+pub fn has_index(root: &Path) -> Result<(bool, bool)> {
+    let provider = config::read(root)?.embedding;
+    if !provider.enabled {
+        return Ok((false, false));
+    }
+    let db = db::open(root)?;
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ai_indexes WHERE signature=?1)",
+        [provider.signature()],
+        |r| r.get(0),
+    )?;
+    Ok((true, exists))
+}
+
+const QUESTION_STOP_WORDS: &[&str] = &[
+    "a", "about", "all", "am", "an", "and", "any", "anything", "are", "as", "ask", "at", "be",
+    "been", "being", "but", "by", "can", "could", "did", "do", "does", "doing", "done", "each",
+    "else", "ever", "find", "for", "from", "get", "give", "had", "has", "have", "he", "her",
+    "here", "hers", "him", "his", "how", "i", "if", "in", "into", "is", "it", "its", "just",
+    "know", "like", "list", "look", "me", "mention", "mentioned", "mentions", "more", "most",
+    "my", "no", "not", "now", "of", "on", "one", "only", "or", "other", "our", "out", "over",
+    "please", "said", "say", "saying", "says", "search", "see", "she", "should", "show", "so",
+    "some", "someone", "something", "speak", "speaking", "spoke", "spoken", "summary", "talk",
+    "talked", "talking", "talks", "tell", "than", "that", "the", "their", "them", "then", "there",
+    "these", "they", "thing", "things", "this", "those", "through", "to", "too", "up", "us",
+    "very", "was", "we", "were", "what", "whatever", "when", "where", "which", "who", "whom",
+    "whose", "why", "will", "with", "would", "you", "your", "yours",
+];
+
+/// Extract meaningful search keywords from a natural-language question for FTS retrieval.
+pub fn question_keywords(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in text.split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '-') {
+        let word = raw.trim_matches(|c| c == '\'' || c == '-').to_lowercase();
+        if word.len() < 2 {
+            continue;
+        }
+        if QUESTION_STOP_WORDS.contains(&word.as_str()) {
+            continue;
+        }
+        if !out.contains(&word) {
+            out.push(word);
+        }
+    }
+    out
+}
+
+fn keyword_search_terms(
+    db: &Connection,
+    meta: &HashMap<(String, String), Hit>,
+    f: &Filter,
+    terms: &[String],
+    require_all: bool,
+    limit: usize,
+) -> Result<Vec<Hit>> {
+    if terms.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut hits = Vec::new();
+    let fts = crate::search_index::query_terms(terms, require_all);
+    let mut stmt = db.prepare(
+        "SELECT s.media_id,s.text,s.start,s.end,segments_fts.rank,
+      highlight(segments_fts,0,char(2),char(3)),s.speaker,sp.name,sp.color
+      FROM segments_fts JOIN segments s ON s.id=segments_fts.rowid
+      LEFT JOIN assignments a ON a.media_id=s.media_id AND a.local_id=s.speaker
+      LEFT JOIN speakers sp ON sp.id=a.speaker_id
+      WHERE segments_fts MATCH ?1 AND (?2='' OR a.speaker_id=?2) ORDER BY segments_fts.rank",
+    )?;
+    let mut rows = stmt.query(params![fts, f.speaker])?;
+    while let Some(r) = rows.next()? {
+        let id: String = r.get(0)?;
+        if let Some(base) = meta.get(&("recording".into(), id.clone())) {
+            let start = r.get(2)?;
+            let end = r.get(3)?;
+            let mut h = base.clone();
+            h.text = r.get(1)?;
+            h.marked = r.get(5)?;
+            h.speaker = r.get(6)?;
+            h.speaker_name = r.get(7)?;
+            h.speaker_color = r.get(8)?;
+            h.start = start;
+            h.end = end;
+            h.score = -r.get::<_, f64>(4)?;
+            hits.push(h);
+            if hits.len() >= limit {
+                break;
+            }
+        }
+    }
+    for ((kind, id), base) in meta {
+        if kind == "recording" {
+            continue;
+        }
+        for c in chunks(db, kind, id)? {
+            let lower = c.text.to_lowercase();
+            let matched = terms.iter().filter(|t| lower.contains(t.as_str())).count();
+            let ok = if require_all {
+                matched == terms.len()
+            } else {
+                matched > 0
+            };
+            if ok {
+                let mut h = base.clone();
+                h.text = c.text;
+                h.score = matched as f64;
+                hits.push(h);
+                break;
+            }
+        }
+    }
+    hits.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.title.cmp(&b.title)));
+    hits.truncate(limit);
+    Ok(hits)
+}
+
+/// Keyword retrieval tuned for natural-language chat questions ("where does it talk about starbucks").
+pub fn search_question_keywords(
+    root: &Path,
+    question: &str,
+    f: &Filter,
+    limit: usize,
+) -> Result<Vec<Hit>> {
+    let query = question.trim();
+    if query.is_empty() {
+        return Ok(vec![]);
+    }
+    ensure!(query.len() <= 16000, "Search query is too long");
+    if f.exact {
+        return search(root, query, false, f, limit);
+    }
+    let terms = question_keywords(query);
+    if terms.is_empty() {
+        return search(root, query, false, f, limit);
+    }
+    let db = db::open(root)?;
+    let meta = metadata(&db, f)?;
+    let limit = limit.clamp(1, 200);
+    let hits = keyword_search_terms(&db, &meta, f, &terms, true, limit)?;
+    if !hits.is_empty() || terms.len() == 1 {
+        return Ok(hits);
+    }
+    keyword_search_terms(&db, &meta, f, &terms, false, limit)
+}
+
 pub fn search(
     root: &Path,
     query: &str,
@@ -482,7 +632,7 @@ pub fn search(
                 |r| r.get(0),
             )
             .optional()?
-            .context("Create a search index for this embedding model in Settings")?;
+            .context("Build a search index for this embedding model first.")?;
         let provider = if provider.kind == "builtin" {
             super::builtin::provider(root, |_| Ok(()))?
         } else {
