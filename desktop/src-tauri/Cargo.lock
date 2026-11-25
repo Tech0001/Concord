@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "concord-next"
-version = "0.29.4"
+version = "0.30.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

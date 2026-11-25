@@ -10,6 +10,38 @@ themeable, phone-ready design system and restored the player's range tools
 (select, loop, copy, export, save as note). It is still a preview, not full parity
 with the Electron app; see the delivery plan below.
 
+## Search, Activity, Settings & Ask overhaul (0.30.0, branch `feature/ux-overhaul`, branched from `feature/adding`)
+
+0.30.0 (November 25): overhauled the fragmented Search, Activity, Settings, and Ask Concord
+workflows into one cohesive layout on top of 0.29.4:
+- **Ask Concord keyword fallback**: when a user asks about their archive with semantic search on
+  and no semantic index exists yet (or embeddings are off), `ai::chat::send` automatically falls
+  back to natural-question keyword search (`ai::index::search_question_keywords`, stripping
+  conversational stop words and stepping from AND to OR ranked by BM25) instead of dead-ending
+  with `"Create a search index for this embedding model in Settings"`. Replies carry a quiet
+  status notice with a one-click **Build search index** (or **AI & Search settings**) button.
+- **Unified Search (`#/search`) & focused AI page (`#/ai`)**: Search now has a top-right
+  **Keywords** / **By meaning** switcher (`#/search?mode=meaning`), inline `All words` /
+  `Exact phrase` matching, collapsible filter tray with active count badge, and inline
+  `IndexControl` (**Build search index** / **Update search index**) when unindexed or running.
+  AI (`#/ai`) is now dedicated full-view chat with a quick **Search by meaning** shortcut.
+- **Tabbed Activity workspace (`#/activity`)**: replaced the duplicate **Status & Health** popup
+  modal (`ActivityPanel`) with four first-class tabs directly on Activity: **Queue** (now
+  showing live semantic indexing and active repairs right inside **Now**, plus Needs attention,
+  Up next, Following, Automatic AI, History), **Status & Health** (coverage cards with direct
+  **Build / Update search index** buttons, audit, repairs, channels table), **Logs** (Activity /
+  Debug terminal + Runtime diagnostics), and **Backups** (`#/activity?tab=health|logs|backups`).
+- **Tabbed Settings (`#/settings`)**: replaced the long vertical scroll and duplicate Speech /
+  Downloads sections with four clean tabs: **General** (Appearance, Library + Backups link,
+  About), **AI & Search** (Search & Embeddings with `IndexControl` and Clear index directly
+  inside, built-in enable switch, Chat & Summaries, and After transcription), **Speech** (one
+  unified CPU/GPU device selector, language, transcripts folder, readiness facts, Speech setup),
+  and **Downloads & Schedule** (unified YouTube toggle + yt-dlp updater, folder, quality/codec,
+  optional cookies disclosure, schedule/limits/retries). Legacy deep-links (`appearance`,
+  `library`, `about`, `processing`, `youtube`, `concord:health`, `#/pipeline`) map cleanly.
+- Verified with 215 Rust tests, 74 UI tests, `tsc --noEmit`, `vite build`, Clippy (zero warnings),
+  and desktop + phone headless Chromium screenshots.
+
 ## One way in: Add, Following and Activity (0.29.4, branch `feature/adding`, installed, not merged)
 
 0.29.4 (November 23): after a restart the user's external drive wasn't mounted, and a queued

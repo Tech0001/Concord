@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { Route } from "../lib/router.ts";
+import type { ActivityTab, Route } from "../lib/router.ts";
 import type { Category, Job, Note, Overview } from "../lib/types.ts";
 import type { SetupStatus } from "../setup/types.ts";
 import type { Source } from "../pipeline/types.ts";
@@ -25,7 +25,7 @@ export type AppContextValue = {
   transcribe: (id: string) => Promise<void>;
   openNote: (note: Note) => void;
   openPalette: () => void;
-  openActivity: () => void;
+  openActivity: (tab?: ActivityTab) => void;
   openAsk: (intent?: Partial<import("../ai/ChatStore.tsx").AskIntent>) => void;
   /** Open Add, optionally with dropped paths or pasted links; more seeds join an open dialog. */
   openAdd: (seed?: import("../add/types.ts").AddSeed) => void;

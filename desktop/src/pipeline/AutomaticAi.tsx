@@ -1,21 +1,35 @@
 import { useEffect, useState } from "react";
 import {
-  ArrowUpRight,
   Clock,
   LoaderCircle,
   RefreshCw,
+  Save,
+  Sparkles,
   Square,
 } from "lucide-react";
 import { api } from "../lib/ipc.ts";
-import { useApp } from "../shell/AppContext.tsx";
 import { Button } from "../ui/Button.tsx";
 import { Chip } from "../ui/Chip.tsx";
+import { Switch } from "../ui/Switch.tsx";
 import { useToast } from "../ui/Toasts.tsx";
 import type { AiTarget, AutomaticAi } from "./types.ts";
 
 function destination(t: AiTarget) {
-  return `${t.model || "No model selected"} · ${t.kind === "builtin" ? "Built-in, on this computer" : t.kind === "chatgpt" ? "ChatGPT plan" : t.kind === "openrouter" ? "OpenRouter" : t.baseUrl}`;
+  return `${t.model || "No model selected"} · ${
+    t.kind === "builtin"
+      ? "Built-in, on this computer"
+      : t.kind === "codex"
+        ? "Codex CLI"
+        : t.kind === "claude-code"
+          ? "Claude Code CLI"
+          : t.kind === "chatgpt"
+            ? "ChatGPT plan"
+            : t.kind === "openrouter"
+              ? "OpenRouter"
+              : t.baseUrl
+  }`;
 }
+
 export function AutomaticSetup({
   state,
   onChanged,
@@ -24,108 +38,121 @@ export function AutomaticSetup({
   onChanged: () => Promise<void>;
 }) {
   const toast = useToast();
-  const { navigate } = useApp();
   const [embedding, setEmbedding] = useState(state.embedding.enabled);
   const [summary, setSummary] = useState(state.summary.enabled);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+
   useEffect(() => {
     if (!dirty) {
       setEmbedding(state.embedding.enabled);
       setSummary(state.summary.enabled);
     }
   }, [dirty, state.embedding.enabled, state.summary.enabled]);
+
   const save = async () => {
     setBusy(true);
     try {
       await api.pipelineAiSave(embedding, summary);
       await onChanged();
       setDirty(false);
-      toast.success("Automatic AI actions saved");
+      toast.success("After-transcription actions saved");
     } catch (e) {
       toast.error(e);
     } finally {
       setBusy(false);
     }
   };
+
   return (
-    <section
-      className="pipeline-card automatic-setup"
-      aria-label="After transcription"
-    >
-      <h2>After transcription</h2>
-      <p>
-        Optional actions for recordings that finish processing from now on. Each
-        has its own model. They run independently of speech processing; your
-        transcript remains available if AI fails.
-      </p>
-      {(
-        [
-          ["embedding", "Add to semantic search", embedding, setEmbedding],
-          ["summary", "Generate a summary", summary, setSummary],
-        ] as const
-      ).map(([key, label, checked, change]) => (
-        <div className="automatic-option" key={key}>
-          <label className="pipeline-checkbox">
-            <input
-              type="checkbox"
+    <section className="settings-section" aria-label="After transcription">
+      <header>
+        <span className="settings-icon">
+          <Sparkles size={17} aria-hidden />
+        </span>
+        <h2>After transcription</h2>
+      </header>
+      <div className="settings-body">
+        <p className="settings-note">
+          Optional actions for newly finished recordings. They run separately
+          from speech processing, so your transcript stays safe if an AI call
+          fails.
+        </p>
+        {(
+          [
+            [
+              "embedding",
+              "Add new recordings to semantic search",
+              embedding,
+              setEmbedding,
+            ],
+            [
+              "summary",
+              "Generate a summary automatically",
+              summary,
+              setSummary,
+            ],
+          ] as const
+        ).map(([key, label, checked, change]) => (
+          <div className="automatic-option" key={key}>
+            <Switch
               checked={checked}
               disabled={busy || (!state[key].ready && !checked)}
-              onChange={(e) => {
-                change(e.target.checked);
+              onChange={(next) => {
+                change(next);
                 setDirty(true);
               }}
-            />
-            {label}
-          </label>
-          <p>{destination(state[key].current)}</p>
-          <small>
-            {state[key].local
-              ? "Transcript text stays on this computer."
-              : "Transcript text is sent to this provider and may use paid credits or plan usage."}
-          </small>
-          {!state[key].ready && (
-            <p>Configure and enable this model in Settings first.</p>
-          )}
-          {state[key].needsReview && (
-            <p className="automatic-review">
-              The model or provider changed. Save these choices to approve it
-              for future recordings. Pending jobs need an explicit retry.
-            </p>
-          )}
+              hint={`${destination(state[key].current)} · ${
+                state[key].local
+                  ? "Stays on this computer."
+                  : "Sends transcript text to this provider."
+              }`}
+            >
+              {label}
+            </Switch>
+            {!state[key].ready && (
+              <p className="settings-note">
+                Configure and enable this provider above first.
+              </p>
+            )}
+            {state[key].needsReview && (
+              <p className="automatic-review">
+                The model or provider changed. Save below to approve it for
+                future recordings.
+              </p>
+            )}
+          </div>
+        ))}
+        <p className="settings-note">
+          Existing recordings are not backfilled automatically — use Build /
+          Update search index above for your existing archive.
+        </p>
+        <div className="automatic-actions">
+          <Button
+            variant={dirty ? "primary" : "secondary"}
+            icon={Save}
+            disabled={busy || (!dirty && !state.embedding.needsReview && !state.summary.needsReview)}
+            onClick={() => void save()}
+          >
+            Save automatic actions
+          </Button>
         </div>
-      ))}
-      <p>
-        Existing archive recordings are not backfilled. Saved summaries are
-        kept. Turning an action off cancels its pending work and stops its
-        automatic job. An embedding request already in progress finishes first;
-        manual AI jobs keep running.
-      </p>
-      <div className="automatic-actions">
-        <Button variant="primary" disabled={busy} onClick={() => void save()}>
-          Save AI actions
-        </Button>
-        <Button
-          variant="ghost"
-          icon={ArrowUpRight}
-          onClick={() => navigate({ page: "settings" })}
-        >
-          AI provider settings
-        </Button>
       </div>
     </section>
   );
 }
+
 const labels: Record<string, string> = {
   queued: "Queued",
   running: "Running",
-  blocked: "Needs review",
   complete: "Done",
   failed: "Failed",
-  cancelled: "Cancelled",
   interrupted: "Interrupted",
+  blocked: "Approval needed",
   skipped: "Skipped",
+  cancelled: "Cancelled",
 };
+
 export function AutomaticQueue({
   state,
   onChanged,
@@ -134,15 +161,18 @@ export function AutomaticQueue({
   onChanged: () => Promise<void>;
 }) {
   const toast = useToast();
-  const { navigate } = useApp();
   const [history, setHistory] = useState(false);
   const [busy, setBusy] = useState(false);
-  const active = state.jobs.filter(
-    (j) => !["complete", "cancelled", "skipped"].includes(j.status),
+  const active = state.jobs.filter((j) =>
+    ["running", "queued", "blocked", "failed", "interrupted"].includes(
+      j.status,
+    ),
   );
   const finished = state.jobs.filter((j) =>
-    ["complete", "cancelled", "skipped"].includes(j.status),
+    ["complete", "skipped", "cancelled"].includes(j.status),
   );
+  if (!state.jobs.length) return null;
+
   const act = async (id: string, action: "cancel" | "retry") => {
     setBusy(true);
     try {
@@ -154,58 +184,67 @@ export function AutomaticQueue({
       setBusy(false);
     }
   };
-  if (!state.jobs.length) return null;
+  const visible = history ? state.jobs : active;
+
   return (
-    <section className="automatic-queue" aria-label="Automatic AI queue">
-      <h2>After transcription</h2>
-      <p>
-        Indexing and summaries have their own queue. Stop or retry them here
-        without transcribing again.
-      </p>
+    <section
+      className="activity-section automatic-queue"
+      aria-label="Automatic AI queue"
+    >
+      <h2>Automatic AI</h2>
+      {(state.embedding.needsReview || state.summary.needsReview) && (
+        <p className="automatic-review">
+          An AI provider changed after these jobs were queued. Save your
+          choices in Settings → AI &amp; Search before retrying.
+        </p>
+      )}
       <div className="pipeline-jobs">
-        {[...active, ...(history ? finished : [])].map((j) => {
+        {visible.map((j) => {
           const provider = state[j.action];
           return (
             <article className="pipeline-job" data-status={j.status} key={j.id}>
               <div className="pipeline-job-main">
-                <button
-                  className="pipeline-job-title"
-                  onClick={() =>
-                    navigate({ page: "recording", id: j.media_id })
-                  }
-                >
-                  {j.title}
-                  <ArrowUpRight size={13} />
-                </button>
+                <div className="pipeline-job-title">
+                  {j.status === "running" && (
+                    <LoaderCircle size={15} className="spin" />
+                  )}
+                  <span>{j.title}</span>
+                </div>
                 <small>
                   {j.action === "embedding" ? "Semantic search" : "Summary"} ·{" "}
-                  {destination(JSON.parse(j.target) as AiTarget)}
+                  {j.target}
                 </small>
-                <p>{j.progress_message || j.message}</p>
-                {j.status === "running" && j.total > 0 && (
-                  <small>
-                    {j.done} / {j.total}
-                  </small>
+                {(j.progress_message || j.message) && (
+                  <p>
+                    {j.status === "running"
+                      ? j.progress_message || j.message
+                      : j.message}
+                  </p>
                 )}
               </div>
               <div className="pipeline-job-actions">
                 <Chip
                   tone={
-                    j.status === "complete"
-                      ? "success"
-                      : ["failed", "blocked"].includes(j.status)
-                        ? "danger"
-                        : "neutral"
+                    j.status === "running"
+                      ? "accent"
+                      : j.status === "complete"
+                        ? "success"
+                        : ["failed", "interrupted", "blocked"].includes(
+                              j.status,
+                            )
+                          ? "danger"
+                          : "neutral"
                   }
                 >
-                  {j.status === "running" && (
-                    <LoaderCircle size={12} className="spin" />
-                  )}
-                  {labels[j.status] || j.status}
+                  {labels[j.status] ?? j.status}
+                  {j.status === "running" && j.total > 0
+                    ? ` · ${j.done}/${j.total}`
+                    : ""}
                 </Chip>
-                {["queued", "running", "blocked"].includes(j.status) && (
+                {["queued", "running"].includes(j.status) && (
                   <Button
                     size="sm"
+                    variant="ghost"
                     icon={Square}
                     disabled={busy}
                     onClick={() => void act(j.id, "cancel")}

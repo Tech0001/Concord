@@ -17,8 +17,13 @@
 .provider-editor {
   display: grid;
   gap: 14px;
-  padding: 20px 0;
-  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.provider-editor .field {
+  min-width: 0;
+}
+.provider-editor .select {
+  width: 100%;
 }
 .provider-editor header p {
   color: var(--muted-foreground);
@@ -52,18 +57,37 @@
 .ai-index {
   display: flex;
   justify-content: space-between;
-  gap: 20px;
+  gap: 16px;
   align-items: flex-start;
-  padding: 16px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-1, var(--background));
+  border-radius: var(--r-3);
+  background: var(--card);
+}
+.ai-index.is-compact {
+  background: var(--card);
+}
+.ai-index-body {
+  flex: 1;
+  min-width: 0;
+}
+.ai-index-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
 }
 .ai-index strong {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 14px;
+}
+.ai-index-pct {
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
 }
 .ai-index p {
   font-size: 12px;
@@ -376,7 +400,7 @@
 .chat-privacy {display:flex;flex-direction:column;gap:3px;color:var(--muted-foreground);}
 .chat-privacy small {font-size:10px;line-height:1.45;}
 .chat-recording-scope,.chat-status-line {font-size:12px;color:var(--muted-foreground);}
-.chat-status-line {padding:8px 10px;border-left:2px solid var(--primary);background:var(--muted);}
+.chat-status-line {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:8px 10px;margin-bottom:10px;border-left:2px solid var(--primary);border-radius:0 6px 6px 0;background:var(--muted);}
 .chat-message .md-link {display:inline-flex;padding:5px 9px;border:1px solid var(--border);border-radius:7px;margin:3px 2px;text-decoration:none;font:12px var(--font-sans);}
 .citation-chip {display:inline-grid;place-items:center;min-width:22px;height:21px;border:1px solid var(--border);border-radius:6px;background:var(--muted);color:var(--foreground);font:11px var(--font-sans);margin:0 2px;cursor:pointer;vertical-align:baseline;}
 .citation-tooltip {z-index:95;width:min(320px,calc(100vw - 24px));padding:12px;background:var(--background);color:var(--foreground);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 28px #0008;font:12px/1.5 var(--font-sans);white-space:normal;overflow-wrap:anywhere;}

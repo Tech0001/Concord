@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ChatChoice, SetupStep } from "../setup/types.ts";
 
-export const SETTINGS_SECTIONS = ["appearance", "ai", "processing", "speech", "library", "about"] as const;
+export const SETTINGS_SECTIONS = ["general", "ai", "speech", "downloads"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+export const ACTIVITY_TABS = ["queue", "health", "logs", "backups"] as const;
+export type ActivityTab = (typeof ACTIVITY_TABS)[number];
+export type SearchMode = "keywords" | "meaning";
+
 const SETUP_STEPS: SetupStep[] = ["library", "speech", "recordings", "ai", "look", "ready"];
 /** Pages that setup can return to when it was opened from somewhere else. */
 const RETURNS = ["library", "ai", "search", "settings"] as const;
@@ -13,11 +17,19 @@ const pick = <T extends string>(list: readonly T[], value: string | null): T | u
 const defined = <T extends object>(value: T): T =>
   Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 
+const LEGACY_SETTINGS_SECTION: Record<string, SettingsSection> = {
+  appearance: "general",
+  library: "general",
+  about: "general",
+  processing: "downloads",
+  youtube: "downloads",
+};
+
 export type Route =
   | { page: "library"; collection?: string }
-  | { page: "activity" }
+  | { page: "activity"; tab?: ActivityTab }
   | { page: "recording"; id: string; at?: number }
-  | { page: "search"; q: string }
+  | { page: "search"; q: string; mode?: SearchMode }
   | { page: "documents"; id?: string }
   | { page: "speakers"; id?: string }
   | { page: "notes" }
@@ -44,25 +56,31 @@ export function parseRoute(hash: string): Route {
       return params.has("t") && Number.isFinite(at) && at >= 0 ? { page: "recording", id, at } : { page: "recording", id };
     }
     case "tools":
-      return defined({page:"tools",tab:params.get("tab")==="record"?"record":"extract",source:params.get("source")??undefined});
+      return defined({ page: "tools", tab: params.get("tab") === "record" ? "record" : "extract", source: params.get("source") ?? undefined });
     case "search":
-      return { page: "search", q: params.get("q") ?? "" };
+      return defined({
+        page: "search",
+        q: params.get("q") ?? "",
+        mode: params.get("mode") === "meaning" ? "meaning" : undefined,
+      });
     case "documents":
       return tail ? { page: "documents", id: decodeURIComponent(tail) } : { page: "documents" };
     case "speakers":
       return tail ? { page: "speakers", id: decodeURIComponent(tail) } : { page: "speakers" };
     case "settings": {
-      // Download settings were called "youtube" before they joined processing.
-      const section = params.get("section") === "youtube" ? "processing" : params.get("section");
-      return defined({ page: "settings", section: pick(SETTINGS_SECTIONS, section) });
+      const rawSection = params.get("section");
+      const mapped = rawSection && rawSection in LEGACY_SETTINGS_SECTION ? LEGACY_SETTINGS_SECTION[rawSection] : rawSection;
+      return defined({ page: "settings", section: pick(SETTINGS_SECTIONS, mapped) });
     }
     case "library":
       return defined({ page: "library", collection: params.get("collection") || undefined });
-    // Pipeline became Activity; its settings tab moved to Settings.
+    // Pipeline became Activity; its settings tab moved to Settings → Downloads & Schedule.
     case "pipeline":
-      return params.get("tab") === "setup" ? { page: "settings", section: "processing" } : { page: "activity" };
-    case "activity":
-      return { page: "activity" };
+      return params.get("tab") === "setup" ? { page: "settings", section: "downloads" } : { page: "activity" };
+    case "activity": {
+      const tab = pick(ACTIVITY_TABS, params.get("tab"));
+      return defined({ page: "activity", tab: tab && tab !== "queue" ? tab : undefined });
+    }
     case "setup":
       return defined({
         page: "setup",
@@ -71,7 +89,11 @@ export function parseRoute(hash: string): Route {
         chat: pick(CHATS, params.get("chat")),
       });
     case "ai":
-      return defined({page:"ai",context:pick(["archive","help","none"] as const,params.get("context")),question:params.get("question")?.slice(0,4000)||undefined});
+      return defined({
+        page: "ai",
+        context: pick(["archive", "help", "none"] as const, params.get("context")),
+        question: params.get("question")?.slice(0, 4000) || undefined,
+      });
     case "notes":
     case "map":
       return { page: head };
@@ -85,13 +107,25 @@ export function formatRoute(route: Route): string {
     case "recording":
       return `#/recording/${encodeURIComponent(route.id)}${route.at != null ? `?t=${Math.round(route.at * 10) / 10}` : ""}`;
     case "tools": {
-      const params=new URLSearchParams();if(route.tab)params.set("tab",route.tab);if(route.source)params.set("source",route.source);return "#/tools"+(params.size?"?"+params:"");
+      const params = new URLSearchParams();
+      if (route.tab) params.set("tab", route.tab);
+      if (route.source) params.set("source", route.source);
+      return "#/tools" + (params.size ? "?" + params : "");
     }
     case "ai": {
-      const params=new URLSearchParams();if(route.context)params.set("context",route.context);if(route.question)params.set("question",route.question);return "#/ai"+(params.size?`?${params}`:"");
+      const params = new URLSearchParams();
+      if (route.context) params.set("context", route.context);
+      if (route.question) params.set("question", route.question);
+      return "#/ai" + (params.size ? `?${params}` : "");
     }
-    case "search":
-      return route.q ? `#/search?${new URLSearchParams({ q: route.q })}` : "#/search";
+    case "search": {
+      const params = new URLSearchParams();
+      if (route.q) params.set("q", route.q);
+      if (route.mode === "meaning") params.set("mode", "meaning");
+      return "#/search" + (params.size ? `?${params}` : "");
+    }
+    case "activity":
+      return route.tab && route.tab !== "queue" ? `#/activity?tab=${route.tab}` : "#/activity";
     case "speakers":
       return route.id ? `#/speakers/${encodeURIComponent(route.id)}` : "#/speakers";
     case "documents":

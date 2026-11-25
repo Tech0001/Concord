@@ -20,7 +20,6 @@ import { Sidebar, SidebarDrawer } from "./shell/Sidebar.tsx";
 import { TabBar } from "./shell/TabBar.tsx";
 import { Topbar } from "./shell/Topbar.tsx";
 import { CommandPalette } from "./shell/CommandPalette.tsx";
-import { ActivityPanel } from "./shell/ActivityPanel.tsx";
 import { NoteEditor } from "./notes/NoteEditor.tsx";
 import { ActivityPage } from "./activity/ActivityPage.tsx";
 import { isCategory } from "./library/model.ts";
@@ -69,7 +68,6 @@ function Shell() {
   const [speechPrompt, setSpeechPrompt] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [activityOpen, setActivityOpen] = useState(false);
   const [pageTitle, setPageTitle] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("sidebar-collapsed-v1", false, (v) => typeof v === "boolean");
   const narrow = useMediaQuery(RAIL);
@@ -202,12 +200,29 @@ function Shell() {
     if (!onSetup && !p.completed && (!setup.library.started || p.furthest !== "library")) navigate({ page: "setup" }, { replace: true });
   }, [setup, onSetup, navigate]);
 
-  const openAsk = useCallback((intent?: Parameters<AppContextValue['openAsk']>[0]) => {
-    const help = activityOpen || route.page === 'settings' || route.page === 'setup';
-    const recording = route.page === 'recording' ? route.id : undefined;
-    setActivityOpen(false);
-    ask.show({context:help?'help':recording?'recording':'archive',recordingId:recording,recordingTitle:recording?pageTitle??undefined:undefined,...intent});
-  },[ask.show,activityOpen,route,pageTitle]);
+  const openActivity = useCallback(
+    (tab: "queue" | "health" | "logs" | "backups" = "health") => {
+      navigate({ page: "activity", tab: tab === "queue" ? undefined : tab });
+    },
+    [navigate],
+  );
+
+  const openAsk = useCallback(
+    (intent?: Parameters<AppContextValue["openAsk"]>[0]) => {
+      const help =
+        route.page === "activity" ||
+        route.page === "settings" ||
+        route.page === "setup";
+      const recording = route.page === "recording" ? route.id : undefined;
+      ask.show({
+        context: help ? "help" : recording ? "recording" : "archive",
+        recordingId: recording,
+        recordingTitle: recording ? pageTitle ?? undefined : undefined,
+        ...intent,
+      });
+    },
+    [ask.show, route, pageTitle],
+  );
   useShortcuts([{ key: "k", mod: true, global: true, run: () => setPaletteOpen((v) => !v) },
     { key: "j", mod: true, global: true, run: () => ask.open ? ask.close() : openAsk() }]);
   useEffect(()=>{
@@ -296,7 +311,7 @@ function Shell() {
       transcribe,
       openNote: setNote,
       openPalette: () => setPaletteOpen(true),
-      openActivity: () => setActivityOpen(true),
+      openActivity,
       openAsk,
       openAdd,
       chooseToAdd,
@@ -328,6 +343,7 @@ function Shell() {
       pageTitle,
       setup,
       refreshSetup,
+      openActivity,
       openAsk,
     ],
   );
@@ -363,8 +379,7 @@ function Shell() {
     return (
       <AppContext.Provider value={context}>
         <SetupPage route={route} />
-        <AskPanel/>
-        <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} onChanged={() => api.jobs().then(setJobs).catch(toast.error)} />
+        <AskPanel />
         {prompts}
       </AppContext.Provider>
     );
@@ -375,7 +390,7 @@ function Shell() {
       page = <PlayerPage id={route.id} at={route.at} />;
       break;
     case "search":
-      page = <SearchPage q={route.q} />;
+      page = <SearchPage q={route.q} mode={route.mode} />;
       break;
     case "speakers":
       page = <SpeakersPage id={route.id} />;
@@ -393,10 +408,10 @@ function Shell() {
       page = <MapPage />;
       break;
     case "tools":
-      page = <ToolsPage tab={route.tab} source={route.source}/>;
+      page = <ToolsPage tab={route.tab} source={route.source} />;
       break;
     case "activity":
-      page = <ActivityPage />;
+      page = <ActivityPage tab={route.tab} />;
       break;
     case "settings":
       page = <SettingsPage section={route.section} />;
@@ -407,7 +422,7 @@ function Shell() {
 
   return (
     <AppContext.Provider value={context}>
-      <div className="shell" data-ask-open={ask.open && route.page!=="ai"} data-rail={!phone && (collapsed || narrow)}>
+      <div className="shell" data-ask-open={ask.open && route.page !== "ai"} data-rail={!phone && (collapsed || narrow)}>
         {!phone && (
           <Sidebar mode={collapsed || narrow ? "rail" : "full"} onToggle={() => (narrow ? setDrawerOpen(true) : setCollapsed((v) => !v))} />
         )}
@@ -421,10 +436,9 @@ function Shell() {
       </div>
       {!phone && narrow && <SidebarDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />}
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onAdd={() => openAdd()} />
-      <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} jobs={jobs} onChanged={() => api.jobs().then(setJobs).catch(toast.error)} />
       {note && <NoteEditor note={note} onClose={() => setNote(null)} />}
       {prompts}
-      <AskPanel/>
+      <AskPanel />
     </AppContext.Provider>
   );
 }

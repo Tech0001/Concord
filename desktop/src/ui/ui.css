@@ -242,7 +242,8 @@
   justify-content: space-between;
   gap: 8px;
   height: var(--control-h);
-  min-width: 140px;
+  min-width: 0;
+  max-width: 100%;
   padding: 0 10px 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--r-2);
@@ -250,6 +251,12 @@
   color: var(--secondary-foreground);
   font-size: var(--text-md);
   white-space: nowrap;
+  overflow: hidden;
+}
+.select > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 .select:hover {
   background: color-mix(in oklab, var(--secondary) 90%, var(--foreground));
@@ -746,4 +753,57 @@
   color: var(--muted-foreground);
   font-size: var(--text-sm);
   line-height: 1.45;
+}
+
+/* Shared page-level underline tabs (Activity, Settings) */
+.page-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 18px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.page-tabs::-webkit-scrollbar {
+  display: none;
+}
+.page-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 14px 10px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted-foreground);
+  font-size: var(--text-md);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+.page-tab:hover {
+  color: var(--foreground);
+}
+.page-tab[aria-selected="true"] {
+  color: var(--foreground);
+  border-bottom-color: var(--primary);
+}
+.page-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.page-tab-badge.is-warn {
+  background: color-mix(in oklab, var(--destructive) 18%, transparent);
+  color: var(--destructive);
 }
